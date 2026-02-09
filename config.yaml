@@ -1,7 +1,15 @@
+# Which pipeline stages to run (default true if omitted; set false to skip)
+pipeline:
+  msa: true
+  boltz: true
+  esm: true
+  es: true
 
 input:
   fasta_dir: /n/home06/tbush/gfp_function_prediction/data/original
   # fasta_dir: /n/home06/tbush/gfp_function_prediction/data/20250815_102358_subsample/subsample
+  # When pipeline.msa is false, set to existing YAML root (dir containing .yaml)
+  # yaml_dir: /path/to/chunks_20240101_120000
 
 # Output parent directory where all results will be stored
 output:

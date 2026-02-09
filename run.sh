@@ -28,6 +28,7 @@ get_config() {
 
 # Read configuration values
 INPUT_DIR=$(get_config "input.fasta_dir")
+INPUT_YAML_DIR=$(get_config "input.yaml_dir")
 OUTPUT_PARENT_DIR=$(get_config "output.parent_dir")
 MSA_MAX_FILES_PER_JOB=$(get_config "msa.max_files_per_job")
 MSA_ARRAY_MAX_CONCURRENCY=$(get_config "msa.array_max_concurrency")
@@ -40,6 +41,13 @@ ESM_ARRAY_MAX_CONCURRENCY=$(get_config "esm.array_max_concurrency")
 ES_SCRIPT_DIR=$(get_config "es.script_dir")
 ES_WT_PATH=$(get_config "es.wt_path")
 ES_ARRAY_MAX_CONCURRENCY=$(get_config "es.array_max_concurrency")
+
+# Pipeline stage toggles (missing or non-"false" => true)
+_run_flag() { [[ "$(get_config "pipeline.$1")" == "false" ]] && echo "0" || echo "1"; }
+RUN_MSA=$(_run_flag "msa")
+RUN_BOLTZ=$(_run_flag "boltz")
+RUN_ESM=$(_run_flag "esm")
+RUN_ES=$(_run_flag "es")
 
 # Per-feature cache/path keys from config
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
@@ -61,14 +69,26 @@ BOLTZ_ARRAY_MAX_CONCURRENCY="${BOLTZ_ARRAY_MAX_CONCURRENCY:-${ARRAY_MAX_CONCURRE
 ESM_ARRAY_MAX_CONCURRENCY="${ESM_ARRAY_MAX_CONCURRENCY:-${ARRAY_MAX_CONCURRENCY}}"
 ES_ARRAY_MAX_CONCURRENCY="${ES_ARRAY_MAX_CONCURRENCY:-10}"
 
-# Validate required parameters
+# Pipeline rule validation
+if [[ "$RUN_MSA" -eq 0 && -z "$INPUT_YAML_DIR" ]]; then
+  echo "ERROR: pipeline.msa is false but input.yaml_dir is not set (required when skipping MSA)"
+  exit 1
+fi
+if [[ "$RUN_ES" -eq 1 && "$RUN_BOLTZ" -eq 0 ]]; then
+  echo "ERROR: pipeline.es is true but pipeline.boltz is false (ES requires .cif from Boltz)"
+  exit 1
+fi
+
+# Validate required parameters for enabled stages only
 MISSING_PARAMS=()
-[[ -z "$INPUT_DIR" ]] && MISSING_PARAMS+=("input.fasta_dir")
 [[ -z "$OUTPUT_PARENT_DIR" ]] && MISSING_PARAMS+=("output.parent_dir")
-[[ -z "$MSA_MAX_FILES_PER_JOB" ]] && MISSING_PARAMS+=("msa.max_files_per_job")
-[[ -z "$MAX_FILES_PER_JOB" ]] && MISSING_PARAMS+=("boltz.max_files_per_job")
-[[ -z "$ESM_N" ]] && MISSING_PARAMS+=("esm.num_chunks")
 [[ -z "$SLURM_LOG_DIR" ]] && MISSING_PARAMS+=("slurm.log_dir")
+[[ "$RUN_MSA" -eq 1 ]] && {
+  [[ -z "$INPUT_DIR" ]] && MISSING_PARAMS+=("input.fasta_dir")
+  [[ -z "$MSA_MAX_FILES_PER_JOB" ]] && MISSING_PARAMS+=("msa.max_files_per_job")
+}
+[[ "$RUN_BOLTZ" -eq 1 ]] && [[ -z "$MAX_FILES_PER_JOB" ]] && MISSING_PARAMS+=("boltz.max_files_per_job")
+[[ "$RUN_ESM" -eq 1 ]] && [[ -z "$ESM_N" ]] && MISSING_PARAMS+=("esm.num_chunks")
 
 if ((${#MISSING_PARAMS[@]} > 0)); then
   echo "ERROR: Missing required parameters in config file:"
@@ -85,9 +105,10 @@ BOLTZ_SCRIPT="${SCRIPT_DIR}/split_and_run_boltz.sh"
 ESM_SCRIPT="${SCRIPT_DIR}/run_esm.sh"
 
 # Normalize paths
-INPUT_DIR="$(realpath -m "$INPUT_DIR")"
 OUTPUT_PARENT_DIR="$(realpath -m "$OUTPUT_PARENT_DIR")"
 CONFIG_FILE="$(realpath -m "$CONFIG_FILE")"
+[[ -n "$INPUT_DIR" ]] && INPUT_DIR="$(realpath -m "$INPUT_DIR")"
+[[ -n "$INPUT_YAML_DIR" ]] && INPUT_YAML_DIR="$(realpath -m "$INPUT_YAML_DIR")"
 
 # Export config-derived env for child scripts and sbatch
 export CONFIG_FILE SLURM_LOG_DIR
@@ -98,43 +119,49 @@ export ES_OUTPUT_DIR ES_SCRIPT_DIR ES_WT_PATH ES_ENV_PREFIX="$ES_ENV_PATH"
 [[ -n "$COLABFOLD_BIN" ]] && export PATH="${COLABFOLD_BIN}:${PATH}"
 
 echo "==============================================="
-echo "Orchestrating MSA -> YAML conversion -> ESM + Boltz (parallel)"
+echo "Orchestrating pipeline (msa=$RUN_MSA boltz=$RUN_BOLTZ esm=$RUN_ESM es=$RUN_ES)"
 echo "==============================================="
-echo "Input dir: $INPUT_DIR"
+[[ "$RUN_MSA" -eq 1 ]] && echo "Input dir: $INPUT_DIR"
+[[ "$RUN_MSA" -eq 0 ]] && echo "YAML dir: $INPUT_YAML_DIR"
 echo "Output parent dir: $OUTPUT_PARENT_DIR"
 echo "Config: $CONFIG_FILE"
 echo ""
 
-# -------- Step 1: MSA ---------
-echo ">>> Step 1: Submitting MSA array..."
-msa_output=$("$MSA_SCRIPT" "$INPUT_DIR" "$MSA_MAX_FILES_PER_JOB" "$OUTPUT_PARENT_DIR" "$ARRAY_MAX_CONCURRENCY")
-echo "$msa_output"
-MSA_ARRAY_JOB_ID=$(echo "$msa_output" | grep -E '^MSA_ARRAY_JOB_ID=' | sed 's/^MSA_ARRAY_JOB_ID=//')
-MSA_OUTPUT_DIR=$(echo "$msa_output" | grep -E '^MSA_OUTPUT_DIR=' | sed 's/^MSA_OUTPUT_DIR=//')
-if [[ -z "$MSA_ARRAY_JOB_ID" || -z "$MSA_OUTPUT_DIR" ]]; then
-  echo "ERROR: Could not get MSA_ARRAY_JOB_ID or MSA_OUTPUT_DIR from MSA script output"
-  exit 1
+MSA_ARRAY_JOB_ID=""
+if [[ "$RUN_MSA" -eq 1 ]]; then
+  echo ">>> Step 1: Submitting MSA array..."
+  msa_output=$("$MSA_SCRIPT" "$INPUT_DIR" "$MSA_MAX_FILES_PER_JOB" "$OUTPUT_PARENT_DIR" "$ARRAY_MAX_CONCURRENCY")
+  echo "$msa_output"
+  MSA_ARRAY_JOB_ID=$(echo "$msa_output" | grep -E '^MSA_ARRAY_JOB_ID=' | sed 's/^MSA_ARRAY_JOB_ID=//')
+  MSA_OUTPUT_DIR=$(echo "$msa_output" | grep -E '^MSA_OUTPUT_DIR=' | sed 's/^MSA_OUTPUT_DIR=//')
+  if [[ -z "$MSA_ARRAY_JOB_ID" || -z "$MSA_OUTPUT_DIR" ]]; then
+    echo "ERROR: Could not get MSA_ARRAY_JOB_ID or MSA_OUTPUT_DIR from MSA script output"
+    exit 1
+  fi
+  echo ""
+  echo ">>> Waiting for MSA array to complete..."
+  srun --dependency=afterok:"$MSA_ARRAY_JOB_ID" --mem=1M --time=00:05:00 true
+  echo "MSA array finished."
+else
+  MSA_OUTPUT_DIR="$INPUT_YAML_DIR"
 fi
 
-# -------- Wait for MSA array (it runs FASTA->YAML inline via process_msa_fasta.sh) ---------
-echo ""
-echo ">>> Waiting for MSA array to complete..."
-srun --dependency=afterok:"$MSA_ARRAY_JOB_ID" --mem=1M --time=00:05:00 true
-echo "MSA array finished."
-
-# -------- Step 3 & 4: Boltz and ESM (parallel on YAML dir) ---------
-echo ""
-echo ">>> Step 3: Submitting Boltz array..."
-"$BOLTZ_SCRIPT" "$MSA_OUTPUT_DIR" "$MAX_FILES_PER_JOB" "$BOLTZ_ARRAY_MAX_CONCURRENCY" "$BOLTZ_RECYCLING_STEPS" "$BOLTZ_DIFFUSION_SAMPLES"
-
-echo ""
-echo ">>> Step 4: Submitting ESM array..."
-"$ESM_SCRIPT" "$MSA_OUTPUT_DIR" "$ESM_N" "$OUTPUT_PARENT_DIR" "$ESM_ARRAY_MAX_CONCURRENCY"
-
-# -------- Step 5: ES analysis (on pipeline output; .cif from Boltz) ---------
-echo ""
-echo ">>> Step 5: Submitting ES analysis..."
-"${SCRIPT_DIR}/run_es.sh" "$MSA_OUTPUT_DIR"
+# Boltz and ESM (parallel on YAML dir)
+[[ "$RUN_BOLTZ" -eq 1 ]] && {
+  echo ""
+  echo ">>> Submitting Boltz array..."
+  "$BOLTZ_SCRIPT" "$MSA_OUTPUT_DIR" "$MAX_FILES_PER_JOB" "$BOLTZ_ARRAY_MAX_CONCURRENCY" "$BOLTZ_RECYCLING_STEPS" "$BOLTZ_DIFFUSION_SAMPLES"
+}
+[[ "$RUN_ESM" -eq 1 ]] && {
+  echo ""
+  echo ">>> Submitting ESM array..."
+  "$ESM_SCRIPT" "$MSA_OUTPUT_DIR" "$ESM_N" "$OUTPUT_PARENT_DIR" "$ESM_ARRAY_MAX_CONCURRENCY"
+}
+[[ "$RUN_ES" -eq 1 ]] && {
+  echo ""
+  echo ">>> Submitting ES analysis..."
+  "${SCRIPT_DIR}/run_es.sh" "$MSA_OUTPUT_DIR"
+}
 
 echo ""
 echo "==============================================="
