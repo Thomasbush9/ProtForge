@@ -1,0 +1,33 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8GB
+#SBATCH --partition=serial_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=1:00:00
+#SBATCH --output=/n/home06/tbush/job_logs/%x.%j.out
+
+set -euo pipefail
+
+: "${OUTPUT_DIR:?Need OUTPUT_DIR}"
+: "${ORIGINAL_FASTA_DIR:?Need ORIGINAL_FASTA_DIR}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROCESS_SCRIPT="${SCRIPT_DIR}/process_msa_fasta.sh"
+
+echo "==============================================="
+echo "Post-processing: Converting FASTA to YAML"
+echo "  Original FASTA dir: $ORIGINAL_FASTA_DIR"
+echo "  Output dir: $OUTPUT_DIR"
+echo "==============================================="
+
+"$PROCESS_SCRIPT" "$ORIGINAL_FASTA_DIR" "$OUTPUT_DIR"
+
+echo "==============================================="
+echo "Post-processing complete."
+echo "==============================================="
+
+
+
+

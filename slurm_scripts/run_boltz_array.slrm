@@ -1,0 +1,138 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=16GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=01:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=thomasbush52@gmail.com
+# Use array-aware log names to avoid clobbering:
+#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+
+set -euo pipefail
+
+# Select this task's chunk directory from the manifest
+: "${SLURM_ARRAY_TASK_ID:?Need SLURM_ARRAY_TASK_ID}"
+: "${MANIFEST:?Need MANIFEST exported from sbatch}"
+: "${BASE_OUTPUT_DIR:?Need BASE_OUTPUT_DIR exported from sbatch}"
+: "${BOLTZ_RECYCLING_STEPS:=8}"
+: "${BOLTZ_DIFFUSION_SAMPLES:=10}"
+
+CHUNK_DIR="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")"
+if [[ -z "${CHUNK_DIR}" || ! -d "${CHUNK_DIR}" ]]; then
+  echo "Task ${SLURM_ARRAY_TASK_ID}: missing or invalid CHUNK_DIR from manifest."
+  exit 1
+fi
+
+JOB_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-manual}}"
+TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
+
+# Extract chunk number from CHUNK_DIR name (e.g., chunk_0 -> 0) to maintain consistency
+CHUNK_NUM=$(basename "$CHUNK_DIR" | sed 's/chunk_//')
+
+PROCESSED_PATHS_FILE="${BASE_OUTPUT_DIR}/processed_paths.txt"
+TOT_FILES_BOLTZ="${BASE_OUTPUT_DIR}/tot_filesboltz.txt"
+BOLTZ_CACHE="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db"
+BOLTZ_OUTPUT_DIR="${BASE_OUTPUT_DIR}/boltz_output/chunk_${CHUNK_NUM}"
+
+mkdir -p "$BOLTZ_OUTPUT_DIR"
+
+# Use SLURM_TMPDIR for temporary files (auto-cleaned by SLURM)
+export TMPDIR="${SLURM_TMPDIR:-/tmp}"
+
+# Set per-task Triton cache to avoid concurrent write conflicts
+export TRITON_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/triton_cache_${USER}_${JOB_ID}_${TASK_ID}"
+mkdir -p "$TRITON_CACHE_DIR"
+
+export CUDA_VISIBLE_DEVICES=0
+export NUM_GPU_DEVICES=1
+
+# Load required modules
+module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01
+export PATH="/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin:$PATH"
+export COLABFOLD_DB=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+
+# Count yaml files in chunk directory
+YAML_COUNT=$(find "$CHUNK_DIR" -maxdepth 1 -name "*.yaml" -type f | wc -l | tr -d ' ')
+
+echo "==============================================="
+echo "Task ${SLURM_ARRAY_TASK_ID}: Processing chunk directory"
+echo "  Chunk dir: $CHUNK_DIR"
+echo "  YAML files: ${YAML_COUNT}"
+echo "  Output dir: $BOLTZ_OUTPUT_DIR"
+echo "==============================================="
+
+if ((YAML_COUNT == 0)); then
+  echo "WARNING: No .yaml files found in $CHUNK_DIR"
+  exit 0
+fi
+
+# Activate boltz environment
+mamba activate /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
+
+# Run boltz predict on the chunk directory
+echo "[$(date +%H:%M:%S)] Running boltz predict on chunk directory..."
+echo "  Recycling steps: ${BOLTZ_RECYCLING_STEPS}"
+echo "  Diffusion samples: ${BOLTZ_DIFFUSION_SAMPLES}"
+if ! boltz predict "$CHUNK_DIR" --cache "$BOLTZ_CACHE" --out_dir "$BOLTZ_OUTPUT_DIR" --devices $NUM_GPU_DEVICES --accelerator gpu --recycling_steps "$BOLTZ_RECYCLING_STEPS" --diffusion_samples "$BOLTZ_DIFFUSION_SAMPLES" --override; then
+  echo "ERROR: Boltz prediction failed for chunk directory $CHUNK_DIR"
+  echo "ERROR: Task ${SLURM_ARRAY_TASK_ID} failed - no outputs will be tracked"
+  exit 1
+fi
+
+echo "[$(date +%H:%M:%S)] Boltz prediction completed successfully"
+
+# Verify that outputs were created
+PREDICTIONS_DIR="${BOLTZ_OUTPUT_DIR}/boltz_results_$(basename "$CHUNK_DIR")/predictions"
+if [[ ! -d "$PREDICTIONS_DIR" ]]; then
+  echo "ERROR: Predictions directory not found after boltz predict: $PREDICTIONS_DIR"
+  echo "ERROR: Task ${SLURM_ARRAY_TASK_ID} failed - outputs missing for chunk directory $CHUNK_DIR"
+  exit 1
+fi
+
+# Count prediction subdirectories (one per sequence)
+PRED_COUNT=$(find "$PREDICTIONS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+if ((PRED_COUNT == 0)); then
+  echo "ERROR: No prediction subdirectories found in $PREDICTIONS_DIR"
+  echo "ERROR: Task ${SLURM_ARRAY_TASK_ID} failed - no predictions created for chunk directory $CHUNK_DIR"
+  exit 1
+fi
+
+echo "[$(date +%H:%M:%S)] Verified outputs: found ${PRED_COUNT} prediction directories"
+
+# Track successfully processed yaml files
+# Use file locking to avoid race conditions when multiple tasks write simultaneously
+LOCK_FILE="${PROCESSED_PATHS_FILE}.lock"
+LOCK_ACQUIRED=false
+
+# Attempt to acquire lock with retries
+for i in {1..10}; do
+  if (
+    flock -x -n 200
+    find "$CHUNK_DIR" -maxdepth 1 -name "*.yaml" -type f | while IFS= read -r yaml_file; do
+      echo "$yaml_file" >>"$PROCESSED_PATHS_FILE"
+    done
+  ) 200>"$LOCK_FILE"; then
+    LOCK_ACQUIRED=true
+    break
+  fi
+  sleep 0.5
+done
+
+# Clean up lock file only if it was created by this process
+if [[ -f "$LOCK_FILE" ]]; then
+  rm -f "$LOCK_FILE"
+fi
+
+if [[ "$LOCK_ACQUIRED" == "false" ]]; then
+  echo "WARNING: Could not acquire lock for processed_paths.txt after retries"
+  echo "WARNING: YAML files will not be marked as processed in tracking file"
+fi
+
+echo "==============================================="
+echo "[$(date +%H:%M:%S)] Task ${SLURM_ARRAY_TASK_ID} complete"
+echo "  Processed: ${YAML_COUNT} yaml files"
+echo "==============================================="

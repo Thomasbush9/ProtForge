@@ -1,0 +1,50 @@
+#!/bin/bash
+#SBATCH --job-name=esm_embed
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=32GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=1:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=thomasbush52@gmail.com
+#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+
+set -euo pipefail
+
+# Validate required environment variables
+: "${SLURM_ARRAY_TASK_ID:?Need SLURM_ARRAY_TASK_ID}"
+: "${MANIFEST:?Need MANIFEST exported from sbatch}"
+: "${BASE_OUTPUT_DIR:?Need BASE_OUTPUT_DIR exported from sbatch}"
+
+# Read the chunk .txt file path from manifest using SLURM_ARRAY_TASK_ID
+FASTA_LIST="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")"
+if [[ -z "${FASTA_LIST}" || ! -s "${FASTA_LIST}" ]]; then
+  echo "Task ${SLURM_ARRAY_TASK_ID}: missing or empty FASTA_LIST from manifest."
+  exit 1
+fi
+
+module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01
+
+# Temporarily disable unbound variable check for conda activation
+set +u
+source "$(conda info --base)/etc/profile.d/conda.sh"
+
+# prefer prefix activation
+ES_ENV_PREFIX="${ES_ENV_PREFIX:-/n/home06/tbush/envs/esm}"
+conda activate "$ES_ENV_PREFIX"
+set -u  # Re-enable 
+
+echo "Task ${SLURM_ARRAY_TASK_ID}: FASTA_LIST=${FASTA_LIST}"
+echo "Output -> ${BASE_OUTPUT_DIR}"
+
+# Change to project root directory
+cd /n/home06/tbush/gfp_function_prediction
+
+# Run the Python script
+python run_esm.py \
+    --fasta_list "$FASTA_LIST" \
+    --output_dir "$BASE_OUTPUT_DIR" \
+    --processed_paths_file "${ESM_CHUNKS_DIR}/processed_paths.txt"

@@ -1,0 +1,261 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=48GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=01:00:00
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=thomasbush52@gmail.com
+# Use array-aware log names to avoid clobbering:
+#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+
+set -euo pipefail
+
+# Select this task's chunk file from the manifest
+: "${SLURM_ARRAY_TASK_ID:?Need SLURM_ARRAY_TASK_ID}"
+: "${MANIFEST:?Need MANIFEST exported from sbatch}"
+: "${BASE_OUTPUT_DIR:?Need BASE_OUTPUT_DIR exported from sbatch}"
+
+LIST_FILE="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$MANIFEST")"
+if [[ -z "${LIST_FILE}" || ! -s "${LIST_FILE}" ]]; then
+  echo "Task ${SLURM_ARRAY_TASK_ID}: missing or empty LIST_FILE from manifest."
+  exit 1
+fi
+
+PROCESSED_PATHS_FILE="${BASE_OUTPUT_DIR}/processed_paths.txt"
+MMSEQ2_DB="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db"
+THREADS=${SLURM_CPUS_PER_TASK:-16}
+
+# Use SLURM_TMPDIR for temporary files (auto-cleaned by SLURM)
+export TMPDIR="${SLURM_TMPDIR:-/tmp}"
+
+export CUDA_VISIBLE_DEVICES=0
+export NUM_GPU_DEVICES=1
+
+# Load required modules
+module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01
+export PATH="/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin:$PATH"
+export COLABFOLD_DB=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+
+echo "Task ${SLURM_ARRAY_TASK_ID}: LIST_FILE=${LIST_FILE}"
+echo "Outputs -> ${BASE_OUTPUT_DIR}"
+echo "Threads -> ${THREADS}"
+
+# Count files to process
+NUM_FILES=$(wc -l <"$LIST_FILE" | tr -d ' ')
+echo "Processing ${NUM_FILES} FASTA files in batch mode"
+
+# Create temporary combined FASTA file
+COMBINED_FASTA="${TMPDIR}/combined_${SLURM_ARRAY_TASK_ID}.fasta"
+: >"$COMBINED_FASTA"
+
+# Track sequence order and mappings for output organization
+declare -a SEQUENCE_ORDER
+declare -A PREFIX_TO_BASENAME
+declare -A PREFIX_TO_INPUT_FILE
+
+SEQ_INDEX=0
+
+# Combine all FASTA files into one multi-sequence file
+while IFS= read -r INPUT_FASTA; do
+  [[ -z "$INPUT_FASTA" ]] && continue
+
+  if [[ ! -f "$INPUT_FASTA" ]]; then
+    echo "WARNING: File not found: $INPUT_FASTA" >&2
+    continue
+  fi
+
+  BASENAME=$(basename "$INPUT_FASTA" .fa)
+  BASENAME=$(basename "$BASENAME" .fasta)
+
+  # Read header to track which sequence belongs to which file
+  HEADER=$(head -n1 "$INPUT_FASTA")
+  PROTEIN_PREFIX=$(echo "$HEADER" | sed 's/^>//' | sed 's/|/_/g')
+
+  # Store mappings
+  SEQUENCE_ORDER+=("$PROTEIN_PREFIX")
+  PREFIX_TO_BASENAME["$PROTEIN_PREFIX"]="$BASENAME"
+  PREFIX_TO_INPUT_FILE["$PROTEIN_PREFIX"]="$INPUT_FASTA"
+
+  # Append to combined FASTA
+  cat "$INPUT_FASTA" >>"$COMBINED_FASTA"
+  ((SEQ_INDEX++)) || true
+
+done <"$LIST_FILE"
+
+if [[ ! -s "$COMBINED_FASTA" ]]; then
+  echo "ERROR: No valid FASTA files found in $LIST_FILE"
+  exit 1
+fi
+
+echo "Combined ${NUM_FILES} files into: $COMBINED_FASTA"
+
+# Create temporary output directory for colabfold_search
+TEMP_OUTPUT_DIR="${TMPDIR}/colabfold_output_${SLURM_ARRAY_TASK_ID}"
+mkdir -p "$TEMP_OUTPUT_DIR"
+
+echo "==============================================="
+echo "[$(date +%H:%M:%S)] Running colabfold_search on combined file with GPU"
+echo "  Input: $COMBINED_FASTA"
+echo "  DB: $MMSEQ2_DB"
+echo "  Output: $TEMP_OUTPUT_DIR"
+echo "  Threads: $THREADS, GPU: enabled"
+echo "==============================================="
+
+# Verify GPU is available
+if command -v nvidia-smi &>/dev/null; then
+  echo "GPU Status:"
+  nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader || true
+fi
+
+# STEP 1: Run colabfold_search once on the combined file with GPU
+# Format: colabfold_search input.fasta db_folder output_dir --thread N --gpu 1
+# The --gpu 1 option uses all available GPUs for the search
+if ! colabfold_search "$COMBINED_FASTA" "$MMSEQ2_DB" "$TEMP_OUTPUT_DIR" --thread "$THREADS" --gpu 1; then
+  echo "ERROR: ColabFold search failed for combined file"
+  exit 1
+fi
+
+echo "[$(date +%H:%M:%S)] ColabFold search completed, organizing output files..."
+
+# STEP 2: Organize output a3m files to correct sequence directories
+# Get all a3m files in order (colabfold_search typically creates them in sequence order)
+# so we map it to access it later
+mapfile -t A3M_FILES < <(find "$TEMP_OUTPUT_DIR" -name "*.a3m" -type f | sort)
+
+PROCESSED_COUNT=0
+for i in "${!SEQUENCE_ORDER[@]}"; do
+  PROTEIN_PREFIX="${SEQUENCE_ORDER[$i]}"
+  BASENAME="${PREFIX_TO_BASENAME[$PROTEIN_PREFIX]}"
+  INPUT_FASTA="${PREFIX_TO_INPUT_FILE[$PROTEIN_PREFIX]}"
+
+  SEQ_DIR="${BASE_OUTPUT_DIR}/${BASENAME}"
+  COLABFOLD_OUTPUT_DIR="${SEQ_DIR}/msa"
+
+  mkdir -p "$COLABFOLD_OUTPUT_DIR"
+
+  # Try to find a3m file by exact prefix match first
+  A3M_FILE="${TEMP_OUTPUT_DIR}/${PROTEIN_PREFIX}.a3m"
+  if [ ! -f "$A3M_FILE" ]; then
+    # Try pattern matching
+    A3M_FILE=$(find "$TEMP_OUTPUT_DIR" -name "*${PROTEIN_PREFIX}*.a3m" | head -n1)
+    if [ -z "$A3M_FILE" ]; then
+      # Match by order: use i-th a3m file (colabfold_search typically preserves order)
+      if [ $i -lt ${#A3M_FILES[@]} ]; then
+        A3M_FILE="${A3M_FILES[$i]}"
+        echo "WARNING: Using order-based matching for $BASENAME (index $i)"
+      fi
+    fi
+  fi
+
+  if [[ -n "$A3M_FILE" && -f "$A3M_FILE" ]]; then
+    # Copy a3m file to sequence directory
+    cp "$A3M_FILE" "$COLABFOLD_OUTPUT_DIR/"
+
+    # Also copy any related files (e.g., .sto, .hhr, etc.) with same basename
+    A3M_BASENAME=$(basename "$A3M_FILE" .a3m)
+    for related_file in "$TEMP_OUTPUT_DIR"/${A3M_BASENAME}.*; do
+      if [[ -f "$related_file" && "$related_file" != "$A3M_FILE" ]]; then
+        cp "$related_file" "$COLABFOLD_OUTPUT_DIR/" 2>/dev/null || true
+      fi
+    done
+
+    echo "[$(date +%H:%M:%S)] Organized MSA for $BASENAME: $(basename "$A3M_FILE")"
+    ((PROCESSED_COUNT++)) || true
+  else
+    echo "ERROR: No a3m file found for $BASENAME (prefix: $PROTEIN_PREFIX, index: $i)" >&2
+  fi
+done
+
+# Append successfully processed paths using mkdir-based lock (more reliable than flock)
+PROCESSED_PATHS_LOCK_DIR="${PROCESSED_PATHS_FILE}.lockdir"
+LOCK_ACQUIRED=false
+
+# Try to acquire lock with retries
+for i in {1..20}; do
+  if mkdir "$PROCESSED_PATHS_LOCK_DIR" 2>/dev/null; then
+    LOCK_ACQUIRED=true
+    trap "rmdir '$PROCESSED_PATHS_LOCK_DIR' 2>/dev/null || true" EXIT
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ "$LOCK_ACQUIRED" == "true" ]]; then
+  while IFS= read -r INPUT_FASTA; do
+    [[ -z "$INPUT_FASTA" ]] && continue
+    echo "$INPUT_FASTA" >>"$PROCESSED_PATHS_FILE"
+  done <"$LIST_FILE"
+  rmdir "$PROCESSED_PATHS_LOCK_DIR" 2>/dev/null || true
+  trap - EXIT
+else
+  echo "WARNING: Could not acquire lock for processed_paths.txt after retries"
+fi
+
+# Cleanup temporary files
+rm -f "$COMBINED_FASTA"
+rm -rf "$TEMP_OUTPUT_DIR"
+
+echo "==============================================="
+echo "[$(date +%H:%M:%S)] Batch processing complete"
+echo "  Processed: ${PROCESSED_COUNT}/${NUM_FILES} sequences"
+echo "==============================================="
+
+# STEP 3: Run post-processing (convert FASTA to YAML) once after all MSA tasks complete
+# Use mkdir-based lock to ensure only one task runs this (more reliable than file-based locks)
+POST_PROCESS_LOCK_DIR="${BASE_OUTPUT_DIR}/post_process.lockdir"
+POST_PROCESS_DONE="${BASE_OUTPUT_DIR}/post_process.done"
+
+if [[ ! -f "$POST_PROCESS_DONE" ]]; then
+  if mkdir "$POST_PROCESS_LOCK_DIR" 2>/dev/null; then
+    echo "[$(date +%H:%M:%S)] Task ${SLURM_ARRAY_TASK_ID} acquired lock for post-processing"
+
+    # Wait to ensure all other tasks have finished writing their outputs
+    sleep 10
+
+    # Double-check we still have the lock and post-processing isn't done
+    if [[ -d "$POST_PROCESS_LOCK_DIR" ]] && [[ ! -f "$POST_PROCESS_DONE" ]]; then
+      # Use exported SCRIPT_DIR or fallback to computing it
+      SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+      PROCESS_SCRIPT="${SCRIPT_DIR}/process_msa_fasta.sh"
+      ORIGINAL_FASTA_DIR="${ORIGINAL_FASTA_DIR:-}"
+
+      echo "[$(date +%H:%M:%S)] Post-processing check:"
+      echo "  SCRIPT_DIR: ${SCRIPT_DIR}"
+      echo "  PROCESS_SCRIPT: ${PROCESS_SCRIPT}"
+      echo "  ORIGINAL_FASTA_DIR: ${ORIGINAL_FASTA_DIR}"
+      echo "  PROCESS_SCRIPT exists: $([ -f "$PROCESS_SCRIPT" ] && echo 'YES' || echo 'NO')"
+
+      if [[ -n "$ORIGINAL_FASTA_DIR" && -f "$PROCESS_SCRIPT" ]]; then
+        echo "[$(date +%H:%M:%S)] Running post-processing: converting FASTA to YAML..."
+        echo "  Original FASTA dir: $ORIGINAL_FASTA_DIR"
+        echo "  Output dir: $BASE_OUTPUT_DIR"
+
+        if "$PROCESS_SCRIPT" "$ORIGINAL_FASTA_DIR" "$BASE_OUTPUT_DIR"; then
+          touch "$POST_PROCESS_DONE"
+          echo "[$(date +%H:%M:%S)] Post-processing completed successfully"
+        else
+          echo "ERROR: Post-processing failed" >&2
+        fi
+      else
+        echo "WARNING: ORIGINAL_FASTA_DIR not set or process script not found, skipping post-processing"
+        echo "  ORIGINAL_FASTA_DIR empty: $([ -z "$ORIGINAL_FASTA_DIR" ] && echo 'YES' || echo 'NO')"
+        echo "  PROCESS_SCRIPT exists: $([ -f "$PROCESS_SCRIPT" ] && echo 'YES' || echo 'NO')"
+        touch "$POST_PROCESS_DONE" # Mark as done to avoid retries
+      fi
+
+      # Release lock
+      rmdir "$POST_PROCESS_LOCK_DIR" 2>/dev/null || true
+    else
+      echo "[$(date +%H:%M:%S)] Task ${SLURM_ARRAY_TASK_ID} lost lock or post-processing already done"
+      rmdir "$POST_PROCESS_LOCK_DIR" 2>/dev/null || true
+    fi
+  else
+    echo "[$(date +%H:%M:%S)] Task ${SLURM_ARRAY_TASK_ID} could not acquire lock, another task is handling post-processing"
+  fi
+else
+  echo "[$(date +%H:%M:%S)] Post-processing already completed (skipping)"
+fi

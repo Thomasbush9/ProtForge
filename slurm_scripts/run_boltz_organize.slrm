@@ -1,0 +1,62 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=8GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=1:00:00
+#SBATCH --output=/n/home06/tbush/job_logs/%x.%j.out
+
+set -euo pipefail
+
+: "${BASE_OUTPUT_DIR:?Need BASE_OUTPUT_DIR}"
+: "${BOLTZ_CHUNKS_DIR:?Need BOLTZ_CHUNKS_DIR}"
+: "${SCRIPT_DIR:?Need SCRIPT_DIR}"
+
+ORGANIZE_SCRIPT="${SCRIPT_DIR}/organize_boltz_outputs.sh"
+
+if [[ ! -f "$ORGANIZE_SCRIPT" ]]; then
+  echo "ERROR: organize_boltz_outputs.sh not found at $ORGANIZE_SCRIPT"
+  exit 1
+fi
+
+CONFIG_FILE="${SCRIPT_DIR}/pipeline_config.yaml"
+
+# Completion marker file
+ORGANIZE_COMPLETE_FILE="${BASE_OUTPUT_DIR}/.organize_boltz_complete"
+ORGANIZE_SUCCESS_FILE="${BASE_OUTPUT_DIR}/.organize_boltz_success"
+
+# Remove any existing marker files
+rm -f "$ORGANIZE_COMPLETE_FILE" "$ORGANIZE_SUCCESS_FILE"
+
+echo "==============================================="
+echo "Organizing boltz outputs"
+echo "  Base output dir: $BASE_OUTPUT_DIR"
+echo "  Boltz chunks dir: $BOLTZ_CHUNKS_DIR"
+echo "  Config file: $CONFIG_FILE"
+echo "==============================================="
+
+# Pass both directories and config file: BOLTZ_CHUNKS_DIR contains boltz_output/, BASE_OUTPUT_DIR is where seq_idx/ dirs are
+ORGANIZE_EXIT_CODE=0
+"$ORGANIZE_SCRIPT" "$BASE_OUTPUT_DIR" "$BOLTZ_CHUNKS_DIR" "$CONFIG_FILE" || ORGANIZE_EXIT_CODE=$?
+
+# Write completion marker regardless of success/failure
+touch "$ORGANIZE_COMPLETE_FILE"
+echo "$(date -Iseconds)" > "$ORGANIZE_COMPLETE_FILE"
+
+if (( ORGANIZE_EXIT_CODE == 0 )); then
+  # Write success marker
+  touch "$ORGANIZE_SUCCESS_FILE"
+  echo "$(date -Iseconds)" > "$ORGANIZE_SUCCESS_FILE"
+  echo "==============================================="
+  echo "Boltz output organization complete (SUCCESS)"
+  echo "==============================================="
+else
+  echo "==============================================="
+  echo "Boltz output organization complete (FAILED with exit code $ORGANIZE_EXIT_CODE)"
+  echo "==============================================="
+  exit "$ORGANIZE_EXIT_CODE"
+fi
+
