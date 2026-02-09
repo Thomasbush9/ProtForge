@@ -110,9 +110,11 @@ if [[ ! -f "$MSA_SCRIPT" ]]; then
 fi
 
 # --parsable returns just the job ID so we can print it nicely
-# Export ORIGINAL_FASTA_DIR and SCRIPT_DIR so post-processing can access them
+# Export env (MMSEQ2_DB, COLABFOLD_DB, SLURM_LOG_DIR from run.sh or caller)
+SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
 ARRAY_JOB_ID="$(
   sbatch --parsable \
+    -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
     --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$OUTPUT_DIR",ORIGINAL_FASTA_DIR="$INPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
     "$MSA_SCRIPT"
@@ -121,3 +123,5 @@ ARRAY_JOB_ID="$(
 echo "Submitted array job ${ARRAY_JOB_ID} with ${NUM_TASKS} tasks."
 echo "Chunks dir: $OUTPUT_DIR"
 echo "Manifest:   $MANIFEST"
+echo "MSA_ARRAY_JOB_ID=$ARRAY_JOB_ID"
+echo "MSA_OUTPUT_DIR=$OUTPUT_DIR"

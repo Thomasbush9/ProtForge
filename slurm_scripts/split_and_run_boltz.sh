@@ -119,11 +119,13 @@ if [[ ! -f "$BOLTZ_SCRIPT" ]]; then
   exit 1
 fi
 
-# --parsable returns just the job ID so we can print it nicely
+# --parsable returns just the job ID; pass cache/env from config (run.sh exports them)
+SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
 ARRAY_JOB_ID="$(
   sbatch --parsable \
+    -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
-    --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$CHUNKS_DIR",BOLTZ_RECYCLING_STEPS="$RECYCLING_STEPS",BOLTZ_DIFFUSION_SAMPLES="$DIFFUSION_SAMPLES" \
+    --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$CHUNKS_DIR",BOLTZ_RECYCLING_STEPS="$RECYCLING_STEPS",BOLTZ_DIFFUSION_SAMPLES="$DIFFUSION_SAMPLES",CONFIG_FILE="${CONFIG_FILE:-}",BOLTZ_CACHE="${BOLTZ_CACHE:-}",BOLTZ_COLABFOLD_DB="${BOLTZ_COLABFOLD_DB:-}",BOLTZ_ENV_PATH="${BOLTZ_ENV_PATH:-}",COLABFOLD_BIN="${COLABFOLD_BIN:-}" \
     "$BOLTZ_SCRIPT"
 )"
 
@@ -137,9 +139,11 @@ ORGANIZE_SCRIPT="${SCRIPT_DIR}/run_boltz_organize.slrm"
 if [[ -f "$ORGANIZE_SCRIPT" ]]; then
   echo ""
   echo "Submitting post-processing job to organize boltz outputs..."
+  ORGANIZE_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%j.out"
   ORGANIZE_JOB_ID=$(sbatch --parsable \
+    -o "$ORGANIZE_OUTPUT" \
     --dependency=afterok:${ARRAY_JOB_ID} \
-    --export=ALL,BASE_OUTPUT_DIR="$OUTPUT_DIR",BOLTZ_CHUNKS_DIR="$CHUNKS_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
+    --export=ALL,BASE_OUTPUT_DIR="$OUTPUT_DIR",BOLTZ_CHUNKS_DIR="$CHUNKS_DIR",SCRIPT_DIR="$SCRIPT_DIR",CONFIG_FILE="${CONFIG_FILE:-}" \
     "$ORGANIZE_SCRIPT")
 
   if [[ -n "$ORGANIZE_JOB_ID" ]]; then

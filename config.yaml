@@ -11,6 +11,9 @@ output:
 msa:
   max_files_per_job: 25           # Maximum number of .fasta files per MSA array job
   array_max_concurrency: 10       # Maximum concurrent MSA array tasks
+  mmseq2_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+  colabfold_bin: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin
 
 # Boltz structure prediction settings
 boltz:
@@ -19,13 +22,25 @@ boltz:
   delete_msa_after_processing: false  # Delete MSA files after successful boltz processing
   recycling_steps: 10               # Number of recycling steps for boltz prediction
   diffusion_samples: 25            # Number of diffusion samples for boltz prediction
+  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+  env_path: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
 
 # ESM embeddings generation settings
 esm:
   num_chunks: 1                    # Number of chunks for ESM array job
   array_max_concurrency: 20       # Maximum concurrent ESM array tasks
+  env_path: /n/home06/tbush/envs/esm
+  work_dir: /n/home06/tbush/gfp_function_prediction
+  cache_dir: /n/home06/tbush/cache/esm  # ESM model/embedding cache (TORCH_HOME)
 
 # ES (Evolutionary Scale) analysis settings
 es:
-  script_dir: //n/home06/tbush/PDAnalysis# Directory containing main.py
+  script_dir: /n/home06/tbush/PDAnalysis  # Directory containing main.py
   wt_path: /n/home06/tbush/test_input.fasta_prot_pipeline_model_0.cif
+  output_dir: /n/home06/tbush/outputs/es  # Where ES analysis writes results
+  env_path: /n/home06/tbush/envs/es-analysis  # Conda env for ES (optional)
+
+# Slurm (only config is user-editable)
+slurm:
+  log_dir: /n/home06/tbush/job_logs

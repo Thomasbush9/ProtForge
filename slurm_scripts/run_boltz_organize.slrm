@@ -7,7 +7,8 @@
 #SBATCH --partition=kempner_requeue
 #SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=1:00:00
-#SBATCH --output=/n/home06/tbush/job_logs/%x.%j.out
+# Log dir from env (caller passes -o)
+#SBATCH --output=/tmp/%x.%j.out
 
 set -euo pipefail
 
@@ -22,7 +23,7 @@ if [[ ! -f "$ORGANIZE_SCRIPT" ]]; then
   exit 1
 fi
 
-CONFIG_FILE="${SCRIPT_DIR}/pipeline_config.yaml"
+CONFIG_FILE="${CONFIG_FILE:-$(dirname "$SCRIPT_DIR")/config.yaml}"
 
 # Completion marker file
 ORGANIZE_COMPLETE_FILE="${BASE_OUTPUT_DIR}/.organize_boltz_complete"

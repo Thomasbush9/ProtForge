@@ -9,8 +9,8 @@
 #SBATCH --time=01:00:00
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thomasbush52@gmail.com
-# Use array-aware log names to avoid clobbering:
-#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+# Log dir from env (caller passes -o)
+#SBATCH --output=/tmp/%x.%A_%a.out
 
 set -euo pipefail
 
@@ -35,8 +35,12 @@ CHUNK_NUM=$(basename "$CHUNK_DIR" | sed 's/chunk_//')
 
 PROCESSED_PATHS_FILE="${BASE_OUTPUT_DIR}/processed_paths.txt"
 TOT_FILES_BOLTZ="${BASE_OUTPUT_DIR}/tot_filesboltz.txt"
-BOLTZ_CACHE="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db"
+BOLTZ_CACHE="${BOLTZ_CACHE:-}"
 BOLTZ_OUTPUT_DIR="${BASE_OUTPUT_DIR}/boltz_output/chunk_${CHUNK_NUM}"
+if [[ -z "$BOLTZ_CACHE" ]]; then
+  echo "ERROR: BOLTZ_CACHE must be set (e.g. from config via run.sh)"
+  exit 1
+fi
 
 mkdir -p "$BOLTZ_OUTPUT_DIR"
 
@@ -52,8 +56,8 @@ export NUM_GPU_DEVICES=1
 
 # Load required modules
 module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01
-export PATH="/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin:$PATH"
-export COLABFOLD_DB=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+[[ -n "${COLABFOLD_BIN:-}" ]] && export PATH="${COLABFOLD_BIN}:${PATH}"
+export COLABFOLD_DB="${BOLTZ_COLABFOLD_DB:-$COLABFOLD_DB}"
 
 # Count yaml files in chunk directory
 YAML_COUNT=$(find "$CHUNK_DIR" -maxdepth 1 -name "*.yaml" -type f | wc -l | tr -d ' ')
@@ -70,8 +74,13 @@ if ((YAML_COUNT == 0)); then
   exit 0
 fi
 
-# Activate boltz environment
-mamba activate /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
+# Activate boltz environment (path from config)
+BOLTZ_ENV_PATH="${BOLTZ_ENV_PATH:-}"
+if [[ -z "$BOLTZ_ENV_PATH" ]]; then
+  echo "ERROR: BOLTZ_ENV_PATH must be set (e.g. from config via run.sh)"
+  exit 1
+fi
+mamba activate "$BOLTZ_ENV_PATH"
 
 # Run boltz predict on the chunk directory
 echo "[$(date +%H:%M:%S)] Running boltz predict on chunk directory..."

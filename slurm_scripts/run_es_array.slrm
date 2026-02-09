@@ -1,0 +1,68 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=16
+#SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=8GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=00:30:00
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=thomasbush52@gmail.com
+# Log dir from env (caller passes -o)
+#SBATCH --output=/tmp/%x.%j.out
+
+set -euo pipefail
+export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+
+# All paths from config (via run_es.sh / run.sh)
+ES_ROOT_DIR="${ES_ROOT_DIR:-}"
+ES_SCRIPT_DIR="${ES_SCRIPT_DIR:-}"
+ES_WT_PATH="${ES_WT_PATH:-}"
+ES_OUTPUT_DIR="${ES_OUTPUT_DIR:-}"
+ES_ENV_PREFIX="${ES_ENV_PREFIX:-}"
+
+if [[ -z "$ES_SCRIPT_DIR" || -z "$ES_WT_PATH" ]]; then
+  echo "ERROR: ES_SCRIPT_DIR and ES_WT_PATH must be set (e.g. from config via run.sh)"
+  exit 1
+fi
+if [[ -z "$ES_ROOT_DIR" ]]; then
+  echo "ERROR: ES_ROOT_DIR must be set (directory containing .cif files)"
+  exit 1
+fi
+
+# Output dir: from config or default under ROOT
+OUTPUT_DIR="${ES_OUTPUT_DIR:-$ES_ROOT_DIR/es}"
+mkdir -p "$OUTPUT_DIR"
+echo "Output directory: $OUTPUT_DIR"
+
+# --- Load modules ---
+module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 openmpi
+set +u
+source "$(conda info --base)/etc/profile.d/conda.sh"
+if [[ -n "$ES_ENV_PREFIX" ]]; then
+  conda activate "$ES_ENV_PREFIX"
+fi
+set -u
+
+# Find best .cif per sequence and write paths
+find "$ES_ROOT_DIR" -name "*.cif" -type f -print |
+  awk -F'[-_/|.]' '
+{
+  n = $9
+  s = $5
+  if (!(s in best) || n > best[s]) {
+    best[s] = n
+    bestfile[s] = $0
+  }
+}
+END {
+  for (s in best)
+    print bestfile[s]
+}
+' | xargs realpath >"$ES_ROOT_DIR/paths.txt"
+
+cd "$ES_SCRIPT_DIR"
+mpiexec -n 16 python main.py --parallel True --protA "$ES_WT_PATH" --path_list "$ES_ROOT_DIR/paths.txt" --out_dir "$OUTPUT_DIR" --method all --min_plddt 70 --lddt_cutoffs 0.125 0.25 0.5 1
