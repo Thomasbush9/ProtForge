@@ -12,15 +12,15 @@
 
 set -euo pipefail
 
-: "${MSA_OUTPUT_DIR:?Need MSA_OUTPUT_DIR}"
+: "${OUTPUT_DIR:?Need OUTPUT_DIR}"
 : "${SCRIPT_DIR:?Need SCRIPT_DIR}"
-: "${ESM_N:?Need ESM_N}"
+: "${N:?Need N}"
 : "${OUTPUT_PARENT_DIR:?Need OUTPUT_PARENT_DIR}"
 
-echo "[$(date +%H:%M:%S)] ESM wrapper: MSA_OUTPUT_DIR=$MSA_OUTPUT_DIR"
+echo "[$(date +%H:%M:%S)] ESM wrapper: OUTPUT_DIR=$OUTPUT_DIR"
 "$SCRIPT_DIR/run_esm.sh" \
-  "$MSA_OUTPUT_DIR" \
-  "$ESM_N" \
+  "$OUTPUT_DIR" \
+  "$N" \
   "$OUTPUT_PARENT_DIR" \
-  "${ESM_ARRAY_MAX_CONCURRENCY:-20}"
+  "${ARRAY_MAX_CONCURRENCY:-20}"
 echo "[$(date +%H:%M:%S)] ESM wrapper finished."

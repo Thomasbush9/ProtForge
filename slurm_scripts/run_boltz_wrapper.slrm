@@ -12,15 +12,15 @@
 
 set -euo pipefail
 
-: "${MSA_OUTPUT_DIR:?Need MSA_OUTPUT_DIR}"
+: "${OUTPUT_DIR:?Need OUTPUT_DIR}"
 : "${SCRIPT_DIR:?Need SCRIPT_DIR}"
 : "${MAX_FILES_PER_JOB:?Need MAX_FILES_PER_JOB}"
 
-echo "[$(date +%H:%M:%S)] Boltz wrapper: MSA_OUTPUT_DIR=$MSA_OUTPUT_DIR"
+echo "[$(date +%H:%M:%S)] Boltz wrapper: OUTPUT_DIR=$OUTPUT_DIR"
 "$SCRIPT_DIR/split_and_run_boltz.sh" \
-  "$MSA_OUTPUT_DIR" \
+  "$OUTPUT_DIR" \
   "$MAX_FILES_PER_JOB" \
-  "${BOLTZ_ARRAY_MAX_CONCURRENCY:-10}" \
+  "${ARRAY_MAX_CONCURRENCY:-10}" \
   "${BOLTZ_RECYCLING_STEPS:-8}" \
   "${BOLTZ_DIFFUSION_SAMPLES:-10}"
 echo "[$(date +%H:%M:%S)] Boltz wrapper finished."
