@@ -1,0 +1,5 @@
+# For bash_scripts/generate_data.sh (generate_data.py + generate_subsamples.py)
+pandas>=1.0
+numpy>=1.20
+PyYAML>=5.0
+tqdm>=4.0

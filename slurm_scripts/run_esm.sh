@@ -88,10 +88,14 @@ touch "${ESM_CHUNKS_DIR}/processed_paths.txt"
 echo "Submitting ${NUM_TASKS} array tasks (max concurrent: ${ARRAY_MAX_CONCURRENCY})..."
 
 # Pass ESM env/work dir and log dir from config (run.sh exports ESM_ENV_PREFIX, ESM_WORK_DIR)
+# When run.sh set DEPENDENCY_JOB_ID (e.g. after MSA), submit with that dependency
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
+SBATCH_DEPS=""
+[[ -n "${DEPENDENCY_JOB_ID:-}" ]] && SBATCH_DEPS="--dependency=afterok:${DEPENDENCY_JOB_ID}"
 ARRAY_JOB_ID="$(
   sbatch --parsable \
+    $SBATCH_DEPS \
     -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
     --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$OUTPUT_DIR",ESM_CHUNKS_DIR="$ESM_CHUNKS_DIR",ES_ENV_PREFIX="${ES_ENV_PREFIX:-}",ESM_WORK_DIR="${ESM_WORK_DIR:-}",ESM_CACHE_DIR="${ESM_CACHE_DIR:-}" \

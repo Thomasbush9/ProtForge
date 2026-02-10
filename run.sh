@@ -138,10 +138,8 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
     echo "ERROR: Could not get MSA_ARRAY_JOB_ID or MSA_OUTPUT_DIR from MSA script output"
     exit 1
   fi
-  echo ""
-  echo ">>> Waiting for MSA array to complete..."
-  srun --dependency=afterok:"$MSA_ARRAY_JOB_ID" --mem=1M --time=00:05:00 true
-  echo "MSA array finished."
+  export DEPENDENCY_JOB_ID="$MSA_ARRAY_JOB_ID"
+  echo ">>> Boltz and ESM will be submitted with --dependency=afterok:${DEPENDENCY_JOB_ID}"
 else
   MSA_OUTPUT_DIR="$INPUT_YAML_DIR"
 fi

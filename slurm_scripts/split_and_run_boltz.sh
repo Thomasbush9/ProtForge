@@ -120,9 +120,13 @@ if [[ ! -f "$BOLTZ_SCRIPT" ]]; then
 fi
 
 # --parsable returns just the job ID; pass cache/env from config (run.sh exports them)
+# When run.sh set DEPENDENCY_JOB_ID (e.g. after MSA), submit with that dependency
 SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
+SBATCH_DEPS=""
+[[ -n "${DEPENDENCY_JOB_ID:-}" ]] && SBATCH_DEPS="--dependency=afterok:${DEPENDENCY_JOB_ID}"
 ARRAY_JOB_ID="$(
   sbatch --parsable \
+    $SBATCH_DEPS \
     -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
     --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$CHUNKS_DIR",BOLTZ_RECYCLING_STEPS="$RECYCLING_STEPS",BOLTZ_DIFFUSION_SAMPLES="$DIFFUSION_SAMPLES",CONFIG_FILE="${CONFIG_FILE:-}",BOLTZ_CACHE="${BOLTZ_CACHE:-}",BOLTZ_COLABFOLD_DB="${BOLTZ_COLABFOLD_DB:-}",BOLTZ_ENV_PATH="${BOLTZ_ENV_PATH:-}",COLABFOLD_BIN="${COLABFOLD_BIN:-}" \

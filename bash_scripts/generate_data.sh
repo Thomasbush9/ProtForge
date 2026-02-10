@@ -18,6 +18,7 @@ set -euo pipefail
 #   --subsample_mode  balanced|fixed (default: balanced)
 #   --num_mut         For fixed mode: exact number of mutations per sequence
 #   --seed            RNG seed for subsampling (default: 42)
+#   --venv DIR        Use this Python venv (create + install deps if missing). Default: $MAIN_DIR/.venv_data
 
 MAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$MAIN_DIR" || exit 1
@@ -31,6 +32,7 @@ SUBSAMPLE_N=""
 SUBSAMPLE_MODE="balanced"
 NUM_MUT=""
 SEED="42"
+VENV_DIR="${MAIN_DIR}/.venv_data"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,9 +45,23 @@ while [[ $# -gt 0 ]]; do
     --subsample_mode) SUBSAMPLE_MODE="$2"; shift 2 ;;
     --num_mut)       NUM_MUT="$2"; shift 2 ;;
     --seed)          SEED="$2"; shift 2 ;;
+    --venv)          VENV_DIR="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# Ensure Python venv exists and activate it (for pandas, pyyaml, tqdm, numpy)
+ensure_venv() {
+  local venv="$1"
+  if [[ -d "$venv" && -f "$venv/bin/activate" ]]; then
+    return 0
+  fi
+  echo "Creating venv at $venv and installing dependencies..."
+  python3 -m venv "$venv" || { echo "ERROR: python3 -m venv failed"; exit 1; }
+  "$venv/bin/pip" install -q -r "$MAIN_DIR/requirements-data.txt" || { echo "ERROR: pip install failed"; exit 1; }
+}
+ensure_venv "$VENV_DIR"
+PYTHON_CMD="$VENV_DIR/bin/python"
 
 [[ -z "$DATA_PATH" ]] && { echo "ERROR: --data required"; exit 1; }
 [[ -z "$ORIGINAL_PATH" ]] && { echo "ERROR: --original required"; exit 1; }
@@ -63,7 +79,7 @@ mkdir -p "$OUTPUT_DIR"
 TRAINING_DIR="${OUTPUT_DIR}/training_data"
 
 echo "Running generate_data.py..."
-python -m utils.generate_data \
+"$PYTHON_CMD" -m utils.generate_data \
   --data "$(realpath -m "$DATA_PATH")" \
   --original "$(realpath -m "$ORIGINAL_PATH")" \
   --file_type "$FILE_TYPE" \
@@ -73,7 +89,7 @@ python -m utils.generate_data \
 
 if [[ -n "$SUBSAMPLE_N" ]]; then
   echo "Running generate_subsamples.py..."
-  SUBSAMPLE_OUTPUT=$(python -m utils.generate_subsamples \
+  SUBSAMPLE_OUTPUT=$("$PYTHON_CMD" -m utils.generate_subsamples \
     --dataset "$(realpath -m "$DATA_PATH")" \
     --n "$SUBSAMPLE_N" \
     --main_dir "$(realpath -m "$TRAINING_DIR")" \
