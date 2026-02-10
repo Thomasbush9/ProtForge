@@ -120,13 +120,15 @@ if [[ ! -f "$BOLTZ_SCRIPT" ]]; then
 fi
 
 # --parsable returns just the job ID; pass cache/env from config (run.sh exports them)
-# When run.sh set DEPENDENCY_JOB_ID (e.g. after MSA), submit with that dependency
+# Partition/account from config; dependency when set
 SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
-SBATCH_DEPS=""
-[[ -n "${DEPENDENCY_JOB_ID:-}" ]] && SBATCH_DEPS="--dependency=afterok:${DEPENDENCY_JOB_ID}"
+SBATCH_OPTS=()
+[[ -n "${SLURM_BOLTZ_PARTITION:-}" ]] && SBATCH_OPTS+=(-p "$SLURM_BOLTZ_PARTITION")
+[[ -n "${SLURM_ACCOUNT:-}" ]] && SBATCH_OPTS+=(--account "$SLURM_ACCOUNT")
+[[ -n "${DEPENDENCY_JOB_ID:-}" ]] && SBATCH_OPTS+=(--dependency=afterok:${DEPENDENCY_JOB_ID})
 ARRAY_JOB_ID="$(
   sbatch --parsable \
-    $SBATCH_DEPS \
+    "${SBATCH_OPTS[@]}" \
     -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
     --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$CHUNKS_DIR",BOLTZ_RECYCLING_STEPS="$RECYCLING_STEPS",BOLTZ_DIFFUSION_SAMPLES="$DIFFUSION_SAMPLES",CONFIG_FILE="${CONFIG_FILE:-}",BOLTZ_CACHE="${BOLTZ_CACHE:-}",BOLTZ_COLABFOLD_DB="${BOLTZ_COLABFOLD_DB:-}",BOLTZ_ENV_PATH="${BOLTZ_ENV_PATH:-}",COLABFOLD_BIN="${COLABFOLD_BIN:-}" \
@@ -144,7 +146,11 @@ if [[ -f "$ORGANIZE_SCRIPT" ]]; then
   echo ""
   echo "Submitting post-processing job to organize boltz outputs..."
   ORGANIZE_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%j.out"
+  ORGANIZE_OPTS=()
+  [[ -n "${SLURM_BOLTZ_PARTITION:-}" ]] && ORGANIZE_OPTS+=(-p "$SLURM_BOLTZ_PARTITION")
+  [[ -n "${SLURM_ACCOUNT:-}" ]] && ORGANIZE_OPTS+=(--account "$SLURM_ACCOUNT")
   ORGANIZE_JOB_ID=$(sbatch --parsable \
+    "${ORGANIZE_OPTS[@]}" \
     -o "$ORGANIZE_OUTPUT" \
     --dependency=afterok:${ARRAY_JOB_ID} \
     --export=ALL,BASE_OUTPUT_DIR="$OUTPUT_DIR",BOLTZ_CHUNKS_DIR="$CHUNKS_DIR",SCRIPT_DIR="$SCRIPT_DIR",CONFIG_FILE="${CONFIG_FILE:-}" \

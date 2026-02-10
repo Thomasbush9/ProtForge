@@ -21,8 +21,11 @@ if [[ ! -f "$ES_SCRIPT" ]]; then
 fi
 
 SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%j.out"
+SBATCH_OPTS=()
+[[ -n "${SLURM_ES_PARTITION:-}" ]] && SBATCH_OPTS+=(-p "$SLURM_ES_PARTITION")
+[[ -n "${SLURM_ACCOUNT:-}" ]] && SBATCH_OPTS+=(--account "$SLURM_ACCOUNT")
 echo "Submitting ES analysis job (root dir: $ES_ROOT_DIR)..."
-sbatch -o "$SLURM_OUTPUT" \
+sbatch "${SBATCH_OPTS[@]}" -o "$SLURM_OUTPUT" \
   --export=ALL,ES_ROOT_DIR="$ES_ROOT_DIR" \
   "$ES_SCRIPT"
 echo "ES job submitted."

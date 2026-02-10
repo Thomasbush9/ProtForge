@@ -51,6 +51,15 @@ RUN_ES=$(_run_flag "es")
 
 # Per-feature cache/path keys from config
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
+SLURM_PARTITION=$(get_config "slurm.partition")
+SLURM_ACCOUNT=$(get_config "slurm.account")
+# Per-job partition (optional; default to SLURM_PARTITION)
+SLURM_MSA_PARTITION=$(get_config "slurm.msa.partition"); [[ -z "$SLURM_MSA_PARTITION" ]] && SLURM_MSA_PARTITION="$SLURM_PARTITION"
+SLURM_BOLTZ_PARTITION=$(get_config "slurm.boltz.partition"); [[ -z "$SLURM_BOLTZ_PARTITION" ]] && SLURM_BOLTZ_PARTITION="$SLURM_PARTITION"
+SLURM_ESM_PARTITION=$(get_config "slurm.esm.partition"); [[ -z "$SLURM_ESM_PARTITION" ]] && SLURM_ESM_PARTITION="$SLURM_PARTITION"
+SLURM_ES_PARTITION=$(get_config "slurm.es.partition"); [[ -z "$SLURM_ES_PARTITION" ]] && SLURM_ES_PARTITION="$SLURM_PARTITION"
+SLURM_CHECKER_MSA_PARTITION=$(get_config "slurm.checker_msa.partition"); [[ -z "$SLURM_CHECKER_MSA_PARTITION" ]] && SLURM_CHECKER_MSA_PARTITION="$SLURM_MSA_PARTITION"
+SLURM_CHECKER_BOLTZ_PARTITION=$(get_config "slurm.checker_boltz.partition"); [[ -z "$SLURM_CHECKER_BOLTZ_PARTITION" ]] && SLURM_CHECKER_BOLTZ_PARTITION="$SLURM_BOLTZ_PARTITION"
 MMSEQ2_DB=$(get_config "msa.mmseq2_db")
 COLABFOLD_DB=$(get_config "msa.colabfold_db")
 COLABFOLD_BIN=$(get_config "msa.colabfold_bin")
@@ -112,6 +121,9 @@ CONFIG_FILE="$(realpath -m "$CONFIG_FILE")"
 
 # Export config-derived env for child scripts and sbatch
 export CONFIG_FILE SLURM_LOG_DIR
+export SLURM_PARTITION SLURM_ACCOUNT
+export SLURM_MSA_PARTITION SLURM_BOLTZ_PARTITION SLURM_ESM_PARTITION SLURM_ES_PARTITION
+export SLURM_CHECKER_MSA_PARTITION SLURM_CHECKER_BOLTZ_PARTITION
 export MMSEQ2_DB COLABFOLD_DB
 export BOLTZ_CACHE BOLTZ_COLABFOLD_DB BOLTZ_ENV_PATH
 export ESM_ENV_PREFIX="$ESM_ENV_PATH" ESM_WORK_DIR ESM_CACHE_DIR
@@ -141,6 +153,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
   # MSA checker (runs only if MSA array fails)
   if [[ -f "${SCRIPT_DIR}/run_checker_msa.slrm" ]]; then
     CHECKER_MSA_ID=$(sbatch --parsable --dependency=afternotok:"$MSA_ARRAY_JOB_ID" \
+      ${SLURM_CHECKER_MSA_PARTITION:+-p "$SLURM_CHECKER_MSA_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
       "${SCRIPT_DIR}/run_checker_msa.slrm" 2>/dev/null || echo "")
@@ -149,12 +162,14 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
   echo ">>> Submitting Boltz and ESM wrappers with --dependency=afterok:${MSA_ARRAY_JOB_ID}..."
   [[ "$RUN_BOLTZ" -eq 1 ]] && {
     BOLTZ_WRAPPER_ID=$(sbatch --parsable --dependency=afterok:"$MSA_ARRAY_JOB_ID" \
+      ${SLURM_BOLTZ_PARTITION:+-p "$SLURM_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,MSA_OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
       "${SCRIPT_DIR}/run_boltz_wrapper.slrm")
     echo "  Boltz wrapper job: ${BOLTZ_WRAPPER_ID}"
     if [[ -f "${SCRIPT_DIR}/run_checker_boltz.slrm" ]]; then
       CHECKER_BOLTZ_ID=$(sbatch --parsable --dependency=afternotok:"$BOLTZ_WRAPPER_ID" \
+        ${SLURM_CHECKER_BOLTZ_PARTITION:+-p "$SLURM_CHECKER_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
         -o "${SLURM_LOG_DIR}/%x.%j.out" \
         --export=ALL,OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
         "${SCRIPT_DIR}/run_checker_boltz.slrm" 2>/dev/null || echo "")
@@ -163,6 +178,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
   }
   [[ "$RUN_ESM" -eq 1 ]] && {
     ESM_WRAPPER_ID=$(sbatch --parsable --dependency=afterok:"$MSA_ARRAY_JOB_ID" \
+      ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,MSA_OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
       "${SCRIPT_DIR}/run_esm_wrapper.slrm")

@@ -110,10 +110,14 @@ if [[ ! -f "$MSA_SCRIPT" ]]; then
 fi
 
 # --parsable returns just the job ID so we can print it nicely
-# Export env (MMSEQ2_DB, COLABFOLD_DB, SLURM_LOG_DIR from run.sh or caller)
+# Partition/account from config (run.sh exports SLURM_MSA_PARTITION, SLURM_ACCOUNT)
 SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
+SBATCH_OPTS=()
+[[ -n "${SLURM_MSA_PARTITION:-}" ]] && SBATCH_OPTS+=(-p "$SLURM_MSA_PARTITION")
+[[ -n "${SLURM_ACCOUNT:-}" ]] && SBATCH_OPTS+=(--account "$SLURM_ACCOUNT")
 ARRAY_JOB_ID="$(
   sbatch --parsable \
+    "${SBATCH_OPTS[@]}" \
     -o "$SLURM_OUTPUT" \
     --array=1-"$NUM_TASKS"%${ARRAY_MAX_CONCURRENCY} \
     --export=ALL,MANIFEST="$MANIFEST",BASE_OUTPUT_DIR="$OUTPUT_DIR",ORIGINAL_FASTA_DIR="$INPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \

@@ -49,6 +49,21 @@ es:
   output_dir: /n/home06/tbush/outputs/es  # Where ES analysis writes results
   env_path: /n/home06/tbush/envs/es-analysis  # Conda env for ES (optional)
 
-# Slurm (only config is user-editable)
+# Slurm (partition/account apply to all jobs unless overridden per job)
 slurm:
   log_dir: /n/home06/tbush/job_logs
+  partition: kempner_requeue
+  account: kempner_bsabatini_lab
+  # Optional per-job overrides (use same keys as pipeline + checker names)
+  # msa:
+  #   partition: other_partition
+  # boltz:
+  #   partition: other_partition
+  # esm:
+  #   partition: other_partition
+  # es:
+  #   partition: other_partition
+  # checker_msa:
+  #   partition: other_partition
+  # checker_boltz:
+  #   partition: other_partition
