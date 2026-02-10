@@ -138,28 +138,59 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
     echo "ERROR: Could not get MSA_ARRAY_JOB_ID or MSA_OUTPUT_DIR from MSA script output"
     exit 1
   fi
-  export DEPENDENCY_JOB_ID="$MSA_ARRAY_JOB_ID"
-  echo ">>> Boltz and ESM will be submitted with --dependency=afterok:${DEPENDENCY_JOB_ID}"
+  # MSA checker (runs only if MSA array fails)
+  if [[ -f "${SCRIPT_DIR}/run_checker_msa.slrm" ]]; then
+    CHECKER_MSA_ID=$(sbatch --parsable --dependency=afternotok:"$MSA_ARRAY_JOB_ID" \
+      -o "${SLURM_LOG_DIR}/%x.%j.out" \
+      --export=ALL,OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
+      "${SCRIPT_DIR}/run_checker_msa.slrm" 2>/dev/null || echo "")
+    [[ -n "$CHECKER_MSA_ID" ]] && echo "  MSA checker job: ${CHECKER_MSA_ID} (runs if MSA fails)"
+  fi
+  echo ">>> Submitting Boltz and ESM wrappers with --dependency=afterok:${MSA_ARRAY_JOB_ID}..."
+  [[ "$RUN_BOLTZ" -eq 1 ]] && {
+    BOLTZ_WRAPPER_ID=$(sbatch --parsable --dependency=afterok:"$MSA_ARRAY_JOB_ID" \
+      -o "${SLURM_LOG_DIR}/%x.%j.out" \
+      --export=ALL,MSA_OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
+      "${SCRIPT_DIR}/run_boltz_wrapper.slrm")
+    echo "  Boltz wrapper job: ${BOLTZ_WRAPPER_ID}"
+    if [[ -f "${SCRIPT_DIR}/run_checker_boltz.slrm" ]]; then
+      CHECKER_BOLTZ_ID=$(sbatch --parsable --dependency=afternotok:"$BOLTZ_WRAPPER_ID" \
+        -o "${SLURM_LOG_DIR}/%x.%j.out" \
+        --export=ALL,OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
+        "${SCRIPT_DIR}/run_checker_boltz.slrm" 2>/dev/null || echo "")
+      [[ -n "$CHECKER_BOLTZ_ID" ]] && echo "  Boltz checker job: ${CHECKER_BOLTZ_ID} (runs if Boltz wrapper fails)"
+    fi
+  }
+  [[ "$RUN_ESM" -eq 1 ]] && {
+    ESM_WRAPPER_ID=$(sbatch --parsable --dependency=afterok:"$MSA_ARRAY_JOB_ID" \
+      -o "${SLURM_LOG_DIR}/%x.%j.out" \
+      --export=ALL,MSA_OUTPUT_DIR="$MSA_OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
+      "${SCRIPT_DIR}/run_esm_wrapper.slrm")
+    echo "  ESM wrapper job: ${ESM_WRAPPER_ID}"
+  }
+  [[ "$RUN_ES" -eq 1 ]] && {
+    echo ""
+    echo ">>> Submitting ES analysis..."
+    "${SCRIPT_DIR}/run_es.sh" "$MSA_OUTPUT_DIR"
+  }
 else
   MSA_OUTPUT_DIR="$INPUT_YAML_DIR"
+  [[ "$RUN_BOLTZ" -eq 1 ]] && {
+    echo ""
+    echo ">>> Submitting Boltz array..."
+    "$BOLTZ_SCRIPT" "$MSA_OUTPUT_DIR" "$MAX_FILES_PER_JOB" "$BOLTZ_ARRAY_MAX_CONCURRENCY" "$BOLTZ_RECYCLING_STEPS" "$BOLTZ_DIFFUSION_SAMPLES"
+  }
+  [[ "$RUN_ESM" -eq 1 ]] && {
+    echo ""
+    echo ">>> Submitting ESM array..."
+    "$ESM_SCRIPT" "$MSA_OUTPUT_DIR" "$ESM_N" "$OUTPUT_PARENT_DIR" "$ESM_ARRAY_MAX_CONCURRENCY"
+  }
+  [[ "$RUN_ES" -eq 1 ]] && {
+    echo ""
+    echo ">>> Submitting ES analysis..."
+    "${SCRIPT_DIR}/run_es.sh" "$MSA_OUTPUT_DIR"
+  }
 fi
-
-# Boltz and ESM (parallel on YAML dir)
-[[ "$RUN_BOLTZ" -eq 1 ]] && {
-  echo ""
-  echo ">>> Submitting Boltz array..."
-  "$BOLTZ_SCRIPT" "$MSA_OUTPUT_DIR" "$MAX_FILES_PER_JOB" "$BOLTZ_ARRAY_MAX_CONCURRENCY" "$BOLTZ_RECYCLING_STEPS" "$BOLTZ_DIFFUSION_SAMPLES"
-}
-[[ "$RUN_ESM" -eq 1 ]] && {
-  echo ""
-  echo ">>> Submitting ESM array..."
-  "$ESM_SCRIPT" "$MSA_OUTPUT_DIR" "$ESM_N" "$OUTPUT_PARENT_DIR" "$ESM_ARRAY_MAX_CONCURRENCY"
-}
-[[ "$RUN_ES" -eq 1 ]] && {
-  echo ""
-  echo ">>> Submitting ES analysis..."
-  "${SCRIPT_DIR}/run_es.sh" "$MSA_OUTPUT_DIR"
-}
 
 echo ""
 echo "==============================================="

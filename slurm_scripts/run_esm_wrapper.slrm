@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=2GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=00:10:00
+# Runs after MSA array (afterok); enumerates .yaml and submits ESM array. Env from run.sh via --export=ALL.
+#SBATCH --output=/tmp/%x.%j.out
+
+set -euo pipefail
+
+: "${MSA_OUTPUT_DIR:?Need MSA_OUTPUT_DIR}"
+: "${SCRIPT_DIR:?Need SCRIPT_DIR}"
+: "${ESM_N:?Need ESM_N}"
+: "${OUTPUT_PARENT_DIR:?Need OUTPUT_PARENT_DIR}"
+
+echo "[$(date +%H:%M:%S)] ESM wrapper: MSA_OUTPUT_DIR=$MSA_OUTPUT_DIR"
+"$SCRIPT_DIR/run_esm.sh" \
+  "$MSA_OUTPUT_DIR" \
+  "$ESM_N" \
+  "$OUTPUT_PARENT_DIR" \
+  "${ESM_ARRAY_MAX_CONCURRENCY:-20}"
+echo "[$(date +%H:%M:%S)] ESM wrapper finished."

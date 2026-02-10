@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=2GB
+#SBATCH --partition=kempner_requeue
+#SBATCH --account=kempner_bsabatini_lab
+#SBATCH --time=00:10:00
+# Runs after MSA array (afterok); enumerates .yaml and submits Boltz array. Env from run.sh via --export=ALL.
+#SBATCH --output=/tmp/%x.%j.out
+
+set -euo pipefail
+
+: "${MSA_OUTPUT_DIR:?Need MSA_OUTPUT_DIR}"
+: "${SCRIPT_DIR:?Need SCRIPT_DIR}"
+: "${MAX_FILES_PER_JOB:?Need MAX_FILES_PER_JOB}"
+
+echo "[$(date +%H:%M:%S)] Boltz wrapper: MSA_OUTPUT_DIR=$MSA_OUTPUT_DIR"
+"$SCRIPT_DIR/split_and_run_boltz.sh" \
+  "$MSA_OUTPUT_DIR" \
+  "$MAX_FILES_PER_JOB" \
+  "${BOLTZ_ARRAY_MAX_CONCURRENCY:-10}" \
+  "${BOLTZ_RECYCLING_STEPS:-8}" \
+  "${BOLTZ_DIFFUSION_SAMPLES:-10}"
+echo "[$(date +%H:%M:%S)] Boltz wrapper finished."
