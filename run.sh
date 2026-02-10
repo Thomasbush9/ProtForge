@@ -180,7 +180,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
     ESM_JOB_ID=$(sbatch --parsable --dependency=afterok:"$MSA_JOB_ID" \
       ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
-      --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",N="$ESM_N",ARRAY_MAX_CONCURRENCY="$ESM_ARRAY_MAX_CONCURRENCY",SCRIPT_DIR="$SCRIPT_DIR" \
+      --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",OUTPUT_PARENT_DIR="$OUTPUT_PARENT_DIR",N="$ESM_N",ARRAY_MAX_CONCURRENCY="$ESM_ARRAY_MAX_CONCURRENCY",SCRIPT_DIR="$SCRIPT_DIR" \
       "$ESM_WRAPPER")
     if [[ -z "$ESM_JOB_ID" ]]; then
       echo "ERROR: Failed to submit ESM job"

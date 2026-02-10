@@ -7,17 +7,18 @@
 #SBATCH --partition=kempner_requeue
 #SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=00:10:00
-# Runs after MSA array (afterok); enumerates .yaml and submits ESM array. Env from run.sh via --export=ALL.
+# Runs after MSA array (afterok). OUTPUT_DIR = base dir with one subdir per sequence (seq_0, seq_1, ...);
+# ESM reads .yaml from each and writes embeddings into that same sequence dir. OUTPUT_PARENT_DIR = parent for esm_chunks_*.
 #SBATCH --output=/tmp/%x.%j.out
 
 set -euo pipefail
 
-: "${OUTPUT_DIR:?Need OUTPUT_DIR}"
+: "${OUTPUT_DIR:?Need OUTPUT_DIR - base dir containing one subdir per sequence}"
+: "${OUTPUT_PARENT_DIR:?Need OUTPUT_PARENT_DIR - parent for ESM chunk/metadata dirs}"
 : "${SCRIPT_DIR:?Need SCRIPT_DIR}"
 : "${N:?Need N}"
-: "${OUTPUT_PARENT_DIR:?Need OUTPUT_PARENT_DIR}"
 
-echo "[$(date +%H:%M:%S)] ESM wrapper: OUTPUT_DIR=$OUTPUT_DIR"
+echo "[$(date +%H:%M:%S)] ESM wrapper: OUTPUT_DIR=$OUTPUT_DIR (each seq dir gets its own ESM output)"
 "$SCRIPT_DIR/run_esm.sh" \
   "$OUTPUT_DIR" \
   "$N" \

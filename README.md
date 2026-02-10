@@ -30,8 +30,17 @@ Currently the tools supported are:
 
 4. Write your own config file: 
 
+Inside the ```config.yaml` you can modify the config that will be used to generate the features. 
+
+The main parameters that you can modify are: 
+
+
+
 
 5. Generate the features 
+
+After you have modified the configuration file, you can launch the features generation by using the ```run.sh` script. It will automatically launch all the slurm jobs and checkers to generate the features. 
+
 
 
 ## Usage 
