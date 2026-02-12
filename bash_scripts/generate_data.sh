@@ -1,24 +1,41 @@
 #!/bin/bash
 set -euo pipefail
 
-# Generate pipeline-ready .fasta folder from a table (TSV/CSV) and reference sequence.
-# Input table must contain column 'aaMutations' (e.g. SX123Y:...). Reference: single-sequence .fasta or .yaml.
-# Output: directory of .fasta files. Set input.fasta_dir in config.yaml to this path.
+# Generate pipeline-ready files from a CSV/TSV table.
 #
-# Usage: ./generate_data.sh --data /path/to/file.tsv --original /path/to/reference.fasta [OPTIONS]
+# Two input modes:
+#   1. MUTATIONS MODE: CSV with 'aaMutations' column + reference sequence
+#   2. SEQUENCES MODE: CSV with 'name' and 'sequence' columns (no reference needed)
+#
+# Output: directory of .fasta or .yaml files. Set input.fasta_dir (or input.yaml_dir) in config.yaml.
+#
+# Usage:
+#   Mutations mode:
+#     ./generate_data.sh --data mutations.tsv --original reference.fasta [OPTIONS]
+#
+#   Sequences mode:
+#     ./generate_data.sh --data sequences.csv [OPTIONS]
 #
 # Required:
-#   --data PATH       Table with aaMutations column (.tsv or .csv)
+#   --data PATH       CSV/TSV file with either:
+#                     - 'aaMutations' column (mutations mode)
+#                     - 'name' and 'sequence' columns (sequences mode)
+#
+# For mutations mode only:
 #   --original PATH   Reference sequence (.fasta or .yaml)
+#
 # Optional:
-#   --msa PATH        MSA file path (stored in fasta header)
+#   --mode            Force mode: mutations|sequences (auto-detected if not specified)
+#   --msa PATH        MSA file path (stored in output files)
 #   --output_dir DIR  Output base dir (default: $MAIN_DIR/data/generated)
-#   --file_type       cluster|fasta|yaml (default: cluster for pipeline .fasta)
-#   --subsample N     After generating, create subsample of N sequences
+#   --file_type       cluster|fasta|yaml (default: cluster)
+#                     - cluster/fasta: outputs .fasta for MSA pipeline
+#                     - yaml: outputs .yaml to skip MSA (use with Boltz directly)
+#   --subsample N     After generating, create subsample of N sequences (mutations mode only)
 #   --subsample_mode  balanced|fixed (default: balanced)
 #   --num_mut         For fixed mode: exact number of mutations per sequence
 #   --seed            RNG seed for subsampling (default: 42)
-#   --venv DIR        Use this Python venv (create + install deps if missing). Default: $MAIN_DIR/.venv_data
+#   --venv DIR        Use this Python venv (create + install deps if missing)
 
 MAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$MAIN_DIR" || exit 1
@@ -28,6 +45,7 @@ ORIGINAL_PATH=""
 MSA_PATH=""
 OUTPUT_DIR="${MAIN_DIR}/data/generated"
 FILE_TYPE="cluster"
+INPUT_MODE=""
 SUBSAMPLE_N=""
 SUBSAMPLE_MODE="balanced"
 NUM_MUT=""
@@ -38,6 +56,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --data)          DATA_PATH="$2"; shift 2 ;;
     --original)      ORIGINAL_PATH="$2"; shift 2 ;;
+    --mode)          INPUT_MODE="$2"; shift 2 ;;
     --msa)           MSA_PATH="$2"; shift 2 ;;
     --output_dir)    OUTPUT_DIR="$2"; shift 2 ;;
     --file_type)     FILE_TYPE="$2"; shift 2 ;;
@@ -46,6 +65,20 @@ while [[ $# -gt 0 ]]; do
     --num_mut)       NUM_MUT="$2"; shift 2 ;;
     --seed)          SEED="$2"; shift 2 ;;
     --venv)          VENV_DIR="$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: $0 --data <file.csv> [--original <ref.fasta>] [OPTIONS]"
+      echo ""
+      echo "Modes:"
+      echo "  Sequences: CSV with 'name' and 'sequence' columns"
+      echo "  Mutations: CSV with 'aaMutations' column (requires --original)"
+      echo ""
+      echo "Options:"
+      echo "  --mode mutations|sequences  Force input mode (auto-detected)"
+      echo "  --file_type cluster|fasta|yaml  Output format (default: cluster)"
+      echo "  --output_dir DIR  Output directory"
+      echo "  --msa PATH  MSA file path to embed in output"
+      exit 0
+      ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -64,9 +97,13 @@ ensure_venv "$VENV_DIR"
 PYTHON_CMD="$VENV_DIR/bin/python"
 
 [[ -z "$DATA_PATH" ]] && { echo "ERROR: --data required"; exit 1; }
-[[ -z "$ORIGINAL_PATH" ]] && { echo "ERROR: --original required"; exit 1; }
 [[ ! -f "$DATA_PATH" ]] && { echo "ERROR: Data file not found: $DATA_PATH"; exit 1; }
-[[ ! -f "$ORIGINAL_PATH" ]] && { echo "ERROR: Original/reference file not found: $ORIGINAL_PATH"; exit 1; }
+
+# Validate original path only if provided or in mutations mode
+if [[ -n "$ORIGINAL_PATH" ]] && [[ ! -f "$ORIGINAL_PATH" ]]; then
+  echo "ERROR: Original/reference file not found: $ORIGINAL_PATH"
+  exit 1
+fi
 
 # Infer separator for Python
 if [[ "$DATA_PATH" == *.csv ]] || [[ "$DATA_PATH" == *.CSV ]]; then
@@ -81,10 +118,11 @@ TRAINING_DIR="${OUTPUT_DIR}/training_data"
 echo "Running generate_data.py..."
 "$PYTHON_CMD" -m utils.generate_data \
   --data "$(realpath -m "$DATA_PATH")" \
-  --original "$(realpath -m "$ORIGINAL_PATH")" \
   --file_type "$FILE_TYPE" \
   --output_dir "$(realpath -m "$OUTPUT_DIR")" \
   --sep "$SEP" \
+  ${ORIGINAL_PATH:+--original "$(realpath -m "$ORIGINAL_PATH")"} \
+  ${INPUT_MODE:+--mode "$INPUT_MODE"} \
   ${MSA_PATH:+--msa "$(realpath -m "$MSA_PATH")"}
 
 if [[ -n "$SUBSAMPLE_N" ]]; then

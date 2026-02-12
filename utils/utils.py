@@ -441,6 +441,112 @@ def generate_cluster_fasta(
     print(f"[✓] Index file written to: {os.path.join(data_dir, 'index.csv')}")
 
 
+# === Generate from name/sequence CSV ===
+def generate_fasta_from_sequences(
+    dataset: pd.DataFrame, training_data_dir: str, data_dir: str
+):
+    """
+    Generate FASTA files from a CSV with 'name' and 'sequence' columns.
+    Output is compatible with the MSA pipeline input.
+
+    Args:
+    - dataset: DataFrame with 'name' and 'sequence' columns
+    - training_data_dir: where to save the FASTA files
+    - data_dir: where to save the index
+
+    Output structure:
+    data_dir/
+        index.csv
+        training_data/
+            <name_0>.fasta
+            <name_1>.fasta
+            ...
+    """
+    if "name" not in dataset.columns or "sequence" not in dataset.columns:
+        raise ValueError("Dataset must have 'name' and 'sequence' columns")
+
+    index_records = []
+
+    for idx, row in tqdm(dataset.iterrows(), desc="Generating FASTA files"):
+        name = str(row["name"]).strip()
+        sequence = str(row["sequence"]).strip()
+
+        # Sanitize name for filename (replace problematic chars)
+        safe_name = re.sub(r'[^\w\-]', '_', name)
+        header = f">{safe_name}|protein|"
+        filename = f"{safe_name}.fasta"
+        filepath = os.path.join(training_data_dir, filename)
+
+        try:
+            with open(filepath, "w") as f:
+                f.write(header + "\n")
+                f.write(sequence + "\n")
+            index_records.append({"idx": idx, "name": name, "filename": filename})
+        except Exception as e:
+            print(f"[x] Failed to write {filename}: {e}")
+
+    index_df = pd.DataFrame(index_records)
+    index_df.to_csv(os.path.join(data_dir, "index.csv"), index=False)
+    print(f"[✓] Generated {len(index_records)} FASTA files")
+    print(f"[✓] Index file written to: {os.path.join(data_dir, 'index.csv')}")
+
+
+def generate_yaml_from_sequences(
+    dataset: pd.DataFrame, training_data_dir: str, data_dir: str, msa: str = "empty"
+):
+    """
+    Generate YAML files from a CSV with 'name' and 'sequence' columns.
+    Output is compatible with Boltz (skips MSA generation).
+
+    Args:
+    - dataset: DataFrame with 'name' and 'sequence' columns
+    - training_data_dir: where to save the YAML files
+    - data_dir: where to save the index
+    - msa: MSA path to include in YAML (default: "empty")
+
+    Output structure:
+    data_dir/
+        index.csv
+        training_data/
+            <name_0>.yaml
+            <name_1>.yaml
+            ...
+    """
+    if "name" not in dataset.columns or "sequence" not in dataset.columns:
+        raise ValueError("Dataset must have 'name' and 'sequence' columns")
+
+    index_records = []
+
+    for idx, row in tqdm(dataset.iterrows(), desc="Generating YAML files"):
+        name = str(row["name"]).strip()
+        sequence = str(row["sequence"]).strip()
+
+        # Sanitize name for filename
+        safe_name = re.sub(r'[^\w\-]', '_', name)
+
+        data_seq = {
+            "version": 1,
+            "sequences": [
+                {"protein": {"id": safe_name, "sequence": sequence, "msa": msa}}
+            ],
+        }
+
+        filename = f"{safe_name}.yaml"
+        filepath = os.path.join(training_data_dir, filename)
+
+        try:
+            with open(filepath, "w") as file:
+                yaml.dump(data_seq, file, sort_keys=False)
+            index_records.append({"idx": idx, "name": name, "filename": filename})
+        except Exception as e:
+            print(f"[x] Failed to write {filename}: {e}")
+
+    index_df = pd.DataFrame(index_records)
+    index_df.to_csv(os.path.join(data_dir, "index.csv"), index=False)
+    print(f"[✓] Generated {len(index_records)} YAML files")
+    print(f"[✓] Index file written to: {os.path.join(data_dir, 'index.csv')}")
+
+
 # === easy converter ===
 def fasta2yaml(path: str):
     """

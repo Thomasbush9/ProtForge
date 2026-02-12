@@ -24,11 +24,23 @@ ProtForge is a protein structure and function prediction pipeline designed for t
 ./run_esm_standalone.sh YAML_DIR [CONFIG_FILE] # ESM only (from existing YAML)
 ```
 
-### Prepare data from mutation table
+### Prepare data from CSV
 ```bash
+# From mutation table (requires reference sequence)
 bash bash_scripts/generate_data.sh --data mutations.tsv --original reference.fasta
+
+# From name/sequence CSV (no reference needed)
+bash bash_scripts/generate_data.sh --data sequences.csv
+
+# Output YAML to skip MSA generation
+bash bash_scripts/generate_data.sh --data sequences.csv --file_type yaml
+
 # Optional: --subsample N --subsample_mode balanced|fixed
 ```
+
+Input CSV formats:
+- **Mutations mode**: CSV with `aaMutations` column (e.g., `SA123G:SB456T`)
+- **Sequences mode**: CSV with `name` and `sequence` columns
 
 ### Install tools (Boltz, ESM, ES)
 ```bash
