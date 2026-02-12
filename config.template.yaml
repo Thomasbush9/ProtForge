@@ -1,0 +1,66 @@
+# ProtForge Configuration Template for Kempner Cluster
+# Copy this file to config.yaml and update paths marked with <YOUR_USER>
+
+# Which pipeline stages to run
+pipeline:
+  msa: true
+  boltz: true
+  esm: true
+  es: false  # Requires additional setup - see docs/CLUSTER_SETUP.md
+
+# Input data
+input:
+  fasta_dir: /n/home06/<YOUR_USER>/data/fastas
+  # yaml_dir: /path/to/existing/yamls  # Use when pipeline.msa is false
+
+# Output directory
+output:
+  parent_dir: /n/home06/<YOUR_USER>/outputs
+
+# MSA generation - SHARED RESOURCES (no changes needed)
+msa:
+  max_files_per_job: 25
+  array_max_concurrency: 10
+  mmseq2_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+  colabfold_bin: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin
+
+# Boltz structure prediction - SHARED RESOURCES (no changes needed)
+boltz:
+  max_files_per_job: 25
+  array_max_concurrency: 10
+  delete_msa_after_processing: false
+  recycling_steps: 10
+  diffusion_samples: 25
+  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+  env_path: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
+
+# ESM embeddings - USER SETUP REQUIRED
+# See docs/CLUSTER_SETUP.md for environment setup instructions
+esm:
+  num_chunks: 1
+  array_max_concurrency: 20
+  env_path: /n/home06/<YOUR_USER>/envs/esm
+  work_dir: /n/home06/<YOUR_USER>/ProtForge
+  cache_dir: /n/home06/<YOUR_USER>/cache/esm
+  # Alternative: use shared cache if available
+  # cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/esm_cache
+
+# ES analysis (optional) - USER SETUP REQUIRED
+es:
+  script_dir: /n/home06/<YOUR_USER>/PDAnalysis
+  wt_path: /path/to/wildtype_structure.cif
+  output_dir: /n/home06/<YOUR_USER>/outputs/es
+  env_path: /n/home06/<YOUR_USER>/envs/es-analysis
+
+# SLURM settings - UPDATE FOR YOUR ACCOUNT
+slurm:
+  log_dir: /n/home06/<YOUR_USER>/job_logs
+  partition: kempner_requeue
+  account: <YOUR_SLURM_ACCOUNT>  # e.g., kempner_yourpi_lab
+  # Per-job partition overrides (optional):
+  # msa:
+  #   partition: kempner
+  # boltz:
+  #   partition: kempner

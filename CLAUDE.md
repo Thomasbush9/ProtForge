@@ -123,3 +123,18 @@ External tools installed via `download_tools.sh`:
 - Boltz (structure prediction)
 - ESM (embeddings via fair-esm)
 - PDAnalysis (ES analysis)
+
+## Cluster Setup
+
+See `docs/CLUSTER_SETUP.md` for Kempner cluster configuration.
+
+**Shared resources** (no setup needed):
+- MSA databases (MMseqs2, ColabFold)
+- Boltz model weights and conda environment
+
+**User setup required**:
+- ESM conda environment and model cache
+- ES/PDAnalysis (optional)
+- SLURM account settings
+
+Copy `config.template.yaml` to `config.yaml` and update paths.
