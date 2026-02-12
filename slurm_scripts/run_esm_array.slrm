@@ -34,13 +34,13 @@ set +u
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # Env and work dir from config (via run.sh)
-ES_ENV_PREFIX="${ES_ENV_PREFIX:-}"
+ESM_ENV_PREFIX="${ESM_ENV_PREFIX:-}"
 ESM_WORK_DIR="${ESM_WORK_DIR:-}"
-if [[ -z "$ES_ENV_PREFIX" ]]; then
-  echo "ERROR: ES_ENV_PREFIX must be set (e.g. from config via run.sh)"
+if [[ -z "$ESM_ENV_PREFIX" ]]; then
+  echo "ERROR: ESM_ENV_PREFIX must be set (e.g. from config esm.env_path via run.sh)"
   exit 1
 fi
-conda activate "$ES_ENV_PREFIX"
+conda activate "$ESM_ENV_PREFIX"
 set -u  # Re-enable
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: FASTA_LIST=${FASTA_LIST}"
