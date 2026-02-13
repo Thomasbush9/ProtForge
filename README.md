@@ -55,6 +55,8 @@ After you have modified the configuration file, you can launch the features gene
 - add scripts V
 - add option for only one step V
 - add python functions to convert files and generate dataset from csv of mutations or allow the user to upload the files as they want. V
+- currently it works with msa + boltz
+- solve issue with the ESM and ES, envs etc. make it constant 
 - Solve issue with the standard installation of ESM-> find the changes that you made and save to apply them to the standard model 
 - finish documentation + do trial with cache already existent 
 
