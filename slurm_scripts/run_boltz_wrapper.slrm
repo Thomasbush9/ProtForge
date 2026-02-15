@@ -4,8 +4,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=2GB
-#SBATCH --partition=kempner_requeue
-#SBATCH --account=kempner_bsabatini_lab
+# Partition/account set by caller via sbatch flags (from config)
 #SBATCH --time=00:10:00
 # Runs after MSA array (afterok); enumerates .yaml and submits Boltz array. Env from run.sh via --export=ALL.
 #SBATCH --output=/tmp/%x.%j.out

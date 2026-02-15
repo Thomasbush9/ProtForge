@@ -5,11 +5,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=32GB
-#SBATCH --partition=kempner_requeue
-#SBATCH --account=kempner_bsabatini_lab
+# Partition/account set by caller via sbatch flags (from config)
 #SBATCH --time=1:00:00
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=thomasbush52@gmail.com
 # Log dir from env (caller passes -o)
 #SBATCH --output=/tmp/%x.%A_%a.out
 

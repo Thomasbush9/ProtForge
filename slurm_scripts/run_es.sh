@@ -24,6 +24,7 @@ SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%j.out"
 SBATCH_OPTS=()
 [[ -n "${SLURM_ES_PARTITION:-}" ]] && SBATCH_OPTS+=(-p "$SLURM_ES_PARTITION")
 [[ -n "${SLURM_ACCOUNT:-}" ]] && SBATCH_OPTS+=(--account "$SLURM_ACCOUNT")
+[[ -n "${SLURM_EMAIL:-}" ]] && SBATCH_OPTS+=(--mail-type=ALL --mail-user="$SLURM_EMAIL")
 echo "Submitting ES analysis job (root dir: $ES_ROOT_DIR)..."
 sbatch "${SBATCH_OPTS[@]}" -o "$SLURM_OUTPUT" \
   --export=ALL,ES_ROOT_DIR="$ES_ROOT_DIR" \

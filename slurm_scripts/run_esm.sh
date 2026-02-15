@@ -93,6 +93,7 @@ SLURM_OUTPUT="${SLURM_LOG_DIR:-/tmp}/%x.%A_%a.out"
 SBATCH_OPTS=()
 [[ -n "${SLURM_ESM_PARTITION:-}" ]] && SBATCH_OPTS+=(-p "$SLURM_ESM_PARTITION")
 [[ -n "${SLURM_ACCOUNT:-}" ]] && SBATCH_OPTS+=(--account "$SLURM_ACCOUNT")
+[[ -n "${SLURM_EMAIL:-}" ]] && SBATCH_OPTS+=(--mail-type=ALL --mail-user="$SLURM_EMAIL")
 [[ -n "${DEPENDENCY_JOB_ID:-}" ]] && SBATCH_OPTS+=(--dependency=afterok:${DEPENDENCY_JOB_ID})
 ARRAY_JOB_ID="$(
   sbatch --parsable \

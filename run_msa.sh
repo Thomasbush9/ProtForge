@@ -34,6 +34,7 @@ MSA_ARRAY_MAX_CONCURRENCY=$(get_config "msa.array_max_concurrency")
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
 SLURM_PARTITION=$(get_config "slurm.partition")
 SLURM_ACCOUNT=$(get_config "slurm.account")
+SLURM_EMAIL=$(get_config "slurm.email")
 SLURM_MSA_PARTITION=$(get_config "slurm.msa.partition")
 [[ -z "$SLURM_MSA_PARTITION" ]] && SLURM_MSA_PARTITION="$SLURM_PARTITION"
 SLURM_CHECKER_MSA_PARTITION=$(get_config "slurm.checker_msa.partition")
@@ -73,7 +74,7 @@ INPUT_DIR="$(realpath -m "$INPUT_DIR")"
 
 # Export config-derived env for child scripts
 export CONFIG_FILE SLURM_LOG_DIR
-export SLURM_PARTITION SLURM_ACCOUNT SLURM_MSA_PARTITION SLURM_CHECKER_MSA_PARTITION
+export SLURM_PARTITION SLURM_ACCOUNT SLURM_EMAIL SLURM_MSA_PARTITION SLURM_CHECKER_MSA_PARTITION
 export MMSEQ2_DB COLABFOLD_DB
 [[ -n "$COLABFOLD_BIN" ]] && export PATH="${COLABFOLD_BIN}:${PATH}"
 
@@ -107,7 +108,7 @@ echo ""
 # Submit checker job
 if [[ -f "${SCRIPT_DIR}/run_checker_msa.slrm" ]]; then
   CHECKER_MSA_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$MSA_JOB_ID" \
-    ${SLURM_CHECKER_MSA_PARTITION:+-p "$SLURM_CHECKER_MSA_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+    ${SLURM_CHECKER_MSA_PARTITION:+-p "$SLURM_CHECKER_MSA_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
     -o "${SLURM_LOG_DIR}/%x.%j.out" \
     --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
     "${SCRIPT_DIR}/run_checker_msa.slrm" 2>/dev/null || echo "")

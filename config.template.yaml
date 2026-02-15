@@ -59,6 +59,7 @@ slurm:
   log_dir: /n/home06/<YOUR_USER>/job_logs
   partition: kempner_requeue
   account: <YOUR_SLURM_ACCOUNT>  # e.g., kempner_yourpi_lab
+  email: <YOUR_EMAIL>  # e.g., user@example.com (for SLURM job notifications)
   # Per-job partition overrides (optional):
   # msa:
   #   partition: kempner

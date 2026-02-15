@@ -53,6 +53,7 @@ RUN_ES=$(_run_flag "es")
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
 SLURM_PARTITION=$(get_config "slurm.partition")
 SLURM_ACCOUNT=$(get_config "slurm.account")
+SLURM_EMAIL=$(get_config "slurm.email")
 # Per-job partition (optional; default to SLURM_PARTITION)
 SLURM_MSA_PARTITION=$(get_config "slurm.msa.partition"); [[ -z "$SLURM_MSA_PARTITION" ]] && SLURM_MSA_PARTITION="$SLURM_PARTITION"
 SLURM_BOLTZ_PARTITION=$(get_config "slurm.boltz.partition"); [[ -z "$SLURM_BOLTZ_PARTITION" ]] && SLURM_BOLTZ_PARTITION="$SLURM_PARTITION"
@@ -121,7 +122,7 @@ CONFIG_FILE="$(realpath -m "$CONFIG_FILE")"
 
 # Export config-derived env for child scripts and sbatch
 export CONFIG_FILE SLURM_LOG_DIR
-export SLURM_PARTITION SLURM_ACCOUNT
+export SLURM_PARTITION SLURM_ACCOUNT SLURM_EMAIL
 export SLURM_MSA_PARTITION SLURM_BOLTZ_PARTITION SLURM_ESM_PARTITION SLURM_ES_PARTITION
 export SLURM_CHECKER_MSA_PARTITION SLURM_CHECKER_BOLTZ_PARTITION
 export MMSEQ2_DB COLABFOLD_DB
@@ -161,7 +162,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
 
   if [[ -f "${SCRIPT_DIR}/run_checker_msa.slrm" ]]; then
     CHECKER_MSA_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$MSA_JOB_ID" \
-      ${SLURM_CHECKER_MSA_PARTITION:+-p "$SLURM_CHECKER_MSA_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+      ${SLURM_CHECKER_MSA_PARTITION:+-p "$SLURM_CHECKER_MSA_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
       "${SCRIPT_DIR}/run_checker_msa.slrm" 2>/dev/null || echo "")
@@ -178,7 +179,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
       exit 1
     fi
     ESM_JOB_ID=$(sbatch --parsable --dependency=afterok:"$MSA_JOB_ID" \
-      ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+      ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",OUTPUT_PARENT_DIR="$OUTPUT_PARENT_DIR",N="$ESM_N",ARRAY_MAX_CONCURRENCY="$ESM_ARRAY_MAX_CONCURRENCY",SCRIPT_DIR="$SCRIPT_DIR" \
       "$ESM_WRAPPER")
@@ -192,14 +193,14 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
       CHECKER_ESM_WRAPPER="${SCRIPT_DIR}/run_checker_esm.slrm"
       if [[ -f "$CHECKER_ESM_WRAPPER" ]]; then
         CHECKER_ESM_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$ESM_JOB_ID" \
-          ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+          ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
           -o "${SLURM_LOG_DIR}/%x.%j.out" \
           --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
           "$CHECKER_ESM_WRAPPER" 2>/dev/null || echo "")
         [[ -n "$CHECKER_ESM_JOB_ID" ]] && echo "  ESM checker job ID: ${CHECKER_ESM_JOB_ID} (will run if ESM job fails)"
       else
         CHECKER_ESM_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$ESM_JOB_ID" \
-          ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+          ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
           -o "${SLURM_LOG_DIR}/%x.%j.out" \
           --export=ALL,OUTPUT_DIR="$OUTPUT_DIR" \
           --wrap="bash $CHECKER_ESM_SCRIPT $OUTPUT_DIR" 2>/dev/null || echo "")
@@ -215,7 +216,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
       exit 1
     fi
     BOLTZ_JOB_ID=$(sbatch --parsable --dependency=afterok:"$MSA_JOB_ID" \
-      ${SLURM_BOLTZ_PARTITION:+-p "$SLURM_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+      ${SLURM_BOLTZ_PARTITION:+-p "$SLURM_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",MAX_FILES_PER_JOB="$MAX_FILES_PER_JOB",ARRAY_MAX_CONCURRENCY="$BOLTZ_ARRAY_MAX_CONCURRENCY",SCRIPT_DIR="$SCRIPT_DIR",BOLTZ_RECYCLING_STEPS="$BOLTZ_RECYCLING_STEPS",BOLTZ_DIFFUSION_SAMPLES="$BOLTZ_DIFFUSION_SAMPLES" \
       "$BOLTZ_WRAPPER")
@@ -226,7 +227,7 @@ if [[ "$RUN_MSA" -eq 1 ]]; then
     echo "  Boltz job ID: ${BOLTZ_JOB_ID}"
     if [[ -f "${SCRIPT_DIR}/run_checker_boltz.slrm" ]]; then
       CHECKER_BOLTZ_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$BOLTZ_JOB_ID" \
-        ${SLURM_CHECKER_BOLTZ_PARTITION:+-p "$SLURM_CHECKER_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+        ${SLURM_CHECKER_BOLTZ_PARTITION:+-p "$SLURM_CHECKER_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
         -o "${SLURM_LOG_DIR}/%x.%j.out" \
         --export=ALL,OUTPUT_DIR="$OUTPUT_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
         "${SCRIPT_DIR}/run_checker_boltz.slrm" 2>/dev/null || echo "")

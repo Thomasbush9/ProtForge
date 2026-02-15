@@ -46,6 +46,7 @@ BOLTZ_DIFFUSION_SAMPLES=$(get_config "boltz.diffusion_samples")
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
 SLURM_PARTITION=$(get_config "slurm.partition")
 SLURM_ACCOUNT=$(get_config "slurm.account")
+SLURM_EMAIL=$(get_config "slurm.email")
 SLURM_BOLTZ_PARTITION=$(get_config "slurm.boltz.partition")
 [[ -z "$SLURM_BOLTZ_PARTITION" ]] && SLURM_BOLTZ_PARTITION="$SLURM_PARTITION"
 SLURM_CHECKER_BOLTZ_PARTITION=$(get_config "slurm.checker_boltz.partition")
@@ -87,7 +88,7 @@ CONFIG_FILE="$(realpath -m "$CONFIG_FILE")"
 
 # Export config-derived env for child scripts
 export CONFIG_FILE SLURM_LOG_DIR
-export SLURM_PARTITION SLURM_ACCOUNT SLURM_BOLTZ_PARTITION SLURM_CHECKER_BOLTZ_PARTITION
+export SLURM_PARTITION SLURM_ACCOUNT SLURM_EMAIL SLURM_BOLTZ_PARTITION SLURM_CHECKER_BOLTZ_PARTITION
 export BOLTZ_CACHE BOLTZ_COLABFOLD_DB BOLTZ_ENV_PATH
 [[ -n "$COLABFOLD_BIN" ]] && export PATH="${COLABFOLD_BIN}:${PATH}"
 
@@ -114,7 +115,7 @@ else
   # Submit checker job
   if [[ -f "${SCRIPT_DIR}/run_checker_boltz.slrm" ]]; then
     CHECKER_BOLTZ_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$BOLTZ_JOB_ID" \
-      ${SLURM_CHECKER_BOLTZ_PARTITION:+-p "$SLURM_CHECKER_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+      ${SLURM_CHECKER_BOLTZ_PARTITION:+-p "$SLURM_CHECKER_BOLTZ_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
       -o "${SLURM_LOG_DIR}/%x.%j.out" \
       --export=ALL,OUTPUT_DIR="$YAML_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
       "${SCRIPT_DIR}/run_checker_boltz.slrm" 2>/dev/null || echo "")

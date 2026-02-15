@@ -54,6 +54,7 @@ slurm:
   log_dir: /n/home06/tbush/job_logs
   partition: kempner_requeue
   account: kempner_bsabatini_lab
+  email: thomasbush52@gmail.com
   # Optional per-job overrides (use same keys as pipeline + checker names)
   # msa:
   #   partition: other_partition

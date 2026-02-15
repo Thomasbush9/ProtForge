@@ -45,6 +45,7 @@ ESM_ARRAY_MAX_CONCURRENCY=$(get_config "esm.array_max_concurrency")
 SLURM_LOG_DIR=$(get_config "slurm.log_dir")
 SLURM_PARTITION=$(get_config "slurm.partition")
 SLURM_ACCOUNT=$(get_config "slurm.account")
+SLURM_EMAIL=$(get_config "slurm.email")
 SLURM_ESM_PARTITION=$(get_config "slurm.esm.partition")
 [[ -z "$SLURM_ESM_PARTITION" ]] && SLURM_ESM_PARTITION="$SLURM_PARTITION"
 
@@ -83,7 +84,7 @@ CONFIG_FILE="$(realpath -m "$CONFIG_FILE")"
 
 # Export config-derived env for child scripts
 export CONFIG_FILE SLURM_LOG_DIR
-export SLURM_PARTITION SLURM_ACCOUNT SLURM_ESM_PARTITION
+export SLURM_PARTITION SLURM_ACCOUNT SLURM_EMAIL SLURM_ESM_PARTITION
 export ESM_ENV_PREFIX="$ESM_ENV_PATH" ESM_WORK_DIR ESM_CACHE_DIR
 
 echo "==============================================="
@@ -113,7 +114,7 @@ else
     CHECKER_ESM_WRAPPER="${SCRIPT_DIR}/run_checker_esm.slrm"
     if [[ -f "$CHECKER_ESM_WRAPPER" ]]; then
       CHECKER_ESM_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$ESM_JOB_ID" \
-        ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+        ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
         -o "${SLURM_LOG_DIR}/%x.%j.out" \
         --export=ALL,OUTPUT_DIR="$YAML_DIR",SCRIPT_DIR="$SCRIPT_DIR" \
         "$CHECKER_ESM_WRAPPER" 2>/dev/null || echo "")
@@ -121,7 +122,7 @@ else
     else
       # Fallback: submit checker directly
       CHECKER_ESM_JOB_ID=$(sbatch --parsable --dependency=afternotok:"$ESM_JOB_ID" \
-        ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} \
+        ${SLURM_ESM_PARTITION:+-p "$SLURM_ESM_PARTITION"} ${SLURM_ACCOUNT:+--account "$SLURM_ACCOUNT"} ${SLURM_EMAIL:+--mail-type=ALL --mail-user="$SLURM_EMAIL"} \
         -o "${SLURM_LOG_DIR}/%x.%j.out" \
         --export=ALL,OUTPUT_DIR="$YAML_DIR" \
         --wrap="bash $CHECKER_ESM_SCRIPT $YAML_DIR" 2>/dev/null || echo "")

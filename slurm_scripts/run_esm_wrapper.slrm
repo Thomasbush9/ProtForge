@@ -4,8 +4,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=2GB
-#SBATCH --partition=kempner_requeue
-#SBATCH --account=kempner_bsabatini_lab
+# Partition/account set by caller via sbatch flags (from config)
 #SBATCH --time=00:10:00
 # Runs after MSA array (afterok). OUTPUT_DIR = base dir with one subdir per sequence (seq_0, seq_1, ...);
 # ESM reads .yaml from each and writes embeddings into that same sequence dir. OUTPUT_PARENT_DIR = parent for esm_chunks_*.
