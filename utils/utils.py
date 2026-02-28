@@ -143,23 +143,23 @@ def mutate_sequence(mutation_string, seq, mapping_db_seq):
         return None
     try:
         mutations = mutation_string.split(":")
+        mutated_seq = seq
         for m in mutations:
             src, idx, dest = parse_mutation(m)
-            if idx in mapping_db_seq:
-                mapped_idx = mapping_db_seq[idx]
-                mutated_seq = seq[:mapped_idx] + dest + seq[mapped_idx + 1 :]
-                return mutated_seq
+            if idx not in mapping_db_seq:
+                print(f"WARNING: position {idx} not found in mapping for mutation {m}")
+                return None
+            mapped_idx = mapping_db_seq[idx]
+            if mapped_idx >= len(mutated_seq):
+                print(f"WARNING: mapped index {mapped_idx} out of bounds (seq length {len(mutated_seq)}) for mutation {m}")
+                return None
+            if mutated_seq[mapped_idx] != src:
+                print(f"WARNING: expected {src} at position {mapped_idx} but found {mutated_seq[mapped_idx]} for mutation {m}")
+                return None
+            mutated_seq = mutated_seq[:mapped_idx] + dest + mutated_seq[mapped_idx + 1 :]
+        return mutated_seq
     except Exception:
         return None
-    return None
-
-    # Calculate the original distribution of num_mut
-    def get_numb_mut(mut: str) -> int:
-        if type(mut) == str:
-            n = len(mut.split(":"))
-        else:
-            return 0
-        return n
 
 def get_numb_mut(mut: str) -> int:
     """Helper function to count number of mutations from mutation string"""
@@ -316,6 +316,52 @@ def balanced_sampling(
 
     return balanced_dataset
 
+
+def random_sampling(
+    dataset: pd.DataFrame,
+    n: int,
+    output_file="random_subset.txt",
+    seed: Optional[int] = None,
+):
+    """
+    Simple random sampling without mutation-count stratification.
+    Suitable for sequences-mode data that lacks an aaMutations column.
+
+    Parameters
+    ----------
+    dataset : pd.DataFrame
+        Any DataFrame to sample from.
+    n : int
+        Number of rows to sample.
+    output_file : str
+        Path to write the sampled indices.
+    seed : Optional[int]
+        RNG seed for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        The sampled subset (copy).
+    """
+    if n >= len(dataset):
+        raise ValueError(f"n ({n}) must be less than dataset size ({len(dataset)})")
+
+    rng = np.random.default_rng(seed)
+    indices = dataset.index.to_numpy()
+    chosen = rng.choice(indices, size=n, replace=False)
+    chosen = np.sort(chosen)
+
+    subset = dataset.loc[chosen].copy()
+
+    with open(output_file, "w") as f:
+        f.write("idx\n")
+        for idx in chosen:
+            f.write(f"{idx}\n")
+
+    print(f"Random subset created with {len(subset)} samples")
+    print(f"Results saved to: {output_file}")
+
+    return subset
 
 
 # === Generate Data Functions ===

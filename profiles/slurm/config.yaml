@@ -1,0 +1,17 @@
+# Snakemake SLURM executor profile
+# Usage: snakemake --profile profiles/slurm/
+#
+# Requires: pip install snakemake-executor-plugin-slurm
+
+executor: slurm
+jobs: 100
+latency-wait: 60
+restart-times: 2
+max-status-checks-per-second: 1
+local-cores: 4
+
+default-resources:
+  mem_mb: 4000
+  runtime: 30        # minutes
+  cpus_per_task: 2
+  slurm_extra: "''"

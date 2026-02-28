@@ -1,0 +1,19 @@
+[project]
+name = "protforge"
+version = "0.1.0"
+description = "Protein structure and function prediction pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=1.0",
+    "numpy>=1.20",
+    "PyYAML>=5.0",
+    "tqdm>=4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

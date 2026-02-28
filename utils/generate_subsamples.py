@@ -2,14 +2,12 @@ import os
 import re
 import shutil
 from argparse import ArgumentParser
-from ast import parse
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import pandas as pd
 
-from .utils import balanced_sampling, sample_with_num_mutations
+from .utils import balanced_sampling, random_sampling, sample_with_num_mutations
 
 
 def _infer_sep(path: str) -> str:
@@ -25,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--main_dir", type=str, required=True, help="Directory containing files"
     )
-    parser.add_argument("--mode", type=str, choices=["balanced", "fixed"], default="balanced")
+    parser.add_argument("--mode", type=str, choices=["balanced", "fixed", "random"], default="balanced")
     parser.add_argument("--num_mut", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -52,30 +50,41 @@ if __name__ == "__main__":
     print(f"Loading dataset from: {data_path}")
     dataset = pd.read_csv(data_path, sep=sep)
 
-    # Generate balanced subsample and create txt file
+    # Detect sequences mode (has 'name' column)
+    is_sequences_mode = "name" in dataset.columns
+
+    # Generate subsample
     if mode == "balanced":
         output_txt_path = os.path.join(data_dir, "balanced_subset.txt")
-        balanced_dataset = balanced_sampling(dataset, n, output_txt_path, seed)
+        sampled_dataset = balanced_sampling(dataset, n, output_txt_path, seed)
     elif mode == "fixed":
         num_muts = args.num_mut
         output_txt_path = os.path.join(data_dir, f"n{num_muts}_subset.txt")
-        balanced_dataset = sample_with_num_mutations(dataset, n, num_muts, output_txt_path, seed)
+        sampled_dataset = sample_with_num_mutations(dataset, n, num_muts, output_txt_path, seed)
+    elif mode == "random":
+        output_txt_path = os.path.join(data_dir, "random_subset.txt")
+        sampled_dataset = random_sampling(dataset, n, output_txt_path, seed)
 
-    # Copy corresponding YAML files
+    # Copy corresponding files
     print(f"Copying the files from: {main_dir}")
     copied_count = 0
 
-    # Determine the maximum index to calculate padding length
-    max_idx = max(balanced_dataset.index)
-    padding_length = len(str(max_idx))
+    # Determine the file extension from the first file in the directory
+    file_1 = next(Path(main_dir).iterdir())
+    suffix = file_1.suffix
 
-    # Determine the type of files:
-    file_1 = [f for f in Path(main_dir).iterdir()][0]
+    for idx, row in sampled_dataset.iterrows():
+        if is_sequences_mode:
+            # Sequences mode: files are named by sanitized name
+            safe_name = re.sub(r'[^\w\-]', '_', str(row["name"]).strip())
+            filename = f"{safe_name}{suffix}"
+        else:
+            # Mutations mode: files are named seq_<padded_idx>
+            max_idx = max(sampled_dataset.index)
+            padding_length = len(str(max_idx))
+            padded_idx = str(idx).zfill(padding_length)
+            filename = f"seq_{padded_idx}{suffix}"
 
-    for idx in balanced_dataset.index:
-        # Format index with zero padding
-        padded_idx = str(idx).zfill(padding_length)
-        filename = f"seq_{padded_idx}" + file_1.suffix
         source_path = main_dir / filename
         dest_path = Path(sub_dir) / filename
 
@@ -85,6 +94,6 @@ if __name__ == "__main__":
         else:
             print(f"Warning: file not found: {source_path}")
 
-    print(f"Successfully copied {copied_count}  files to: {data_dir}")
+    print(f"Successfully copied {copied_count} files to: {data_dir}")
     print(f"Total files in output directory: {len(list(Path(data_dir).glob('*')))}")
     print(f"SUBSAMPLE_OUTPUT_DIR={os.path.abspath(sub_dir)}")

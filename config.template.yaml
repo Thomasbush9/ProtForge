@@ -54,6 +54,16 @@ es:
   output_dir: /n/home06/<YOUR_USER>/outputs/es
   env_path: /n/home06/<YOUR_USER>/envs/es-analysis
 
+# Container images (Singularity .sif files) — OPTIONAL
+# Set paths to enable containerized execution. Leave empty for legacy mode.
+# Pull with: singularity pull docker://ghcr.io/ORG/protforge-<stage>:latest
+containers:
+  colabfold: ""    # e.g., /n/home06/<YOUR_USER>/sifs/protforge-colabfold.sif
+  boltz: ""        # e.g., /n/home06/<YOUR_USER>/sifs/protforge-boltz.sif
+  esm: ""          # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esm.sif
+  pdanalysis: ""   # e.g., /n/home06/<YOUR_USER>/sifs/protforge-pdanalysis.sif
+  bind_paths: "/n/holylfs06,/n/home06"
+
 # SLURM settings - UPDATE FOR YOUR ACCOUNT
 slurm:
   log_dir: /n/home06/<YOUR_USER>/job_logs

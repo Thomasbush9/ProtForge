@@ -31,8 +31,8 @@ set -euo pipefail
 #   --file_type       cluster|fasta|yaml (default: cluster)
 #                     - cluster/fasta: outputs .fasta for MSA pipeline
 #                     - yaml: outputs .yaml to skip MSA (use with Boltz directly)
-#   --subsample N     After generating, create subsample of N sequences (mutations mode only)
-#   --subsample_mode  balanced|fixed (default: balanced)
+#   --subsample N     After generating, create subsample of N sequences
+#   --subsample_mode  balanced|fixed|random (default: balanced for mutations, random for sequences)
 #   --num_mut         For fixed mode: exact number of mutations per sequence
 #   --seed            RNG seed for subsampling (default: 42)
 #   --venv DIR        Use this Python venv (create + install deps if missing)
@@ -126,6 +126,14 @@ echo "Running generate_data.py..."
   ${MSA_PATH:+--msa "$(realpath -m "$MSA_PATH")"}
 
 if [[ -n "$SUBSAMPLE_N" ]]; then
+  # Auto-detect sequences mode and default to random subsampling
+  if [[ "$SUBSAMPLE_MODE" == "balanced" ]]; then
+    HEADER=$(head -1 "$DATA_PATH")
+    if echo "$HEADER" | grep -qi "name" && ! echo "$HEADER" | grep -qi "aaMutations"; then
+      echo "Detected sequences mode: defaulting --subsample_mode to random"
+      SUBSAMPLE_MODE="random"
+    fi
+  fi
   echo "Running generate_subsamples.py..."
   SUBSAMPLE_OUTPUT=$("$PYTHON_CMD" -m utils.generate_subsamples \
     --dataset "$(realpath -m "$DATA_PATH")" \

@@ -12,16 +12,43 @@ ProtForge is a protein structure and function prediction pipeline designed for t
 
 ## Common Commands
 
-### Run the full pipeline
+### Snakemake workflow (recommended, `snakemake` branch)
+```bash
+# Full pipeline (all enabled stages)
+snakemake --profile profiles/slurm/
+
+# Dry run (see what would execute)
+snakemake --profile profiles/slurm/ -n
+
+# DAG visualization
+snakemake --profile profiles/slurm/ --dag | dot -Tpng > dag.png
+
+# Resume after failure (just re-run — picks up where it left off)
+snakemake --profile profiles/slurm/ --rerun-incomplete
+
+# Run specific stage only
+snakemake --profile profiles/slurm/ {OUTPUT}/.boltz_complete
+
+# Check status
+snakemake --profile profiles/slurm/ --summary
+```
+
+Requires: `pip install snakemake snakemake-executor-plugin-slurm`
+
+### Bash pipeline (`main` branch fallback)
+
+#### Run the core pipeline (MSA + Boltz)
 ```bash
 ./run.sh [CONFIG_FILE]           # defaults to config.yaml
 ```
+`run.sh` runs MSA and Boltz only. ESM and ES are run separately via standalone scripts.
 
-### Run individual stages (standalone pipelines)
+#### Run individual stages (standalone pipelines)
 ```bash
-./run_msa.sh [CONFIG_FILE]                    # MSA only (from FASTA files)
-./run_boltz.sh YAML_DIR [CONFIG_FILE]         # Boltz only (from existing YAML)
+./run_msa.sh [CONFIG_FILE]                     # MSA only (from FASTA files)
+./run_boltz.sh YAML_DIR [CONFIG_FILE]          # Boltz only (from existing YAML)
 ./run_esm_standalone.sh YAML_DIR [CONFIG_FILE] # ESM only (from existing YAML)
+./run_es_standalone.sh CIF_DIR [CONFIG_FILE]   # ES only (from existing CIF files)
 ```
 
 ### Prepare data from CSV
@@ -35,7 +62,7 @@ bash bash_scripts/generate_data.sh --data sequences.csv
 # Output YAML to skip MSA generation
 bash bash_scripts/generate_data.sh --data sequences.csv --file_type yaml
 
-# Optional: --subsample N --subsample_mode balanced|fixed
+# Optional: --subsample N --subsample_mode balanced|fixed|random
 ```
 
 Input CSV formats:
@@ -60,21 +87,36 @@ squeue -u $USER
 ## Architecture
 
 ### Configuration-Driven Pipeline
-All parameters are in `config.yaml`. The `slurm_scripts/parse_config.py` utility extracts values for bash scripts. Pipeline stages can be toggled on/off via `pipeline.msa`, `pipeline.boltz`, etc.
+All parameters are in `config.yaml`. Pipeline stages can be toggled on/off via `pipeline.msa`, `pipeline.boltz`, etc.
 
-### Job Orchestration Flow
+### Snakemake Workflow (`snakemake` branch)
 ```
-run.sh
+Snakefile (rule all)
+├─→ workflow/rules/msa.smk   (chunk_fastas → colabfold_search → scatter_msa)
+├─→ workflow/rules/boltz.smk (chunk_yamls → boltz_predict → organize_outputs)
+├─→ workflow/rules/esm.smk   (chunk_yamls → run_esm.py)
+└─→ workflow/rules/es.smk    (build_cif_paths → MPI PDAnalysis)
+```
+
+Uses Snakemake checkpoints for dynamic chunking, `snakemake-executor-plugin-slurm` for SLURM submission, and built-in retries (no manual checker scripts needed).
+
+### Bash Orchestration Flow (`main` branch)
+```
+run.sh (MSA + Boltz)
 ├─→ split_and_run_msa.sh → run_msa_array.slrm → process_msa_fasta.sh
-├─→ run_boltz_wrapper.slrm → split_and_run_boltz.sh → run_boltz_array.slrm
-├─→ run_esm_wrapper.slrm → run_esm.sh → run_esm_array.slrm → run_esm.py
-└─→ run_es.sh
+└─→ run_boltz_wrapper.slrm → split_and_run_boltz.sh → run_boltz_array.slrm
+
+run_esm_standalone.sh → run_esm.sh → run_esm_array.slrm → run_esm.py
+run_es_standalone.sh  → run_es.sh  → run_es_array.slrm
 ```
 
 Dependencies use SLURM's `afterok` for sequential execution. Checker jobs run on `afternotok` for error recovery.
 
 ### Key Directories
-- `slurm_scripts/` - SLURM job templates (.slrm), orchestration scripts, checkers
+- `workflow/rules/` - Snakemake rule files per stage (.smk)
+- `workflow/scripts/` - Python helper scripts for chunking and output organization
+- `profiles/slurm/` - Snakemake SLURM executor profile
+- `slurm_scripts/` - Legacy SLURM job templates (.slrm), orchestration scripts, checkers
 - `bash_scripts/` - Data preparation
 - `utils/` - Python utilities for mutation generation, file format conversion
 
