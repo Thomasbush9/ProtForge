@@ -40,12 +40,7 @@ checkpoint chunk_yamls_for_boltz:
     params:
         yaml_dir = YAML_SOURCE_DIR,
         max_files = BOLTZ_CFG.get("max_files_per_job", 25),
-    resources:
-        cpus_per_task = 1,
-        mem_mb = 2000,
-        runtime = 10,
-        slurm_partition = BOLTZ_PARTITION,
-        slurm_account = BOLTZ_ACCOUNT,
+    localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
@@ -130,12 +125,7 @@ rule organize_boltz_chunk:
         sequences_dir = SEQUENCES_DIR,
         delete_msa = "--delete_msa" if BOLTZ_CFG.get("delete_msa_after_processing", False) else "",
         subdirectory = lambda wc: f"--subdirectory run_{wc.run_id}" if NUM_RUNS > 1 else "",
-    resources:
-        cpus_per_task = 4,
-        mem_mb = 8000,
-        runtime = 60,
-        slurm_partition = BOLTZ_PARTITION,
-        slurm_account = BOLTZ_ACCOUNT,
+    localrule: True
     shell:
         """
         python workflow/scripts/organize_boltz_outputs.py \

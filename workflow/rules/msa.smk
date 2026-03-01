@@ -22,12 +22,7 @@ checkpoint chunk_fastas:
         manifest = f"{MSA_CHUNKS}/manifest.txt",
     params:
         max_files = MSA_CFG.get("max_files_per_job", 25),
-    resources:
-        cpus_per_task = 1,
-        mem_mb = 2000,
-        runtime = 10,
-        slurm_partition = MSA_PARTITION,
-        slurm_account = MSA_ACCOUNT,
+    localrule: True
     shell:
         """
         python workflow/scripts/chunk_fastas.py \
@@ -109,12 +104,7 @@ rule scatter_msa_and_create_yaml:
     params:
         colabfold_output = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output",
         sequences_dir = SEQUENCES_DIR,
-    resources:
-        cpus_per_task = 2,
-        mem_mb = 4000,
-        runtime = 30,
-        slurm_partition = MSA_PARTITION,
-        slurm_account = MSA_ACCOUNT,
+    localrule: True
     shell:
         """
         python workflow/scripts/organize_msa_outputs.py \
