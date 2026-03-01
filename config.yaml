@@ -43,12 +43,17 @@ esm:
   work_dir: /n/home06/tbush/gfp_function_prediction
   cache_dir: /n/home06/tbush/cache/esm  # ESM model/embedding cache (TORCH_HOME)
 
-# ES (Evolutionary Scale) analysis settings
+# ES (Evolutionary Scale / Effective Strain) analysis settings
 es:
-  script_dir: /n/home06/tbush/PDAnalysis  # Directory containing main.py
-  wt_path: /n/home06/tbush/test_input.fasta_prot_pipeline_model_0.cif
-  output_dir: /n/home06/tbush/outputs/es  # Where ES analysis writes results
-  env_path: /n/home06/tbush/envs/es-analysis  # Conda env for ES (optional)
+  pdanalysis_dir: /n/home06/tbush/PDAnalysis  # Directory containing main.py
+  # Reference protein — set exactly ONE of ref_dir, ref_path, or ref_seq:
+  ref_dir: ""                                  # Multi-run ref dir (has run_N/ subdirs)
+  ref_path: /n/home06/tbush/test_input.fasta_prot_pipeline_model_0.cif  # Single CIF file
+  ref_seq: ""                                  # OR: sequence name from this pipeline
+  method: [strain]                             # Deformation methods
+  min_plddt: 70                                # pLDDT cutoff
+  lddt_cutoffs: [0.125, 0.25, 0.5, 1]         # LDDT distance thresholds
+  env_path: /n/home06/tbush/envs/es-analysis   # Conda env for ES (optional)
 
 # Slurm (partition/account apply to all jobs unless overridden per job)
 slurm:

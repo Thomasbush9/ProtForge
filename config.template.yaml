@@ -49,10 +49,16 @@ esm:
   # cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/esm_cache
 
 # ES analysis (optional) - USER SETUP REQUIRED
+# Computes deformation metrics per sequence, averaging across Boltz runs.
+# Set exactly ONE reference option: ref_dir, ref_path, or ref_seq.
 es:
-  script_dir: /n/home06/<YOUR_USER>/PDAnalysis
-  wt_path: /path/to/wildtype_structure.cif
-  output_dir: /n/home06/<YOUR_USER>/outputs/es
+  pdanalysis_dir: /n/home06/<YOUR_USER>/PDAnalysis  # PDAnalysis repo (containing main.py)
+  ref_dir: ""                              # Multi-run ref dir (has run_N/ subdirs)
+  ref_path: /path/to/wildtype_structure.cif  # OR: single reference CIF file
+  ref_seq: ""                              # OR: sequence name from this pipeline's output
+  method: [strain]                         # Deformation methods (strain, shear, all, etc.)
+  min_plddt: 70                            # pLDDT cutoff for residue filtering
+  lddt_cutoffs: [0.125, 0.25, 0.5, 1]     # LDDT distance thresholds
   env_path: /n/home06/<YOUR_USER>/envs/es-analysis
 
 # Container images (Singularity .sif files) — OPTIONAL
