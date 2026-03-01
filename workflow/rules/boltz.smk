@@ -149,11 +149,17 @@ def aggregate_boltz_organized(wildcards):
 
 
 rule boltz_complete:
-    """Aggregate sentinel: all Boltz chunks × runs organized."""
+    """Aggregate sentinel: all Boltz chunks × runs organized. Cleans up raw chunk outputs."""
     input:
         aggregate_boltz_organized,
     output:
         done = f"{OUTPUT}/.boltz_complete",
+    params:
+        chunks_dir = BOLTZ_CHUNKS,
     localrule: True
     shell:
-        "touch {output.done}"
+        """
+        # Remove raw Boltz outputs (all models already organized to sequences/)
+        find {params.chunks_dir} -maxdepth 1 -type d -name 'chunk_*_output' -exec rm -rf {{}} +
+        touch {output.done}
+        """
