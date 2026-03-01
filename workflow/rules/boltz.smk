@@ -23,9 +23,11 @@ BOLTZ_ACCOUNT   = SLURM_CFG.get("account", "")
 
 def boltz_chunk_input(wildcards):
     """Input for chunk_yamls_for_boltz: depend on MSA completion if MSA is enabled."""
-    inputs = {"yaml_dir": YAML_SOURCE_DIR}
+    inputs = {}
     if RUN_MSA:
         inputs["msa_done"] = f"{OUTPUT}/.msa_complete"
+    else:
+        inputs["yaml_dir"] = YAML_SOURCE_DIR
     return inputs
 
 
@@ -36,6 +38,7 @@ checkpoint chunk_yamls_for_boltz:
     output:
         manifest = f"{BOLTZ_CHUNKS}/manifest.txt",
     params:
+        yaml_dir = YAML_SOURCE_DIR,
         max_files = BOLTZ_CFG.get("max_files_per_job", 25),
     resources:
         cpus_per_task = 1,
@@ -46,7 +49,7 @@ checkpoint chunk_yamls_for_boltz:
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
-            --yaml_dir {input.yaml_dir} \
+            --yaml_dir {params.yaml_dir} \
             --output_dir {BOLTZ_CHUNKS} \
             --max_files_per_job {params.max_files}
         """
