@@ -1,12 +1,18 @@
 """
 Boltz Stage Rules
 ==================
-checkpoint chunk_yamls_for_boltz -> run_boltz_predict (per chunk) ->
-organize_boltz_chunk (per chunk) -> boltz_complete (aggregate)
+checkpoint chunk_yamls_for_boltz -> run_boltz_predict (per chunk × run) ->
+organize_boltz_chunk (per chunk × run) -> boltz_complete (aggregate)
+
+Supports multiple independent runs per sequence via boltz.num_runs.
+When num_runs > 1, outputs are organized into:
+  sequences/{seq}/boltz/run_0/, sequences/{seq}/boltz/run_1/, ...
+When num_runs == 1, outputs go directly to sequences/{seq}/boltz/ (legacy).
 """
 
 BOLTZ_CFG     = config.get("boltz", {})
 BOLTZ_CHUNKS  = f"{OUTPUT}/boltz_chunks"
+NUM_RUNS      = BOLTZ_CFG.get("num_runs", 1)
 
 # Determine YAML source: from MSA stage (sequences/) or user-provided yaml_dir
 YAML_SOURCE_DIR = f"{OUTPUT}/sequences" if RUN_MSA else config["input"].get("yaml_dir", "")
@@ -63,9 +69,9 @@ rule run_boltz_predict:
     input:
         chunk_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}",
     output:
-        done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output/.done",
+        done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
     params:
-        output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output",
+        output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         cache_dir = BOLTZ_CFG.get("cache_dir", ""),
         env_path = BOLTZ_CFG.get("env_path", ""),
         recycling_steps = BOLTZ_CFG.get("recycling_steps", 10),
@@ -111,15 +117,16 @@ rule run_boltz_predict:
 
 
 rule organize_boltz_chunk:
-    """Pick highest-confidence model per sequence and copy to sequences/{seq}/boltz/."""
+    """Copy model outputs to sequences/{seq}/boltz/ (or boltz/run_N/ for multi-run)."""
     input:
-        done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output/.done",
+        done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
     output:
-        organized = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output/.organized",
+        organized = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.organized",
     params:
-        boltz_output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output",
+        boltz_output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         sequences_dir = SEQUENCES_DIR,
         delete_msa = "--delete_msa" if BOLTZ_CFG.get("delete_msa_after_processing", False) else "",
+        subdirectory = lambda wc: f"--subdirectory run_{wc.run_id}" if NUM_RUNS > 1 else "",
     resources:
         cpus_per_task = 4,
         mem_mb = 8000,
@@ -132,20 +139,24 @@ rule organize_boltz_chunk:
             --boltz_output_dir {params.boltz_output_dir} \
             --chunk_id {wildcards.chunk_id} \
             --sequences_dir {params.sequences_dir} \
-            {params.delete_msa}
+            {params.delete_msa} {params.subdirectory}
 
         touch {output.organized}
         """
 
 
 def aggregate_boltz_organized(wildcards):
-    """Collect all .organized sentinels after checkpoint expansion."""
+    """Collect all .organized sentinels across chunks × runs."""
     chunk_ids = get_boltz_chunk_ids(wildcards)
-    return expand(f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_output/.organized", chunk_id=chunk_ids)
+    run_ids = list(range(NUM_RUNS))
+    return expand(
+        f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.organized",
+        chunk_id=chunk_ids, run_id=run_ids,
+    )
 
 
 rule boltz_complete:
-    """Aggregate sentinel: all Boltz chunks organized."""
+    """Aggregate sentinel: all Boltz chunks × runs organized."""
     input:
         aggregate_boltz_organized,
     output:

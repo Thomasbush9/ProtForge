@@ -30,10 +30,14 @@ def find_predictions_dir(boltz_output_dir: str, chunk_id: str) -> Path | None:
 
 
 def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
-                   delete_msa: bool = False):
+                   delete_msa: bool = False, keep_all: bool = False,
+                   subdirectory: str = ""):
     """
-    For one chunk's boltz output, find the highest model number per sequence
-    and copy those files to sequences/{seq_name}/boltz/.
+    For one chunk's boltz output, copy model files to sequences/{seq_name}/boltz/.
+
+    Args:
+        keep_all: If True, copies ALL model files. Otherwise only the highest model.
+        subdirectory: If set, outputs go to boltz/{subdirectory}/ (e.g. "run_0").
     """
     predictions_dir = find_predictions_dir(boltz_output_dir, chunk_id)
     if predictions_dir is None:
@@ -54,7 +58,7 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
         dir_name = pred_subdir.name
         seq_id = dir_name.removeprefix("seq_") if dir_name.startswith("seq_") else dir_name
 
-        # Find highest model number among files in this prediction dir
+        # Find all model files grouped by model number
         highest_model = -1
         model_files: dict[int, list[Path]] = {}
 
@@ -77,22 +81,36 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
         # Try both seq_{id} and plain {id} formats
         target_dir = None
         for candidate in [f"seq_{seq_id}", seq_id]:
-            candidate_dir = seq_base / candidate / "boltz"
+            boltz_base = seq_base / candidate / "boltz"
+            if subdirectory:
+                candidate_dir = boltz_base / subdirectory
+            else:
+                candidate_dir = boltz_base
             # Check if the parent exists (sequence dir from MSA stage)
             if (seq_base / candidate).exists():
                 target_dir = candidate_dir
                 break
         if target_dir is None:
-            # Default to seq_{id} format
-            target_dir = seq_base / f"seq_{seq_id}" / "boltz"
+            boltz_base = seq_base / f"seq_{seq_id}" / "boltz"
+            target_dir = boltz_base / subdirectory if subdirectory else boltz_base
 
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy highest model files
-        for f in model_files[highest_model]:
-            shutil.copy2(f, target_dir / f.name)
+        if keep_all:
+            # Copy ALL model files (model_0 through model_N)
+            total_copied = 0
+            for model_num in sorted(model_files.keys()):
+                for f in model_files[model_num]:
+                    shutil.copy2(f, target_dir / f.name)
+                    total_copied += 1
+            print(f"Organized {dir_name}: all {len(model_files)} models "
+                  f"({total_copied} files) -> {target_dir}")
+        else:
+            # Copy only highest model files (legacy behavior)
+            for f in model_files[highest_model]:
+                shutil.copy2(f, target_dir / f.name)
+            print(f"Organized {dir_name}: model {highest_model} -> {target_dir}")
 
-        print(f"Organized {dir_name}: model {highest_model} -> {target_dir}")
         processed += 1
 
         # Optionally delete MSA directory
@@ -114,10 +132,15 @@ def main():
     parser.add_argument("--sequences_dir", required=True, help="Base sequences directory")
     parser.add_argument("--delete_msa", action="store_true",
                         help="Delete MSA directories after organizing")
+    parser.add_argument("--keep_all", action="store_true",
+                        help="Keep all model files instead of only the highest")
+    parser.add_argument("--subdirectory", default="",
+                        help="Subdirectory under boltz/ (e.g. 'run_0' -> boltz/run_0/)")
     args = parser.parse_args()
 
     processed = organize_chunk(
-        args.boltz_output_dir, args.chunk_id, args.sequences_dir, args.delete_msa
+        args.boltz_output_dir, args.chunk_id, args.sequences_dir,
+        args.delete_msa, args.keep_all, args.subdirectory
     )
     if processed == 0:
         print("ERROR: No predictions were organized", file=sys.stderr)

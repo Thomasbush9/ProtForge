@@ -32,6 +32,7 @@ boltz:
   delete_msa_after_processing: false
   recycling_steps: 10
   diffusion_samples: 25
+  num_runs: 1                        # Number of independent Boltz runs per sequence
   cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
   env_path: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
