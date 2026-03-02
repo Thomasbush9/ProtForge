@@ -1,11 +1,11 @@
 """
 ES (Evolutionary Scale / Effective Strain) Stage Rules
 =======================================================
-discover_es_sequences -> run_es_sequence (per sequence, SLURM) -> aggregate_es
+run_es_all (single SLURM job that loops over all sequences)
 
 Computes deformation metrics (effective strain, etc.) for each sequence by
 averaging across multiple Boltz prediction runs using PDAnalysis's
-AverageProtein. One SLURM job per sequence (no MPI needed).
+AverageProtein. All sequences processed in a single SLURM job.
 
 Reference protein options (from config):
   es.ref_dir:  path to boltz dir with run_N/ subdirs  -> AverageProtein
@@ -51,68 +51,24 @@ def resolve_ref_args():
 
 
 def es_input(wildcards):
-    """Input for discover_es_sequences: depend on Boltz completion if enabled."""
+    """Input for run_es_all: depend on Boltz completion if enabled."""
     inputs = {}
     if RUN_BOLTZ:
         inputs["boltz_done"] = f"{OUTPUT}/.boltz_complete"
     return inputs
 
 
-checkpoint discover_es_sequences:
-    """Scan sequences dir and write list of sequence names to process."""
+rule run_es_all:
+    """Run PDAnalysis ES for all sequences in a single SLURM job."""
     input:
         unpack(es_input),
     output:
-        seq_list = f"{ES_DIR}/sequences.txt",
+        done = f"{ES_DIR}/.done",
+    log:
+        f"{ES_DIR}/es_all.log",
     params:
         sequences_dir = SEQUENCES_DIR,
-    localrule: True
-    run:
-        from pathlib import Path
-
-        seq_dir = Path(params.sequences_dir)
-        es_dir = Path(ES_DIR)
-        es_dir.mkdir(parents=True, exist_ok=True)
-
-        seq_names = []
-        for d in sorted(seq_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            boltz_dir = d / "boltz"
-            if not boltz_dir.is_dir():
-                continue
-            # Check for CIF files (in run_N/ subdirs or directly)
-            has_cifs = (
-                any(boltz_dir.glob("run_*/*.cif"))
-                or any(boltz_dir.glob("*.cif"))
-            )
-            if has_cifs:
-                seq_names.append(d.name)
-
-        with open(output.seq_list, "w") as f:
-            for name in seq_names:
-                f.write(name + "\n")
-
-        print(f"Found {len(seq_names)} sequences with CIF files for ES analysis")
-
-
-def get_es_sequence_names(wildcards):
-    """Return sequence names from the discover checkpoint."""
-    seq_list = checkpoints.discover_es_sequences.get().output.seq_list
-    with open(seq_list) as f:
-        return [line.strip() for line in f if line.strip()]
-
-
-rule run_es_sequence:
-    """Run PDAnalysis ES analysis for one sequence (averaging across runs)."""
-    input:
-        seq_list = f"{ES_DIR}/sequences.txt",
-    output:
-        csv = f"{ES_DIR}/{{seq_name}}.csv",
-    log:
-        f"{ES_DIR}/logs/{{seq_name}}.log",
-    params:
-        seq_boltz_dir = f"{SEQUENCES_DIR}/{{seq_name}}/boltz",
+        es_dir = ES_DIR,
         pdanalysis_dir = PDANALYSIS_DIR,
         ref_args = resolve_ref_args(),
         method = " ".join(ES_METHOD) if isinstance(ES_METHOD, list) else ES_METHOD,
@@ -122,8 +78,8 @@ rule run_es_sequence:
         container_cmd = container_cmd("pdanalysis"),
     resources:
         cpus_per_task = 4,
-        mem_mb = 8000,
-        runtime = 30,
+        mem_mb = 16000,
+        runtime = 120,
         slurm_partition = ES_PARTITION,
         slurm_account = ES_ACCOUNT,
         slurm_extra = "'--gpus-per-node=1'",
@@ -136,19 +92,12 @@ rule run_es_sequence:
         export MKL_NUM_THREADS=1
         export OPENBLAS_NUM_THREADS=1
 
+        mkdir -p {params.es_dir}/logs
+
         if [ -n "{params.container_cmd}" ]; then
-            {params.container_cmd} \
-                --env OMP_NUM_THREADS=1 \
-                --env MKL_NUM_THREADS=1 \
-                --env OPENBLAS_NUM_THREADS=1 \
-                python /opt/protforge/workflow/scripts/compute_es.py \
-                    {params.ref_args} \
-                    --seq_dir {params.seq_boltz_dir} \
-                    --output {output.csv} \
-                    --pdanalysis_dir /opt/pdanalysis \
-                    --method {params.method} \
-                    --min_plddt {params.min_plddt} \
-                    --lddt_cutoffs {params.lddt_cutoffs}
+            PYTHON_CMD="{params.container_cmd} --env OMP_NUM_THREADS=1 --env MKL_NUM_THREADS=1 --env OPENBLAS_NUM_THREADS=1 python"
+            COMPUTE_ES="/opt/protforge/workflow/scripts/compute_es.py"
+            PDA_DIR="/opt/pdanalysis"
         else
             module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 || true
             set +u
@@ -157,55 +106,70 @@ rule run_es_sequence:
                 conda activate {params.env_path}
             fi
             set -u
-            python {workflow.basedir}/workflow/scripts/compute_es.py \
+            PYTHON_CMD="python"
+            COMPUTE_ES="{workflow.basedir}/workflow/scripts/compute_es.py"
+            PDA_DIR="{params.pdanalysis_dir}"
+        fi
+
+        TOTAL=0
+        SUCCESS=0
+        FAILED=0
+
+        for SEQ_DIR in {params.sequences_dir}/*/; do
+            SEQ_NAME=$(basename "$SEQ_DIR")
+            BOLTZ_DIR="${{SEQ_DIR}}boltz"
+
+            # Skip if no boltz directory
+            if [ ! -d "$BOLTZ_DIR" ]; then
+                echo "SKIP $SEQ_NAME: no boltz dir"
+                continue
+            fi
+
+            # Skip if no CIF files
+            CIF_COUNT=$(find "$BOLTZ_DIR" -name "*.cif" 2>/dev/null | wc -l)
+            if [ "$CIF_COUNT" -eq 0 ]; then
+                echo "SKIP $SEQ_NAME: no CIF files"
+                continue
+            fi
+
+            TOTAL=$((TOTAL + 1))
+            OUTPUT_CSV="{params.es_dir}/${{SEQ_NAME}}.csv"
+
+            # Skip if already computed
+            if [ -f "$OUTPUT_CSV" ]; then
+                echo "SKIP $SEQ_NAME: already computed"
+                SUCCESS=$((SUCCESS + 1))
+                continue
+            fi
+
+            echo "=== Processing $SEQ_NAME ($CIF_COUNT CIF files) ==="
+            if $PYTHON_CMD "$COMPUTE_ES" \
                 {params.ref_args} \
-                --seq_dir {params.seq_boltz_dir} \
-                --output {output.csv} \
-                --pdanalysis_dir {params.pdanalysis_dir} \
+                --seq_dir "$BOLTZ_DIR" \
+                --output "$OUTPUT_CSV" \
+                --pdanalysis_dir "$PDA_DIR" \
                 --method {params.method} \
                 --min_plddt {params.min_plddt} \
-                --lddt_cutoffs {params.lddt_cutoffs}
+                --lddt_cutoffs {params.lddt_cutoffs} \
+                > {params.es_dir}/logs/${{SEQ_NAME}}.log 2>&1; then
+                echo "OK $SEQ_NAME"
+                SUCCESS=$((SUCCESS + 1))
+            else
+                echo "FAILED $SEQ_NAME (see {params.es_dir}/logs/${{SEQ_NAME}}.log)"
+                FAILED=$((FAILED + 1))
+            fi
+        done
+
+        echo "=== ES Summary: $SUCCESS/$TOTAL succeeded, $FAILED failed ==="
+
+        if [ "$TOTAL" -eq 0 ]; then
+            echo "ERROR: No sequences found in {params.sequences_dir}"
+            exit 1
         fi
+
+        if [ "$FAILED" -gt 0 ]; then
+            echo "WARNING: $FAILED sequences failed — check logs in {params.es_dir}/logs/"
+        fi
+
+        touch {output.done}
         """
-
-
-def aggregate_es_csvs(wildcards):
-    """Collect all per-sequence CSV outputs after checkpoint expansion."""
-    seq_names = get_es_sequence_names(wildcards)
-    return expand(f"{ES_DIR}/{{seq_name}}.csv", seq_name=seq_names)
-
-
-rule aggregate_es:
-    """Combine per-sequence CSVs into combined.joblib and touch sentinel."""
-    input:
-        aggregate_es_csvs,
-    output:
-        done = f"{ES_DIR}/.done",
-    params:
-        es_dir = ES_DIR,
-    localrule: True
-    run:
-        from pathlib import Path
-
-        es_dir = Path(params.es_dir)
-        csv_files = sorted(es_dir.glob("*.csv"))
-        print(f"ES analysis complete: {len(csv_files)} sequence CSV files in {es_dir}")
-
-        # Optionally combine into joblib (requires pandas + joblib)
-        try:
-            import joblib
-            import pandas as pd
-            results = {}
-            for csv_path in csv_files:
-                seq_name = csv_path.stem
-                try:
-                    results[seq_name] = pd.read_csv(csv_path)
-                except Exception as e:
-                    print(f"WARNING: Failed to read {csv_path}: {e}")
-            if results:
-                joblib.dump(results, es_dir / "combined.joblib")
-                print(f"Combined {len(results)} results into combined.joblib")
-        except ImportError:
-            print("pandas/joblib not available — skipping combined.joblib generation")
-
-        Path(output.done).touch()
