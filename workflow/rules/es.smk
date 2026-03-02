@@ -109,6 +109,8 @@ rule run_es_sequence:
         seq_list = f"{ES_DIR}/sequences.txt",
     output:
         csv = f"{ES_DIR}/{{seq_name}}.csv",
+    log:
+        f"{ES_DIR}/logs/{{seq_name}}.log",
     params:
         seq_boltz_dir = f"{SEQUENCES_DIR}/{{seq_name}}/boltz",
         pdanalysis_dir = PDANALYSIS_DIR,
@@ -128,6 +130,8 @@ rule run_es_sequence:
     shell:
         """
         set -euo pipefail
+        exec > {log} 2>&1
+        set -x
         export OMP_NUM_THREADS=1
         export MKL_NUM_THREADS=1
         export OPENBLAS_NUM_THREADS=1
