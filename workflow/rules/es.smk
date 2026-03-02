@@ -7,6 +7,9 @@ Computes deformation metrics (effective strain, etc.) for each sequence by
 averaging across multiple Boltz prediction runs using PDAnalysis's
 AverageProtein. All sequences processed in a single SLURM job.
 
+Calls PDAnalysis main.py directly (no wrapper script) to avoid
+subprocess python interpreter issues.
+
 Reference protein options (from config):
   es.ref_dir:  path to boltz dir with run_N/ subdirs  -> AverageProtein
   es.ref_path: path to a single CIF file              -> Protein
@@ -29,25 +32,35 @@ ES_LDDT_CUTOFFS = ES_CFG.get("lddt_cutoffs", [0.125, 0.25, 0.5, 1])
 
 
 def resolve_ref_args():
-    """Resolve reference protein config into compute_es.py arguments.
+    """Resolve reference protein config into main.py --protA arguments.
 
-    Returns the CLI flag string for the reference protein.
+    Returns (flag, value) where flag is --protA or empty for list mode.
+    For ref_dir, returns the shell glob pattern to expand CIF files.
+    For ref_path, returns the single file path.
     """
     ref_dir = ES_CFG.get("ref_dir", "")
     ref_path = ES_CFG.get("ref_path", "")
     ref_seq = ES_CFG.get("ref_seq", "")
 
     if ref_seq:
-        # Use a sequence from this pipeline's output as reference
-        return f"--ref_dir {SEQUENCES_DIR}/{ref_seq}/boltz"
+        return f"{SEQUENCES_DIR}/{ref_seq}/boltz"
     elif ref_dir:
-        return f"--ref_dir {ref_dir}"
+        return ref_dir
     elif ref_path:
-        return f"--ref_path {ref_path}"
+        return ref_path
     else:
         raise ValueError(
             "ES config must specify one of: es.ref_dir, es.ref_path, or es.ref_seq"
         )
+
+
+def ref_is_single_file():
+    """Check if reference is a single file (ref_path) vs directory."""
+    ref_path = ES_CFG.get("ref_path", "")
+    ref_dir = ES_CFG.get("ref_dir", "")
+    ref_seq = ES_CFG.get("ref_seq", "")
+    # ref_path takes effect only when ref_seq and ref_dir are empty
+    return bool(ref_path) and not bool(ref_seq) and not bool(ref_dir)
 
 
 def es_input(wildcards):
@@ -70,7 +83,8 @@ rule run_es_all:
         sequences_dir = SEQUENCES_DIR,
         es_dir = ES_DIR,
         pdanalysis_dir = PDANALYSIS_DIR,
-        ref_args = resolve_ref_args(),
+        ref_source = resolve_ref_args(),
+        ref_is_file = ref_is_single_file(),
         method = " ".join(ES_METHOD) if isinstance(ES_METHOD, list) else ES_METHOD,
         min_plddt = ES_MIN_PLDDT,
         lddt_cutoffs = " ".join(str(c) for c in ES_LDDT_CUTOFFS) if isinstance(ES_LDDT_CUTOFFS, list) else str(ES_LDDT_CUTOFFS),
@@ -95,9 +109,7 @@ rule run_es_all:
         mkdir -p {params.es_dir}/logs
 
         if [ -n "{params.container_cmd}" ]; then
-            PYTHON_CMD="{params.container_cmd} --env OMP_NUM_THREADS=1 --env MKL_NUM_THREADS=1 --env OPENBLAS_NUM_THREADS=1 python"
-            COMPUTE_ES="/opt/protforge/workflow/scripts/compute_es.py"
-            PDA_DIR="/opt/pdanalysis"
+            PDA_MAIN="/opt/pdanalysis/main.py"
         else
             module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 || true
             set +u
@@ -106,10 +118,49 @@ rule run_es_all:
                 conda activate {params.env_path}
             fi
             set -u
-            PYTHON_CMD="python"
-            COMPUTE_ES="{workflow.basedir}/workflow/scripts/compute_es.py"
-            PDA_DIR="{params.pdanalysis_dir}"
+            PDA_MAIN="{params.pdanalysis_dir}/main.py"
         fi
+
+        # Helper: collect CIF files from a boltz dir (run_N/ subdirs or flat)
+        collect_cifs() {{
+            local DIR="$1"
+            local CIFS=""
+            if ls "$DIR"/run_*/*.cif 1>/dev/null 2>&1; then
+                # Multi-run: pick highest model from each run_N/
+                for RUN in $(ls -d "$DIR"/run_*/ 2>/dev/null | sort); do
+                    CIF=$(ls "$RUN"/*_model_*.cif 2>/dev/null | sort | tail -1)
+                    if [ -z "$CIF" ]; then
+                        CIF=$(ls "$RUN"/*.cif 2>/dev/null | sort | tail -1)
+                    fi
+                    if [ -n "$CIF" ]; then
+                        CIFS="$CIFS $CIF"
+                    fi
+                done
+            else
+                # Single-run: pick highest model CIF directly
+                CIF=$(ls "$DIR"/*_model_*.cif 2>/dev/null | sort | tail -1)
+                if [ -z "$CIF" ]; then
+                    CIF=$(ls "$DIR"/*.cif 2>/dev/null | sort | tail -1)
+                fi
+                if [ -n "$CIF" ]; then
+                    CIFS="$CIF"
+                fi
+            fi
+            echo "$CIFS"
+        }}
+
+        # Build reference --protA args
+        if [ "{params.ref_is_file}" = "True" ]; then
+            REF_CIFS="{params.ref_source}"
+        else
+            REF_CIFS=$(collect_cifs "{params.ref_source}")
+        fi
+
+        if [ -z "$REF_CIFS" ]; then
+            echo "ERROR: No reference CIF files found in {params.ref_source}"
+            exit 1
+        fi
+        echo "Reference CIFs: $REF_CIFS"
 
         TOTAL=0
         SUCCESS=0
@@ -125,9 +176,9 @@ rule run_es_all:
                 continue
             fi
 
-            # Skip if no CIF files
-            CIF_COUNT=$(find "$BOLTZ_DIR" -name "*.cif" 2>/dev/null | wc -l)
-            if [ "$CIF_COUNT" -eq 0 ]; then
+            # Collect sequence CIF files
+            SEQ_CIFS=$(collect_cifs "$BOLTZ_DIR")
+            if [ -z "$SEQ_CIFS" ]; then
                 echo "SKIP $SEQ_NAME: no CIF files"
                 continue
             fi
@@ -142,15 +193,14 @@ rule run_es_all:
                 continue
             fi
 
-            echo "=== Processing $SEQ_NAME ($CIF_COUNT CIF files) ==="
-            if $PYTHON_CMD "$COMPUTE_ES" \
-                {params.ref_args} \
-                --seq_dir "$BOLTZ_DIR" \
-                --output "$OUTPUT_CSV" \
-                --pdanalysis_dir "$PDA_DIR" \
+            echo "=== Processing $SEQ_NAME ==="
+            if python "$PDA_MAIN" \
+                --protA $REF_CIFS \
+                --protB $SEQ_CIFS \
                 --method {params.method} \
                 --min_plddt {params.min_plddt} \
                 --lddt_cutoffs {params.lddt_cutoffs} \
+                -o "$OUTPUT_CSV" \
                 > {params.es_dir}/logs/${{SEQ_NAME}}.log 2>&1; then
                 echo "OK $SEQ_NAME"
                 SUCCESS=$((SUCCESS + 1))
@@ -164,6 +214,11 @@ rule run_es_all:
 
         if [ "$TOTAL" -eq 0 ]; then
             echo "ERROR: No sequences found in {params.sequences_dir}"
+            exit 1
+        fi
+
+        if [ "$SUCCESS" -eq 0 ]; then
+            echo "ERROR: All $TOTAL sequences failed — check logs in {params.es_dir}/logs/"
             exit 1
         fi
 
