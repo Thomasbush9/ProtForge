@@ -153,7 +153,7 @@ rule run_es_sequence:
                 conda activate {params.env_path}
             fi
             set -u
-            python {workflow.basedir}/scripts/compute_es.py \
+            python {workflow.basedir}/workflow/scripts/compute_es.py \
                 {params.ref_args} \
                 --seq_dir {params.seq_boltz_dir} \
                 --output {output.csv} \
