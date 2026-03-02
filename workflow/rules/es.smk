@@ -111,13 +111,13 @@ rule run_es_all:
         if [ -n "{params.container_cmd}" ]; then
             PDA_MAIN="/opt/pdanalysis/main.py"
         else
-            module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 || true
             set +u
-            source "$(conda info --base)/etc/profile.d/conda.sh"
+            eval "$(conda shell.bash hook)"
             if [ -n "{params.env_path}" ]; then
                 conda activate {params.env_path}
             fi
             set -u
+            echo "Using python: $(which python)"
             PDA_MAIN="{params.pdanalysis_dir}/main.py"
         fi
 
