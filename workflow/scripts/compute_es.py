@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -144,8 +145,11 @@ def main():
         print(f"ERROR: PDAnalysis main.py not found at: {pdanalysis_main}", file=sys.stderr)
         sys.exit(1)
 
+    # Use 'python' from PATH (respects conda env) rather than sys.executable
+    # which may point to a different interpreter
+    python_bin = shutil.which("python") or sys.executable
     cmd = [
-        sys.executable, str(pdanalysis_main),
+        python_bin, str(pdanalysis_main),
         "--protA", *ref_cifs,
         "--protB", *seq_cifs,
         "--method", *args.method,
