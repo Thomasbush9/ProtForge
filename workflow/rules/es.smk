@@ -111,13 +111,11 @@ rule run_es_all:
         if [ -n "{params.container_cmd}" ]; then
             PDA_MAIN="/opt/pdanalysis/main.py"
         else
-            set +u
-            eval "$(conda shell.bash hook)"
-            if [ -n "{params.env_path}" ]; then
-                conda activate {params.env_path}
-            fi
-            set -u
+            module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 openmpi || true
+            source "$(conda info --base)/etc/profile.d/conda.sh"
+            conda activate "{params.env_path}"
             echo "Using python: $(which python)"
+            python -c "import numpy; print('numpy', numpy.__version__)"
             PDA_MAIN="{params.pdanalysis_dir}/main.py"
         fi
 
