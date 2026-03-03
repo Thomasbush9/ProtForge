@@ -25,13 +25,18 @@ SEQUENCES_DIR = f"{OUTPUT}/sequences"
 SLURM_EMAIL = SLURM_CFG.get("email", "")
 
 def slurm_extra(gpu=False):
-    """Build slurm_extra string with optional GPU and mail flags."""
+    """Build slurm_extra string with optional GPU and mail flags.
+
+    Each sbatch flag must be individually quoted so the shell
+    passes them as separate arguments to sbatch.
+    """
     parts = []
     if gpu:
-        parts.append("--gpus-per-node=1")
+        parts.append("'--gpus-per-node=1'")
     if SLURM_EMAIL:
-        parts.append(f"--mail-type=END,FAIL --mail-user={SLURM_EMAIL}")
-    return f"'{' '.join(parts)}'" if parts else "''"
+        parts.append(f"'--mail-type=END,FAIL'")
+        parts.append(f"'--mail-user={SLURM_EMAIL}'")
+    return " ".join(parts) if parts else "''"
 
 # Container support (set .sif paths in config to enable)
 CONTAINERS = config.get("containers", {})
