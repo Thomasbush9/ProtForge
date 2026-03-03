@@ -21,6 +21,18 @@ OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
 SEQUENCES_DIR = f"{OUTPUT}/sequences"
 
+# SLURM email notifications (reads slurm.email from config)
+SLURM_EMAIL = SLURM_CFG.get("email", "")
+
+def slurm_extra(gpu=False):
+    """Build slurm_extra string with optional GPU and mail flags."""
+    parts = []
+    if gpu:
+        parts.append("--gpus-per-node=1")
+    if SLURM_EMAIL:
+        parts.append(f"--mail-type=END,FAIL --mail-user={SLURM_EMAIL}")
+    return f"'{' '.join(parts)}'" if parts else "''"
+
 # Container support (set .sif paths in config to enable)
 CONTAINERS = config.get("containers", {})
 BIND_PATHS = CONTAINERS.get("bind_paths", "/n/holylfs06,/n/home06")

@@ -14,4 +14,4 @@ default-resources:
   mem_mb: 4000
   runtime: 30        # minutes
   cpus_per_task: 2
-  slurm_extra: "''"
+  slurm_extra: "'--mail-type=END,FAIL --mail-user=thomasbush52@gmail.com'"

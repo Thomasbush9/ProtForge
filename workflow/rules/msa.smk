@@ -68,7 +68,7 @@ rule run_colabfold_search:
         runtime = 60,
         slurm_partition = MSA_PARTITION,
         slurm_account = MSA_ACCOUNT,
-        slurm_extra = "'--gpus-per-node=1'",
+        slurm_extra = slurm_extra(gpu=True),
     shell:
         """
         set -euo pipefail

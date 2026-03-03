@@ -81,7 +81,7 @@ rule run_boltz_predict:
         runtime = 60,
         slurm_partition = BOLTZ_PARTITION,
         slurm_account = BOLTZ_ACCOUNT,
-        slurm_extra = "'--gpus-per-node=1'",
+        slurm_extra = slurm_extra(gpu=True),
     shell:
         """
         set -euo pipefail

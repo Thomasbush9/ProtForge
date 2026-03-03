@@ -78,7 +78,7 @@ rule run_esm_chunk:
         runtime = 60,
         slurm_partition = ESM_PARTITION,
         slurm_account = ESM_ACCOUNT,
-        slurm_extra = "'--gpus-per-node=1'",
+        slurm_extra = slurm_extra(gpu=True),
     shell:
         """
         set -euo pipefail
