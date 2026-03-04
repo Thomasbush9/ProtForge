@@ -35,12 +35,7 @@ checkpoint chunk_yamls_for_esm:
     params:
         yaml_dir = ESM_YAML_SOURCE,
         num_chunks = ESM_CFG.get("num_chunks", 1),
-    resources:
-        cpus_per_task = 1,
-        mem_mb = 2000,
-        runtime = 10,
-        slurm_partition = ESM_PARTITION,
-        slurm_account = ESM_ACCOUNT,
+    localrule: True
     shell:
         """
         python workflow/scripts/chunk_yamls_for_esm.py \
