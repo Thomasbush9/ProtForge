@@ -63,12 +63,12 @@ rule run_esm_chunk:
     """Run ESM embeddings/logits on a chunk of YAML files."""
     input:
         fasta_list = f"{ESM_CHUNKS}/id_{{chunk_id}}.txt",
+        script = "slurm_scripts/run_esm.py",
     output:
         done = f"{ESM_CHUNKS}/chunk_{{chunk_id}}.done",
     params:
-        output_dir = f"{OUTPUT}/sequences",
+        output_dir = SEQUENCES_DIR,
         env_path = ESM_CFG.get("env_path", ""),
-        work_dir = ESM_CFG.get("work_dir", ""),
         cache_dir = ESM_CFG.get("cache_dir", ""),
         container_cmd = container_cmd("esm"),
     resources:
@@ -96,14 +96,11 @@ rule run_esm_chunk:
             source "$(conda info --base)/etc/profile.d/conda.sh"
             conda activate {params.env_path}
             set -u
-            if [ -n "{params.work_dir}" ]; then
-                cd {params.work_dir}
-            fi
             if [ -n "{params.cache_dir}" ]; then
                 export TORCH_HOME="{params.cache_dir}"
                 export HF_HOME="{params.cache_dir}"
             fi
-            python run_esm.py \
+            python {input.script} \
                 --fasta_list {input.fasta_list} \
                 --output_dir {params.output_dir} \
                 --processed_paths_file {ESM_CHUNKS}/processed_paths_{wildcards.chunk_id}.txt
