@@ -9,8 +9,9 @@ Calls the existing slurm_scripts/run_esm.py directly.
 ESM_CFG      = config.get("esm", {})
 ESM_CHUNKS   = f"{OUTPUT}/esm_chunks"
 
-# ESM depends on YAML files — from Boltz output (sequences dir) or user-provided yaml_dir
-ESM_YAML_SOURCE = SEQUENCES_DIR if (RUN_MSA or RUN_BOLTZ) else config["input"].get("yaml_dir", "")
+# YAML source: user-provided yaml_dir, or auto-discover from {OUTPUT}/sequences/
+_yaml_dir_override = config["input"].get("yaml_dir", "")
+ESM_YAML_SOURCE = _yaml_dir_override if _yaml_dir_override else SEQUENCES_DIR
 
 ESM_PARTITION = SLURM_CFG.get("esm", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESM_ACCOUNT   = SLURM_CFG.get("account", "")
