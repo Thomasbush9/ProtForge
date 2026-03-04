@@ -48,7 +48,7 @@ es:
   pdanalysis_dir: /n/home06/tbush/PDAnalysis  # Directory containing main.py
   # Reference protein — set exactly ONE of ref_dir, ref_path, or ref_seq:
   ref_dir: ""                                  # Multi-run ref dir (has run_N/ subdirs)
-  ref_path: /n/home06/tbush/test_input.fasta_prot_pipeline_model_0.cif  # Single CIF file
+  ref_path: /Users/thomasbush/Downloads/Boltz-project/original_structures/sequences/test_input_10/boltz/run_0/test_input_10_model_24.cif
   ref_seq: ""                                  # OR: sequence name from this pipeline
   method: [strain]                             # Deformation methods
   min_plddt: 70                                # pLDDT cutoff
