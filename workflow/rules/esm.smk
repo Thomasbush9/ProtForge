@@ -9,18 +9,20 @@ Calls the existing slurm_scripts/run_esm.py directly.
 ESM_CFG      = config.get("esm", {})
 ESM_CHUNKS   = f"{OUTPUT}/esm_chunks"
 
-# ESM depends on YAML files from MSA stage (or user-provided yaml_dir)
-ESM_YAML_SOURCE = f"{OUTPUT}/sequences" if RUN_MSA else config["input"].get("yaml_dir", "")
+# ESM depends on YAML files — from Boltz output (sequences dir) or user-provided yaml_dir
+ESM_YAML_SOURCE = SEQUENCES_DIR if (RUN_MSA or RUN_BOLTZ) else config["input"].get("yaml_dir", "")
 
 ESM_PARTITION = SLURM_CFG.get("esm", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESM_ACCOUNT   = SLURM_CFG.get("account", "")
 
 
 def esm_chunk_input(wildcards):
-    """Input for chunk_yamls_for_esm: depend on MSA completion if MSA is enabled."""
-    inputs = {"yaml_dir": ESM_YAML_SOURCE}
-    if RUN_MSA:
-        inputs["msa_done"] = f"{OUTPUT}/.msa_complete"
+    """Input for chunk_yamls_for_esm: depend on upstream completion if enabled."""
+    inputs = {}
+    if RUN_BOLTZ:
+        inputs["upstream_done"] = f"{OUTPUT}/.boltz_complete"
+    elif RUN_MSA:
+        inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
     return inputs
 
 
@@ -31,6 +33,7 @@ checkpoint chunk_yamls_for_esm:
     output:
         manifest = f"{ESM_CHUNKS}/manifest.txt",
     params:
+        yaml_dir = ESM_YAML_SOURCE,
         num_chunks = ESM_CFG.get("num_chunks", 1),
     resources:
         cpus_per_task = 1,
@@ -41,7 +44,7 @@ checkpoint chunk_yamls_for_esm:
     shell:
         """
         python workflow/scripts/chunk_yamls_for_esm.py \
-            --yaml_dir {input.yaml_dir} \
+            --yaml_dir {params.yaml_dir} \
             --output_dir {ESM_CHUNKS} \
             --num_chunks {params.num_chunks}
         """

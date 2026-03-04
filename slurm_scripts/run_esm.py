@@ -38,9 +38,9 @@ if __name__ == "__main__":
             logits_output = client.logits(
             protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
             )
-            # Prepare output subdirectory using fasta filename stem as unique identifier
+            # Prepare output subdirectory: {output_dir}/{seq_name}/esm/
             seq_index = yaml_path.stem
-            yaml_output_dir = output_dir / seq_index
+            yaml_output_dir = output_dir / seq_index / "esm"
             yaml_output_dir.mkdir(parents=True, exist_ok=True)
 
             # Save logits and embeddings as .npy files
