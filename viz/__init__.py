@@ -40,6 +40,11 @@ from ._cif_parser import (
 )
 from .dashboard import build_dashboard
 
+try:
+    from .app import create_app
+except ImportError:
+    pass
+
 __all__ = [
     # 3D plots
     "plot_backbone",
@@ -58,4 +63,6 @@ __all__ = [
     "parse_cif",
     "load_plddt_df",
     "load_confidence_dfs",
+    # Dash app (optional, requires dash)
+    "create_app",
 ]

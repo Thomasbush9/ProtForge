@@ -258,6 +258,20 @@ def main():
         help="HTML page title",
     )
 
+    # Dash server mode
+    parser.add_argument(
+        "--serve", action="store_true",
+        help="Launch interactive Dash server (requires dash)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8050,
+        help="Dash server port (default: 8050)",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable Dash debug mode",
+    )
+
     args = parser.parse_args()
 
     # Resolve paths
@@ -291,11 +305,31 @@ def main():
     if not sequences_dir:
         parser.error("Provide --output_dir or --sequences_dir")
 
+    # Dash server mode
+    if args.serve:
+        from .app import create_app
+        app = create_app(
+            sequences_dir, es_dir=es_dir, ref_cif=ref_cif,
+            metric=args.metric, title=args.title, tabs=args.tabs,
+        )
+        print(f"Starting Dash server on http://0.0.0.0:{args.port}")
+        print(f"For remote access: ssh -L {args.port}:localhost:{args.port} <cluster>")
+        app.run(host="0.0.0.0", port=args.port, debug=args.debug)
+        return
+
+    # Default HTML output: save alongside sequences dir
+    html_path = args.html
+    if html_path == "dashboard.html" and not Path(html_path).is_absolute():
+        if args.output_dir:
+            html_path = str(Path(args.output_dir) / "dashboard.html")
+        else:
+            html_path = str(Path(sequences_dir).parent / "dashboard.html")
+
     build_dashboard(
         sequences_dir=sequences_dir,
         es_dir=es_dir,
         ref_cif=ref_cif,
-        output_html=args.html,
+        output_html=html_path,
         tabs=args.tabs,
         metric=args.metric,
         title=args.title,

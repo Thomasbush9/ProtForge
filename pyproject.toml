@@ -17,6 +17,10 @@ test = [
 viz = [
     "plotly>=5.0",
 ]
+dash = [
+    "plotly>=5.0",
+    "dash>=2.14,<5",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

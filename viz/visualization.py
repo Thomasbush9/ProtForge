@@ -83,6 +83,26 @@ _NON_METRIC_COLS = {"residue_index", "protA_resname", "protB_resname"}
 _ALL_PANELS = ["heatmap", "profiles", "distributions", "summary"]
 
 
+def _generate_palette(n):
+    """Generate *n* visually distinct colors using golden-ratio hue sampling.
+
+    Falls back to the built-in Plotly qualitative palette for n <= 10.
+    """
+    if n <= 10:
+        import plotly.express as px
+        base = px.colors.qualitative.Plotly
+        return [base[i % len(base)] for i in range(n)]
+    colors = []
+    golden = 0.618033988749895
+    hue = 0.0
+    for i in range(n):
+        hue = (hue + golden) % 1.0
+        sat = 65 + (i % 3) * 12   # 65, 77, 89
+        lit = 45 + (i % 4) * 8    # 45, 53, 61, 69
+        colors.append(f"hsl({hue * 360:.0f}, {sat}%, {lit}%)")
+    return colors
+
+
 def _detect_mutations_from_df(df):
     """Return dict mapping 1-based residue index to mutation string."""
     if "protA_resname" not in df.columns or "protB_resname" not in df.columns:
@@ -111,8 +131,32 @@ def _aggregate_mutations(df_dict):
 
 
 def _compute_subplot_grid(panels):
-    """Return (rows, cols, position_map) for a dynamic panel layout."""
+    """Return (rows, cols, position_map, specs, row_heights) for dynamic layout.
+
+    When all 4 panels are present, uses an asymmetric layout:
+      Row 1: Heatmap (full width, 50%)
+      Row 2: Profiles | Distributions (30%)
+      Row 3: Summary (full width, 20%)
+    """
     n = len(panels)
+    panel_set = set(panels)
+
+    if n == 4 and panel_set == set(_ALL_PANELS):
+        rows, cols = 3, 2
+        positions = {
+            "heatmap": (1, 1),
+            "profiles": (2, 1),
+            "distributions": (2, 2),
+            "summary": (3, 1),
+        }
+        specs = [
+            [{"colspan": 2}, None],
+            [{}, {}],
+            [{"colspan": 2}, None],
+        ]
+        row_heights = [0.5, 0.3, 0.2]
+        return rows, cols, positions, specs, row_heights
+
     if n <= 1:
         rows, cols = 1, 1
     elif n == 2:
@@ -124,7 +168,9 @@ def _compute_subplot_grid(panels):
         r = i // cols + 1
         c = i % cols + 1
         positions[panel] = (r, c)
-    return rows, cols, positions
+    specs = [[{} for _ in range(cols)] for _ in range(rows)]
+    row_heights = [1.0 / rows] * rows
+    return rows, cols, positions, specs, row_heights
 
 
 def _extract_ref_sequence(df_dict, max_residue):
@@ -506,7 +552,9 @@ def get_available_metrics(source):
 def plot_dashboard(source, **kwargs):
     """Interactive dashboard comparing N proteins on a single metric.
 
-    Produces a 2x2 grid (heatmap, profiles, distributions, summary).
+    Produces an asymmetric grid (heatmap full-width, profiles|distributions,
+    summary full-width) with WebGL rendering, statistical envelopes, and
+    cross-panel highlighting support.
 
     Parameters
     ----------
@@ -530,8 +578,6 @@ def plot_dashboard(source, **kwargs):
     truncate_labels : int or None
     vmin, vmax : float or None
     """
-    import plotly.express as px
-
     df_dict = _load_df_dict(source)
     metric = kwargs.get("metric", "strain")
     sort_by = kwargs.get("sort_by", "mean")
@@ -590,7 +636,6 @@ def plot_dashboard(source, **kwargs):
     mut_per_protein = {}
     if highlight_mutations:
         mut_positions, mut_freq, mut_per_protein = _aggregate_mutations(df_dict)
-        max_freq = max(mut_freq.values()) if mut_freq else 1
 
     if truncate_labels:
         display_names = [
@@ -600,35 +645,40 @@ def plot_dashboard(source, **kwargs):
     else:
         display_names = list(names)
 
-    rows, cols, pos_map = _compute_subplot_grid(panels)
+    rows, cols, pos_map, specs, row_heights = _compute_subplot_grid(panels)
 
     if height is None:
         base = 500 if rows == 1 else 800
-        height = min(max(base, 120 + N * 18), 2000)
+        height = min(1400, max(base, 120 + N * 18))
 
-    palette = px.colors.qualitative.Plotly
-    colours = [palette[i % len(palette)] for i in range(N)]
+    colours = _generate_palette(N)
 
     if line_opacity is None:
         line_opacity = max(0.15, 1.0 - N * 0.03)
 
     ref_aa = []
 
-    subplot_titles = [
-        {"heatmap": f"Heatmap \u2014 {metric}",
-         "profiles": f"Per-Residue Profiles \u2014 {metric}",
-         "distributions": f"Distributions \u2014 {metric}",
-         "summary": f"Summary \u2014 {metric}"}[p]
-        for p in panels
-    ]
-    while len(subplot_titles) < rows * cols:
-        subplot_titles.append("")
+    # Build subplot titles in grid order (skipping None specs)
+    _title_lookup = {
+        "heatmap": f"Heatmap \u2014 {metric}",
+        "profiles": f"Per-Residue Profiles \u2014 {metric}",
+        "distributions": f"Distributions \u2014 {metric}",
+        "summary": f"Summary \u2014 {metric}",
+    }
+    title_by_pos = {pos_map[p]: _title_lookup[p] for p in panels}
+    ordered_titles = []
+    for r_idx in range(rows):
+        for c_idx in range(cols):
+            if specs[r_idx][c_idx] is not None:
+                ordered_titles.append(title_by_pos.get((r_idx + 1, c_idx + 1), ""))
 
     fig = make_subplots(
         rows=rows, cols=cols,
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.12,
+        subplot_titles=ordered_titles,
+        vertical_spacing=0.08,
         horizontal_spacing=0.08,
+        specs=specs,
+        row_heights=row_heights,
     )
 
     # --- Heatmap ---
@@ -661,7 +711,7 @@ def plot_dashboard(source, **kwargs):
             import math
             tick_exp = list(range(math.floor(zlo), math.ceil(zhi) + 1))
             cb = dict(
-                title=f"{metric} (log)", x=0.45, len=0.45, y=0.78,
+                title=f"{metric} (log)", x=1.02, len=0.4, y=0.95, yanchor="top",
                 tickvals=tick_exp,
                 ticktext=[f"{10**e:.3g}" for e in tick_exp],
             )
@@ -680,19 +730,29 @@ def plot_dashboard(source, **kwargs):
             fig.add_trace(go.Heatmap(
                 z=matrix, x=np.arange(1, n_residues + 1), y=display_names,
                 colorscale=cmap, zmin=vmin, zmax=vmax,
-                colorbar=dict(title=metric, x=0.45, len=0.45, y=0.78),
+                colorbar=dict(title=metric, x=1.02, len=0.4, y=0.95, yanchor="top"),
                 customdata=aa_customdata,
                 hovertemplate="Residue %{x} (%{customdata})<br>%{y}<br>Value: %{z:.4f}<extra></extra>",
             ), row=r, col=c)
 
-        if highlight_mutations and mut_positions:
-            for pos, freq in mut_freq.items():
-                opacity = 0.15 + 0.55 * (freq / max_freq)
-                fig.add_vrect(
-                    x0=pos - 0.5, x1=pos + 0.5,
-                    fillcolor=mutation_color, opacity=opacity, line_width=0,
-                    row=r, col=c,
-                )
+        # Heatmap mutation overlay — keep go.Scatter (categorical y-axis)
+        if highlight_mutations and mut_per_protein:
+            mut_x, mut_y, mut_text = [], [], []
+            for i, name in enumerate(names):
+                muts = mut_per_protein.get(name, {})
+                for pos, label in muts.items():
+                    mut_x.append(pos)
+                    mut_y.append(display_names[i])
+                    mut_text.append(f"{label[0]}\u2192{label[-1]}")
+            if mut_x:
+                fig.add_trace(go.Scatter(
+                    x=mut_x, y=mut_y, mode="markers",
+                    marker=dict(symbol="x", size=7, color="red",
+                                line=dict(width=1, color="darkred")),
+                    text=mut_text,
+                    hovertemplate="Res %{x} (%{text})<br>%{y}<extra>Mutation</extra>",
+                    showlegend=False,
+                ), row=r, col=c)
 
     # --- Profiles ---
     if "profiles" in pos_map:
@@ -701,6 +761,52 @@ def plot_dashboard(source, **kwargs):
             _any_df = next(iter(df_dict.values()))
             _max_res = int(_any_df["residue_index"].max()) if "residue_index" in _any_df.columns else 0
             ref_aa = _extract_ref_sequence(df_dict, _max_res) if _max_res else []
+
+        # Mean + IQR envelope for large N
+        if N > 20:
+            _any_df = next(iter(df_dict.values()))
+            _max_res = int(_any_df["residue_index"].max()) if "residue_index" in _any_df.columns else 0
+            if _max_res:
+                all_arrays = []
+                for name in names:
+                    df = df_dict[name]
+                    if metric not in df.columns:
+                        continue
+                    arr = np.full(_max_res, np.nan)
+                    idx = df["residue_index"].values.astype(int) - 1
+                    vals = df[metric].values.astype(float)
+                    valid_idx = (idx >= 0) & (idx < _max_res)
+                    arr[idx[valid_idx]] = vals[valid_idx]
+                    all_arrays.append(arr)
+                if all_arrays:
+                    stacked = np.array(all_arrays)
+                    with np.errstate(all="ignore"):
+                        mean_line = np.nanmean(stacked, axis=0)
+                        q25 = np.nanpercentile(stacked, 25, axis=0)
+                        q75 = np.nanpercentile(stacked, 75, axis=0)
+                    x_range = np.arange(1, _max_res + 1)
+                    fig.add_trace(go.Scattergl(
+                        x=x_range, y=q75, mode="lines",
+                        line=dict(width=0), showlegend=False,
+                        hoverinfo="skip",
+                        meta={"seqName": "__envelope__"},
+                    ), row=r, col=c)
+                    fig.add_trace(go.Scattergl(
+                        x=x_range, y=q25, mode="lines",
+                        line=dict(width=0), fill="tonexty",
+                        fillcolor="rgba(100, 100, 100, 0.15)",
+                        showlegend=False, hoverinfo="skip",
+                        name="IQR (25\u201375%)",
+                        meta={"seqName": "__envelope__"},
+                    ), row=r, col=c)
+                    fig.add_trace(go.Scattergl(
+                        x=x_range, y=mean_line, mode="lines",
+                        line=dict(color="rgba(0,0,0,0.7)", width=2.5, dash="dot"),
+                        name="Mean", showlegend=True,
+                        hovertemplate="Res %{x}<br>Mean: %{y:.4f}<extra>Mean</extra>",
+                        meta={"seqName": "__mean__"},
+                    ), row=r, col=c)
+
         for i, name in enumerate(names):
             df = df_dict[name]
             if metric not in df.columns:
@@ -717,39 +823,108 @@ def plot_dashboard(source, **kwargs):
                 else:
                     aa_str = ""
                 hover_text.append(f"Res {ri} ({aa_str})")
-            fig.add_trace(go.Scatter(
-                x=res_idx, y=df[metric], mode="lines",
+            show_in_legend = True if N <= 15 or i < 5 else False
+            fig.add_trace(go.Scattergl(
+                x=res_idx, y=df[metric].values, mode="lines",
                 line=dict(color=colours[i], width=1.2), opacity=line_opacity,
-                name=display_names[i], legendgroup=display_names[i], showlegend=True,
+                name=display_names[i], legendgroup=display_names[i],
+                showlegend=show_in_legend,
                 text=hover_text,
                 hovertemplate="%{text}<br>%{y:.4f}<extra>%{fullData.name}</extra>",
+                meta={"seqName": names[i]},
             ), row=r, col=c)
-        if highlight_mutations and mut_positions:
-            for pos in sorted(mut_positions):
-                fig.add_vline(
-                    x=pos, line_dash="dash", line_color=mutation_color,
-                    opacity=0.6, row=r, col=c,
-                )
+        if highlight_mutations and mut_per_protein:
+            prof_mut_x, prof_mut_y, prof_mut_text, prof_mut_color = [], [], [], []
+            for i, name in enumerate(names):
+                df = df_dict[name]
+                if metric not in df.columns:
+                    continue
+                muts = mut_per_protein.get(name, {})
+                if not muts:
+                    continue
+                res_idx = df["residue_index"].values.astype(int)
+                vals = df[metric].values
+                idx_to_val = dict(zip(res_idx, vals))
+                for pos, label in muts.items():
+                    if pos in idx_to_val:
+                        prof_mut_x.append(pos)
+                        prof_mut_y.append(idx_to_val[pos])
+                        prof_mut_text.append(f"{display_names[i]}: {label[0]}\u2192{label[-1]}")
+                        prof_mut_color.append(colours[i])
+            if prof_mut_x:
+                fig.add_trace(go.Scattergl(
+                    x=prof_mut_x, y=prof_mut_y, mode="markers",
+                    marker=dict(symbol="circle", size=6, color=prof_mut_color,
+                                line=dict(width=1, color="darkred")),
+                    text=prof_mut_text,
+                    hovertemplate="Res %{x}<br>%{y:.4f}<br>%{text}<extra>Mutation</extra>",
+                    showlegend=False,
+                ), row=r, col=c)
 
     # --- Distributions ---
     if "distributions" in pos_map:
         r, c = pos_map["distributions"]
-        for i, name in enumerate(names):
-            df = df_dict[name]
-            if metric not in df.columns:
-                continue
-            vals = df[metric].dropna().values
-            if show_violin:
-                fig.add_trace(go.Violin(
-                    y=vals, name=display_names[i], legendgroup=display_names[i],
-                    showlegend=False, line_color=colours[i],
-                    meanline_visible=True, scalemode="width", width=0.8,
-                ), row=r, col=c)
-            else:
-                fig.add_trace(go.Box(
-                    y=vals, name=display_names[i], legendgroup=display_names[i],
-                    showlegend=False, marker_color=colours[i],
-                ), row=r, col=c)
+        if N > 15:
+            top_dist_names = names[:15]
+            rest_dist_names = names[15:]
+            for i, name in enumerate(top_dist_names):
+                df = df_dict[name]
+                if metric not in df.columns:
+                    continue
+                vals = df[metric].dropna().values
+                if show_violin:
+                    fig.add_trace(go.Violin(
+                        y=vals, name=display_names[i], legendgroup=display_names[i],
+                        showlegend=False, line_color=colours[i],
+                        meanline_visible=True, scalemode="width", width=0.8,
+                        meta={"seqName": names[i]},
+                    ), row=r, col=c)
+                else:
+                    fig.add_trace(go.Box(
+                        y=vals, name=display_names[i], legendgroup=display_names[i],
+                        showlegend=False, marker_color=colours[i],
+                        meta={"seqName": names[i]},
+                    ), row=r, col=c)
+            if rest_dist_names:
+                rest_vals = []
+                for name in rest_dist_names:
+                    df = df_dict[name]
+                    if metric in df.columns:
+                        rest_vals.extend(df[metric].dropna().values.tolist())
+                if rest_vals:
+                    others_label = f"Others ({len(rest_dist_names)})"
+                    if show_violin:
+                        fig.add_trace(go.Violin(
+                            y=rest_vals, name=others_label,
+                            showlegend=False, line_color="gray",
+                            meanline_visible=True, scalemode="width", width=0.8,
+                            meta={"seqName": "__others__"},
+                        ), row=r, col=c)
+                    else:
+                        fig.add_trace(go.Box(
+                            y=rest_vals, name=others_label,
+                            showlegend=False, marker_color="gray",
+                            meta={"seqName": "__others__"},
+                        ), row=r, col=c)
+        else:
+            for i, name in enumerate(names):
+                df = df_dict[name]
+                if metric not in df.columns:
+                    continue
+                vals = df[metric].dropna().values
+                if show_violin:
+                    fig.add_trace(go.Violin(
+                        y=vals, name=display_names[i], legendgroup=display_names[i],
+                        showlegend=False, line_color=colours[i],
+                        meanline_visible=True, scalemode="width", width=0.8,
+                        meta={"seqName": names[i]},
+                    ), row=r, col=c)
+                else:
+                    fig.add_trace(go.Box(
+                        y=vals, name=display_names[i], legendgroup=display_names[i],
+                        showlegend=False, marker_color=colours[i],
+                        meta={"seqName": names[i]},
+                    ), row=r, col=c)
 
     # --- Summary bar ---
     if "summary" in pos_map:
@@ -775,19 +950,24 @@ def plot_dashboard(source, **kwargs):
             x=display_names, y=mean_vals, marker_color=colours,
             name="Mean", showlegend=False,
             hovertemplate="%{customdata}<extra></extra>", customdata=hover_texts,
+            meta={"seqName": "__summary__"},
         ), row=r, col=c)
-        fig.add_trace(go.Scatter(
+        fig.add_trace(go.Scattergl(
             x=display_names, y=max_vals, mode="markers",
             marker=dict(symbol="diamond", size=9, color=colours,
                         line=dict(width=1, color="black")),
             name="Max", showlegend=False,
             hovertemplate="%{x}<br>Max: %{y:.4f}<extra></extra>",
+            meta={"seqName": "__summary__"},
         ), row=r, col=c)
 
     # --- Layout polish ---
+    y_tick_size = max(7, min(11, 200 // max(N, 1)))
     for panel, (r, c) in pos_map.items():
         if panel in ("heatmap", "profiles"):
             fig.update_xaxes(title_text="Residue Index", row=r, col=c)
+        if panel == "heatmap":
+            fig.update_yaxes(tickfont=dict(size=y_tick_size), row=r, col=c)
         if panel in ("profiles", "distributions"):
             fig.update_yaxes(title_text=metric, row=r, col=c,
                              type="log" if log_y else "linear")
@@ -797,10 +977,22 @@ def plot_dashboard(source, **kwargs):
                              type="log" if log_y else "linear")
 
     dashboard_title = title or f"Multi-Protein Dashboard \u2014 {metric}"
+    if N > 15:
+        legend_cfg = dict(
+            orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5,
+            font=dict(size=10),
+        )
+    else:
+        legend_cfg = dict(
+            orientation="v", yanchor="top", y=0.45, xanchor="left", x=1.02,
+        )
     fig.update_layout(
-        title=dashboard_title, height=height, width=width,
+        title=dict(text=dashboard_title, x=0, xanchor="left"),
+        height=height, width=width,
         autosize=True, template="plotly_white",
-        legend=dict(orientation="v", yanchor="top", y=0.45, xanchor="left", x=1.02),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"),
+        legend=legend_cfg,
     )
     return fig
 
@@ -1226,6 +1418,9 @@ def plot_3d_overlay_multi(reference, targets, **kwargs):
 def write_dashboard_html(figures, output, **kwargs):
     """Write multiple Plotly figures into a single tabbed HTML file.
 
+    Features lazy tab loading, cross-panel highlighting, modern CSS theme,
+    and enhanced search/filter controls.
+
     Parameters
     ----------
     figures : dict[str, go.Figure]
@@ -1240,22 +1435,127 @@ def write_dashboard_html(figures, output, **kwargs):
     tab_names = list(figures.keys())
     tab_divs = []
     for i, (name, fig) in enumerate(figures.items()):
-        div_html = fig.to_html(include_plotlyjs=(i == 0), full_html=False)
-        display = "block" if i == 0 else "none"
         safe_id = f"tab-{i}"
-        tab_divs.append(
-            f'<div id="{safe_id}" class="tab-content" style="display:{display};">'
-            f'{div_html}</div>'
-        )
+        if i == 0:
+            div_html = fig.to_html(include_plotlyjs=True, full_html=False)
+            tab_divs.append(
+                f'<div id="{safe_id}" class="tab-content" style="display:block;">'
+                f'{div_html}</div>'
+            )
+        else:
+            fig_json = fig.to_json()
+            tab_divs.append(
+                f'<div id="{safe_id}" class="tab-content" style="display:none;">'
+                f'<div class="plot-placeholder" id="plot-{safe_id}"></div>'
+                f'<script type="application/json" id="data-{safe_id}">'
+                f'{fig_json}</script></div>'
+            )
 
     buttons = []
     for i, name in enumerate(tab_names):
         active = ' class="active"' if i == 0 else ""
         buttons.append(f'<button{active} onclick="switchTab({i})">{name}</button>')
-    button_bar = '<div class="tab-bar">' + "".join(buttons) + "</div>"
+    button_bar = "".join(buttons)
+
+    css = """
+<style>
+:root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fb;
+    --bg-hover: #edf0f5;
+    --border-color: #e2e5ea;
+    --text-primary: #1a1d23;
+    --text-secondary: #5f6778;
+    --accent: #4f6ef7;
+    --accent-light: #eef1fe;
+    --radius: 8px;
+    --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; padding: 0; font-family: var(--font);
+    background: var(--bg-secondary); color: var(--text-primary); }
+body { display: flex; flex-direction: column; }
+.dash-header {
+    background: var(--bg-primary); border-bottom: 1px solid var(--border-color);
+    padding: 16px 24px 0; flex-shrink: 0;
+}
+.dash-header h1 {
+    margin: 0 0 12px; font-size: 20px; font-weight: 600;
+    color: var(--text-primary); letter-spacing: -0.3px;
+}
+.tab-bar { display: flex; gap: 4px; margin: 0; }
+.tab-bar button {
+    padding: 8px 20px; border: 1px solid var(--border-color); border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: var(--bg-secondary); cursor: pointer;
+    font-size: 13px; font-weight: 500; color: var(--text-secondary);
+    font-family: var(--font); transition: all 0.15s ease;
+}
+.tab-bar button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-bar button.active {
+    background: var(--bg-primary); border-bottom: 2px solid var(--bg-primary);
+    margin-bottom: -1px; color: var(--accent); font-weight: 600;
+}
+.control-bar {
+    background: var(--bg-primary); padding: 10px 24px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex; gap: 12px; align-items: center; flex-shrink: 0; flex-wrap: wrap;
+}
+.control-bar label {
+    font-size: 12px; color: var(--text-secondary);
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.search-wrapper {
+    position: relative; display: inline-flex; align-items: center;
+}
+.search-wrapper input[type="text"] {
+    padding: 6px 28px 6px 10px; border: 1px solid var(--border-color);
+    border-radius: var(--radius); font-size: 13px; width: 220px;
+    font-family: var(--font); background: var(--bg-secondary);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.search-wrapper input[type="text"]:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-light);
+}
+.search-clear {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer; color: var(--text-secondary);
+    font-size: 16px; padding: 2px; line-height: 1; display: none;
+}
+.search-clear:hover { color: var(--text-primary); }
+.control-bar select {
+    padding: 6px 10px; border: 1px solid var(--border-color);
+    border-radius: var(--radius); font-size: 13px;
+    font-family: var(--font); background: var(--bg-secondary); cursor: pointer;
+}
+.control-bar select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-light);
+}
+.result-count { font-size: 12px; color: var(--text-secondary); margin-left: 4px; }
+.kbd-hint {
+    font-size: 11px; color: var(--text-secondary); margin-left: auto; opacity: 0.7;
+}
+.kbd-hint kbd {
+    background: var(--bg-secondary); border: 1px solid var(--border-color);
+    border-radius: 3px; padding: 1px 5px; font-size: 10px; font-family: var(--font);
+}
+.tab-content { flex: 1; padding: 8px 16px; overflow: auto; background: var(--bg-secondary); }
+.tab-content .plotly-graph-div { width: 100% !important; }
+.plot-placeholder {
+    width: 100%; min-height: 400px; display: flex;
+    align-items: center; justify-content: center; color: var(--text-secondary);
+}
+</style>
+"""
 
     js = """
 <script>
+/* --- Tab switching with lazy loading --- */
+var _tabInitialized = {0: true};
+
 function switchTab(idx) {
     var tabs = document.querySelectorAll('.tab-content');
     var buttons = document.querySelectorAll('.tab-bar button');
@@ -1263,43 +1563,289 @@ function switchTab(idx) {
         tabs[i].style.display = (i === idx) ? 'block' : 'none';
         buttons[i].className = (i === idx) ? 'active' : '';
     }
+    if (!_tabInitialized[idx]) {
+        _tabInitialized[idx] = true;
+        var tab = tabs[idx];
+        var jsonScript = tab.querySelector('script[type="application/json"]');
+        var placeholder = tab.querySelector('.plot-placeholder');
+        if (jsonScript && placeholder) {
+            var figData = JSON.parse(jsonScript.textContent);
+            Plotly.newPlot(placeholder, figData.data, figData.layout, {responsive: true});
+            _setupHighlighting(placeholder);
+        }
+    }
     var visibleTab = tabs[idx];
     var plots = visibleTab.querySelectorAll('.plotly-graph-div');
     for (var j = 0; j < plots.length; j++) {
-        if (window.Plotly) { window.Plotly.Plots.resize(plots[j]); }
+        if (window.Plotly) { Plotly.Plots.resize(plots[j]); }
     }
+    _origData = {};
+    applyFilter();
 }
+
 window.addEventListener('resize', function() {
     var plots = document.querySelectorAll('.tab-content[style*="block"] .plotly-graph-div');
     for (var i = 0; i < plots.length; i++) {
-        if (window.Plotly) { window.Plotly.Plots.resize(plots[i]); }
+        if (window.Plotly) { Plotly.Plots.resize(plots[i]); }
     }
+});
+
+/* --- Cross-panel highlighting --- */
+var _highlightedSeq = null;
+var _origStyles = {};
+
+function _setupHighlighting(plotEl) {
+    plotEl.on('plotly_click', function(data) {
+        if (!data || !data.points || !data.points.length) return;
+        var pt = data.points[0];
+        var meta = pt.data.meta;
+        var seqName = meta ? meta.seqName : null;
+        if (!seqName || seqName.indexOf('__') === 0) return;
+        if (_highlightedSeq === seqName) {
+            _highlightedSeq = null;
+            _resetHighlight();
+        } else {
+            _highlightedSeq = seqName;
+            _applyHighlight(seqName);
+        }
+    });
+}
+
+function _ensureOrigStyles(plot) {
+    if (_origStyles[plot.id]) return;
+    _origStyles[plot.id] = plot.data.map(function(t) {
+        return {
+            opacity: t.opacity,
+            lineWidth: (t.line && t.line.width) ? t.line.width : undefined
+        };
+    });
+}
+
+function _applyHighlight(seqName) {
+    var plots = document.querySelectorAll('.tab-content[style*="block"] .plotly-graph-div');
+    plots.forEach(function(plot) {
+        if (!plot.data) return;
+        _ensureOrigStyles(plot);
+        for (var i = 0; i < plot.data.length; i++) {
+            var trace = plot.data[i];
+            var meta = trace.meta;
+            var tSeq = meta ? meta.seqName : null;
+            if (!tSeq || tSeq.indexOf('__') === 0) continue;
+            if (tSeq === seqName) {
+                Plotly.restyle(plot, {opacity: 1, 'line.width': 3}, [i]);
+            } else {
+                Plotly.restyle(plot, {opacity: 0.08}, [i]);
+            }
+        }
+    });
+}
+
+function _resetHighlight() {
+    var plots = document.querySelectorAll('.tab-content[style*="block"] .plotly-graph-div');
+    plots.forEach(function(plot) {
+        if (!plot.data) return;
+        var orig = _origStyles[plot.id];
+        if (!orig) return;
+        for (var i = 0; i < plot.data.length; i++) {
+            var meta = plot.data[i].meta;
+            if (!meta || !meta.seqName || meta.seqName.indexOf('__') === 0) continue;
+            var o = orig[i] || {};
+            var update = {};
+            update.opacity = o.opacity !== undefined ? o.opacity : null;
+            if (o.lineWidth !== undefined) {
+                update['line.width'] = o.lineWidth;
+            }
+            Plotly.restyle(plot, update, [i]);
+        }
+    });
+    _origStyles = {};
+}
+
+/* --- Search & Top-N filtering --- */
+var _origData = {};
+var _totalCount = 0;
+
+function _getActivePlots() {
+    var tab = document.querySelector('.tab-content[style*="display: block"], .tab-content[style*="display:block"]');
+    if (!tab) return [];
+    return Array.from(tab.querySelectorAll('.plotly-graph-div'));
+}
+
+function _initOrigData(plots) {
+    plots.forEach(function(plot) {
+        if (_origData[plot.id]) return;
+        var data = plot.data || [];
+        var names = data.map(function(t) { return t.name || ''; });
+        var entry = { traceNames: names };
+        for (var i = 0; i < data.length; i++) {
+            if (data[i].type === 'heatmap') {
+                entry.heatmapIdx = i;
+                entry.heatmapZ = JSON.parse(JSON.stringify(data[i].z));
+                entry.heatmapY = data[i].y.slice();
+                if (data[i].customdata) {
+                    entry.heatmapCD = JSON.parse(JSON.stringify(data[i].customdata));
+                }
+                if (!_totalCount) _totalCount = entry.heatmapY.length;
+                break;
+            }
+        }
+        if (!_totalCount) {
+            var uniqueNames = new Set(names.filter(function(n) {
+                return n && n !== 'Mean' && n !== 'Max' && n.indexOf('IQR') !== 0;
+            }));
+            _totalCount = uniqueNames.size;
+        }
+        _origData[plot.id] = entry;
+    });
+}
+
+function _updateResultCount(shown) {
+    var el = document.getElementById('result-count');
+    if (el) el.textContent = 'Showing ' + shown + ' of ' + (_totalCount || '?');
+}
+
+function applyFilter() {
+    var query = (document.getElementById('search-input').value || '').toLowerCase();
+    var topN = document.getElementById('topn-select').value;
+    var plots = _getActivePlots();
+    _initOrigData(plots);
+
+    var shownCount = 0;
+
+    plots.forEach(function(plot) {
+        var orig = _origData[plot.id];
+        if (!orig) return;
+        var data = plot.data || [];
+
+        if (orig.heatmapIdx !== undefined) {
+            var hIdx = orig.heatmapIdx;
+            var matchIdx = [];
+            for (var r = 0; r < orig.heatmapY.length; r++) {
+                if (!query || orig.heatmapY[r].toLowerCase().indexOf(query) !== -1) {
+                    matchIdx.push(r);
+                }
+            }
+            if (topN !== 'all') {
+                matchIdx = matchIdx.slice(0, parseInt(topN));
+            }
+            shownCount = Math.max(shownCount, matchIdx.length);
+            var newZ = matchIdx.map(function(i) { return orig.heatmapZ[i]; });
+            var newY = matchIdx.map(function(i) { return orig.heatmapY[i]; });
+            var update = { z: [newZ], y: [newY] };
+            if (orig.heatmapCD) {
+                update.customdata = [matchIdx.map(function(i) { return orig.heatmapCD[i]; })];
+            }
+            Plotly.restyle(plot, update, [hIdx]);
+
+            for (var s = 0; s < data.length; s++) {
+                if (s === hIdx) continue;
+                if (data[s].type === 'scatter' && data[s].mode === 'markers') {
+                    var oy = (plot.data[s]._origY || data[s].y);
+                    if (!plot.data[s]._origY) {
+                        plot.data[s]._origY = data[s].y.slice();
+                        plot.data[s]._origX = data[s].x.slice();
+                        plot.data[s]._origText = data[s].text ? data[s].text.slice() : null;
+                    }
+                    var ySet = new Set(newY);
+                    var fX = [], fY = [], fT = [];
+                    for (var k = 0; k < plot.data[s]._origY.length; k++) {
+                        if (ySet.has(plot.data[s]._origY[k])) {
+                            fX.push(plot.data[s]._origX[k]);
+                            fY.push(plot.data[s]._origY[k]);
+                            if (plot.data[s]._origText) fT.push(plot.data[s]._origText[k]);
+                        }
+                    }
+                    var sUpdate = { x: [fX], y: [fY] };
+                    if (plot.data[s]._origText) sUpdate.text = [fT];
+                    Plotly.restyle(plot, sUpdate, [s]);
+                }
+            }
+        } else {
+            var matchNames = new Set();
+            var count = 0;
+            var limit = (topN !== 'all') ? parseInt(topN) : Infinity;
+            orig.traceNames.forEach(function(n) {
+                if (n && (!query || n.toLowerCase().indexOf(query) !== -1) && count < limit) {
+                    matchNames.add(n);
+                    count++;
+                }
+            });
+            shownCount = Math.max(shownCount, matchNames.size);
+            for (var t = 0; t < data.length; t++) {
+                var tname = orig.traceNames[t] || '';
+                var keep = !tname || tname === 'Mean' || tname === 'Max'
+                    || tname.indexOf('IQR') === 0 || matchNames.has(tname);
+                Plotly.restyle(plot, { visible: keep ? true : 'legendonly' }, [t]);
+            }
+        }
+    });
+    _updateResultCount(shownCount);
+    var clearBtn = document.getElementById('search-clear');
+    if (clearBtn) clearBtn.style.display = query ? 'block' : 'none';
+}
+
+function clearSearch() {
+    var input = document.getElementById('search-input');
+    if (input) { input.value = ''; }
+    applyFilter();
+    if (input) input.focus();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var search = document.getElementById('search-input');
+    var topn = document.getElementById('topn-select');
+    if (search) {
+        var timer;
+        search.addEventListener('input', function() {
+            clearTimeout(timer);
+            timer = setTimeout(applyFilter, 250);
+        });
+    }
+    if (topn) topn.addEventListener('change', applyFilter);
+
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            if (search) {
+                e.preventDefault();
+                search.focus();
+                search.select();
+            }
+        }
+    });
+
+    var plots = document.querySelectorAll('.plotly-graph-div');
+    plots.forEach(function(p) { _setupHighlighting(p); });
 });
 </script>
 """
 
-    css = """
-<style>
-html, body { height: 100%; margin: 0; padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-body { display: flex; flex-direction: column; }
-.tab-bar { background: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 8px 16px 0;
-    display: flex; gap: 4px; flex-shrink: 0; }
-.tab-bar button { padding: 8px 20px; border: 1px solid #dee2e6; border-bottom: none;
-    border-radius: 6px 6px 0 0; background: #e9ecef; cursor: pointer;
-    font-size: 14px; font-weight: 500; color: #495057; transition: all 0.15s; }
-.tab-bar button:hover { background: #fff; }
-.tab-bar button.active { background: #fff; border-bottom: 2px solid #fff;
-    margin-bottom: -2px; color: #212529; font-weight: 600; }
-.tab-content { flex: 1; padding: 0; overflow: auto; }
-.tab-content .plotly-graph-div { width: 100% !important; }
-</style>
-"""
+    control_bar = (
+        '<div class="control-bar">'
+        '<label for="search-input">Search</label>'
+        '<div class="search-wrapper">'
+        '<input type="text" id="search-input" placeholder="Filter by name\u2026">'
+        '<button class="search-clear" id="search-clear" onclick="clearSearch()" '
+        'title="Clear">&times;</button>'
+        '</div>'
+        '<label for="topn-select">Show</label>'
+        '<select id="topn-select">'
+        '<option value="10">Top 10</option>'
+        '<option value="20" selected>Top 20</option>'
+        '<option value="50">Top 50</option>'
+        '<option value="100">Top 100</option>'
+        '<option value="all">All</option>'
+        '</select>'
+        '<span class="result-count" id="result-count"></span>'
+        '<span class="kbd-hint"><kbd>\u2318</kbd>+<kbd>F</kbd> to search</span>'
+        '</div>'
+    )
 
     html = (
         f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<title>{page_title}</title>{css}</head><body>"
-        f"{button_bar}{''.join(tab_divs)}{js}</body></html>"
+        f'<div class="dash-header"><h1>{page_title}</h1>'
+        f'<div class="tab-bar">{button_bar}</div></div>'
+        f"{control_bar}{''.join(tab_divs)}{js}</body></html>"
     )
     output.write_text(html)
     return str(output)
