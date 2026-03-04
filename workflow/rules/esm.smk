@@ -82,6 +82,9 @@ rule run_esm_chunk:
         """
         set -euo pipefail
 
+        # Add ProtForge root to PYTHONPATH (for utils.utils import)
+        export PYTHONPATH="$(pwd)${{PYTHONPATH:+:$PYTHONPATH}}"
+
         if [ -n "{params.container_cmd}" ]; then
             {params.container_cmd} \
                 --env TORCH_HOME={params.cache_dir} \
@@ -91,16 +94,13 @@ rule run_esm_chunk:
                     --output_dir {params.output_dir} \
                     --processed_paths_file {ESM_CHUNKS}/processed_paths_{wildcards.chunk_id}.txt
         else
-            module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
-            set +u
-            source "$(conda info --base)/etc/profile.d/conda.sh"
-            conda activate {params.env_path}
-            set -u
+            module load gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
             if [ -n "{params.cache_dir}" ]; then
                 export TORCH_HOME="{params.cache_dir}"
                 export HF_HOME="{params.cache_dir}"
             fi
-            python {input.script} \
+            # Use conda env's Python directly (avoids activation conflicts with Snakemake)
+            {params.env_path}/bin/python {input.script} \
                 --fasta_list {input.fasta_list} \
                 --output_dir {params.output_dir} \
                 --processed_paths_file {ESM_CHUNKS}/processed_paths_{wildcards.chunk_id}.txt
