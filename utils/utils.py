@@ -700,8 +700,185 @@ def generate_mutation_dataset(seq:str, n:int)-> pd.DataFrame:
     return pd.DataFrame({"aaMutations":mutations})
 
 
+# === Correlation of structural metrics with external phenotype ===
+
+def load_es_data(
+    es_dir: str,
+    metric: str = "strain",
+) -> dict[str, pd.DataFrame]:
+    """Load per-residue ES CSVs from a directory.
+
+    Parameters
+    ----------
+    es_dir : str or Path
+        Directory containing ``seq_XXXXX.csv`` files with columns
+        ``residue_index``, ``protA_resname``, ``protB_resname``, and one or more
+        metric columns (e.g. ``strain``).
+    metric : str
+        Name of the metric column to keep (default ``"strain"``).
+
+    Returns
+    -------
+    dict[str, DataFrame]
+        ``{seq_name: DataFrame}`` where each DataFrame has columns
+        ``residue_index`` and ``<metric>``.
+    """
+    es_path = Path(es_dir)
+    csvs = sorted(es_path.glob("*.csv"))
+    result = {}
+    for csv_file in csvs:
+        if csv_file.name == "combined.csv":
+            continue
+        df = pd.read_csv(csv_file)
+        if metric not in df.columns:
+            continue
+        result[csv_file.stem] = df[["residue_index", metric]].dropna(subset=[metric])
+    return result
 
 
+def correlate_metric_with_phenotype(
+    es_dir: str,
+    phenotype_path: str,
+    phenotype_col: str = "medianBrightness",
+    metric: str = "strain",
+    phenotype_sep: str = "\t",
+    aggregations: list[str] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Correlate a per-residue structural metric (e.g. effective strain) with
+    an external phenotype (e.g. fluorescence brightness).
+
+    Sequence names are expected to follow the ``seq_XXXXX`` convention where
+    ``XXXXX`` is the 0-based row index in the phenotype file.
+
+    Parameters
+    ----------
+    es_dir : str
+        Directory with per-sequence CSV files (``seq_XXXXX.csv``).
+    phenotype_path : str
+        Path to the phenotype table (TSV/CSV).
+    phenotype_col : str
+        Column name for the phenotype value (default ``"medianBrightness"``).
+    metric : str
+        Per-residue metric column in the ES CSVs (default ``"strain"``).
+    phenotype_sep : str
+        Separator for the phenotype file (default ``"\\t"``).
+    aggregations : list[str] or None
+        How to aggregate per-residue metric to a single value per sequence.
+        Default: ``["mean", "max", "sum"]``.
+
+    Returns
+    -------
+    dict with keys:
+        ``"per_residue"`` : DataFrame
+            Per-residue Pearson correlation between the metric at each residue
+            position and the phenotype across sequences.  Columns:
+            ``residue_index``, ``correlation``, ``p_value``, ``n_sequences``.
+        ``"per_sequence"`` : DataFrame
+            One row per sequence with columns: ``seq_name``, ``seq_index``,
+            ``<phenotype_col>``, ``<metric>_mean``, ``<metric>_max``,
+            ``<metric>_sum``.
+        ``"overall"`` : DataFrame
+            Pearson correlation between each aggregated metric and the phenotype.
+            Columns: ``aggregation``, ``correlation``, ``p_value``, ``n``.
+    """
+    from scipy import stats
+
+    if aggregations is None:
+        aggregations = ["mean", "max", "sum"]
+
+    # Load phenotype data
+    pheno_df = pd.read_csv(phenotype_path, sep=phenotype_sep)
+
+    # Load ES data
+    es_data = load_es_data(es_dir, metric=metric)
+    if not es_data:
+        raise FileNotFoundError(f"No ES CSVs with metric '{metric}' found in {es_dir}")
+
+    # Build per-sequence table: map seq_XXXXX -> row index -> phenotype
+    records = []
+    residue_values = {}  # {residue_index: [(metric_val, phenotype_val), ...]}
+
+    for seq_name, df in sorted(es_data.items()):
+        # Extract numeric index from seq_XXXXX
+        idx_str = seq_name.replace("seq_", "")
+        try:
+            seq_idx = int(idx_str)
+        except ValueError:
+            continue
+
+        if seq_idx >= len(pheno_df):
+            continue
+
+        phenotype_val = pheno_df.iloc[seq_idx].get(phenotype_col)
+        if pd.isna(phenotype_val):
+            continue
+
+        # Per-sequence aggregations
+        row = {"seq_name": seq_name, "seq_index": seq_idx, phenotype_col: phenotype_val}
+        vals = df[metric].values
+        if "mean" in aggregations:
+            row[f"{metric}_mean"] = np.nanmean(vals)
+        if "max" in aggregations:
+            row[f"{metric}_max"] = np.nanmax(vals)
+        if "sum" in aggregations:
+            row[f"{metric}_sum"] = np.nansum(vals)
+        records.append(row)
+
+        # Collect per-residue values for residue-level correlation
+        for _, r in df.iterrows():
+            res_idx = int(r["residue_index"])
+            residue_values.setdefault(res_idx, []).append(
+                (r[metric], phenotype_val)
+            )
+
+    if not records:
+        raise ValueError("No sequences could be matched between ES data and phenotype file")
+
+    per_seq_df = pd.DataFrame(records).sort_values("seq_index").reset_index(drop=True)
+
+    # Overall correlations (aggregated metric vs phenotype)
+    overall_records = []
+    for agg in aggregations:
+        col = f"{metric}_{agg}"
+        if col not in per_seq_df.columns:
+            continue
+        valid = per_seq_df[[col, phenotype_col]].dropna()
+        if len(valid) < 3:
+            continue
+        r, p = stats.pearsonr(valid[col], valid[phenotype_col])
+        overall_records.append({
+            "aggregation": agg,
+            "correlation": r,
+            "p_value": p,
+            "n": len(valid),
+        })
+    overall_df = pd.DataFrame(overall_records)
+
+    # Per-residue correlations
+    residue_records = []
+    for res_idx in sorted(residue_values.keys()):
+        pairs = residue_values[res_idx]
+        if len(pairs) < 3:
+            continue
+        metric_vals = np.array([p[0] for p in pairs])
+        pheno_vals = np.array([p[1] for p in pairs])
+        # Skip if no variance
+        if np.std(metric_vals) == 0 or np.std(pheno_vals) == 0:
+            continue
+        r, p = stats.pearsonr(metric_vals, pheno_vals)
+        residue_records.append({
+            "residue_index": res_idx,
+            "correlation": r,
+            "p_value": p,
+            "n_sequences": len(pairs),
+        })
+    per_residue_df = pd.DataFrame(residue_records)
+
+    return {
+        "per_residue": per_residue_df,
+        "per_sequence": per_seq_df,
+        "overall": overall_df,
+    }
 
 
 
