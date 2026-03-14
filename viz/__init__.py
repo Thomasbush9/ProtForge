@@ -39,6 +39,12 @@ from ._cif_parser import (
     load_confidence_dfs,
 )
 from .dashboard import build_dashboard
+from .correlation import (
+    plot_per_residue_correlation,
+    plot_per_sequence_scatter,
+    plot_overall_summary,
+    build_correlation_report,
+)
 
 try:
     from .app import create_app
@@ -63,6 +69,11 @@ __all__ = [
     "parse_cif",
     "load_plddt_df",
     "load_confidence_dfs",
+    # Correlation plots
+    "plot_per_residue_correlation",
+    "plot_per_sequence_scatter",
+    "plot_overall_summary",
+    "build_correlation_report",
     # Dash app (optional, requires dash)
     "create_app",
 ]

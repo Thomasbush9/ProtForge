@@ -52,6 +52,8 @@ def build_dashboard(
     tabs=None,
     metric="strain",
     title="ProtForge Dashboard",
+    top_n=None,
+    sort_by="mean",
 ):
     """Build and write the multi-tab dashboard.
 
@@ -72,6 +74,11 @@ def build_dashboard(
         ES metric to visualise (default "strain").
     title : str
         HTML page title.
+    top_n : int or None
+        Only include the top N sequences (ranked by *sort_by*).
+    sort_by : str
+        Aggregation used for ranking when *top_n* is set.
+        One of ``"mean"``, ``"max"``, ``"median"`` (default ``"mean"``).
     """
     sequences_dir = Path(sequences_dir)
     if tabs is None:
@@ -89,7 +96,8 @@ def build_dashboard(
                 fig_dash = plot_dashboard(
                     str(es_dir),
                     metric=metric,
-                    sort_by="mean",
+                    sort_by=sort_by,
+                    top_n=top_n,
                     highlight_mutations=True,
                     log_y=True,
                     title=f"Effective Strain Dashboard ({metric})",
@@ -137,11 +145,23 @@ def build_dashboard(
                     except FileNotFoundError:
                         pass
 
+            # Apply top_n filtering to confidence data
+            if top_n is not None and top_n < len(conf_dfs):
+                import numpy as np
+                conf_stats = {}
+                for name, df in conf_dfs.items():
+                    vals = df["plddt"].dropna().values.astype(float) if "plddt" in df.columns else np.array([])
+                    agg = sort_by if sort_by in ("mean", "max", "median") else "mean"
+                    conf_stats[name] = float(getattr(np, f"nan{agg}")(vals)) if len(vals) else 0.0
+                sorted_names = sorted(conf_stats, key=conf_stats.get, reverse=True)[:top_n]
+                conf_dfs = {n: conf_dfs[n] for n in sorted_names}
+
             print(f"  Found pLDDT data for {len(conf_dfs)} sequences.")
             fig_conf = plot_dashboard(
                 conf_dfs,
                 metric="plddt",
-                sort_by="mean",
+                sort_by=sort_by,
+                top_n=top_n,
                 highlight_mutations=has_mutations,
                 log_y=False,
                 cmap="RdYlGn",
@@ -169,6 +189,28 @@ def build_dashboard(
                 if cif:
                     # Include target if it has a CIF (ES CSV is optional)
                     targets_cif[name] = cif
+
+            # Apply top_n filtering to 3D overlay targets
+            if top_n is not None and top_n < len(targets_cif):
+                # If ES data available, rank by metric; otherwise keep first top_n alphabetically
+                if es_dir_path and es_dir_path.is_dir():
+                    import numpy as np
+                    try:
+                        _es_dfs = _load_df_dict(str(es_dir_path))
+                        es_stats = {}
+                        for name in targets_cif:
+                            if name in _es_dfs and metric in _es_dfs[name].columns:
+                                vals = _es_dfs[name][metric].dropna().values.astype(float)
+                                agg = sort_by if sort_by in ("mean", "max", "median") else "mean"
+                                es_stats[name] = float(getattr(np, f"nan{agg}")(vals)) if len(vals) else 0.0
+                            else:
+                                es_stats[name] = 0.0
+                        sorted_names = sorted(es_stats, key=es_stats.get, reverse=True)[:top_n]
+                    except FileNotFoundError:
+                        sorted_names = sorted(targets_cif)[:top_n]
+                else:
+                    sorted_names = sorted(targets_cif)[:top_n]
+                targets_cif = {n: targets_cif[n] for n in sorted_names}
 
             if targets_cif:
                 # Load ES data for strain colouring (optional)
@@ -257,6 +299,15 @@ def main():
         "--title", default="ProtForge Dashboard",
         help="HTML page title",
     )
+    parser.add_argument(
+        "--top_n", type=int, default=None,
+        help="Only include top N sequences (by sort metric)",
+    )
+    parser.add_argument(
+        "--sort_by", default="mean",
+        choices=["mean", "max", "median"],
+        help="Sort metric for top_n filtering (default: mean)",
+    )
 
     # Dash server mode
     parser.add_argument(
@@ -333,6 +384,8 @@ def main():
         tabs=args.tabs,
         metric=args.metric,
         title=args.title,
+        top_n=args.top_n,
+        sort_by=args.sort_by,
     )
 
 
