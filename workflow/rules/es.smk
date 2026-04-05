@@ -126,6 +126,8 @@ rule run_es_all:
         unpack(_es_input),
     output:
         done = f"{ES_DIR}/.done",
+    benchmark:
+        f"{OUTPUT}/benchmarks/es/es_all.tsv"
     log:
         f"{ES_DIR}/es_all.log",
     params:

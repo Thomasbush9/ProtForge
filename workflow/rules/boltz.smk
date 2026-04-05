@@ -68,6 +68,8 @@ rule run_boltz_predict:
         chunk_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}",
     output:
         done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
+    benchmark:
+        f"{OUTPUT}/benchmarks/boltz/predict_{{chunk_id}}_run_{{run_id}}.tsv"
     params:
         output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         cache_dir = BOLTZ_CFG.get("cache_dir", ""),
@@ -115,11 +117,11 @@ rule run_boltz_predict:
 
 
 rule organize_boltz_chunk:
-    """Copy model outputs to sequences/{seq}/boltz/ (or boltz/run_N/ for multi-run)."""
+    """Copy model outputs to sequences/{seq}/boltz/ then delete raw chunk output."""
     input:
         done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
     output:
-        organized = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.organized",
+        organized = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}.organized",
     params:
         boltz_output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         sequences_dir = SEQUENCES_DIR,
@@ -134,6 +136,8 @@ rule organize_boltz_chunk:
             --sequences_dir {params.sequences_dir} \
             {params.delete_msa} {params.subdirectory}
 
+        rm -rf {params.boltz_output_dir}
+
         touch {output.organized}
         """
 
@@ -143,23 +147,17 @@ def aggregate_boltz_organized(wildcards):
     chunk_ids = get_boltz_chunk_ids(wildcards)
     run_ids = list(range(NUM_RUNS))
     return expand(
-        f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.organized",
+        f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}.organized",
         chunk_id=chunk_ids, run_id=run_ids,
     )
 
 
 rule boltz_complete:
-    """Aggregate sentinel: all Boltz chunks × runs organized. Cleans up raw chunk outputs."""
+    """Aggregate sentinel: all Boltz chunks × runs organized."""
     input:
         aggregate_boltz_organized,
     output:
         done = f"{OUTPUT}/.boltz_complete",
-    params:
-        chunks_dir = BOLTZ_CHUNKS,
     localrule: True
     shell:
-        """
-        # Remove raw Boltz outputs (all models already organized to sequences/)
-        find {params.chunks_dir} -maxdepth 1 -type d -name 'chunk_*_output' -exec rm -rf {{}} +
-        touch {output.done}
-        """
+        "touch {output.done}"
