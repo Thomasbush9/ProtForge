@@ -846,10 +846,13 @@ def correlate_metric_with_phenotype(
         if len(valid) < 3:
             continue
         r, p = stats.pearsonr(valid[col], valid[phenotype_col])
+        rho, p_s = stats.spearmanr(valid[col], valid[phenotype_col])
         overall_records.append({
             "aggregation": agg,
             "correlation": r,
             "p_value": p,
+            "spearman": rho,
+            "spearman_p_value": p_s,
             "n": len(valid),
         })
     overall_df = pd.DataFrame(overall_records)
@@ -866,10 +869,13 @@ def correlate_metric_with_phenotype(
         if np.std(metric_vals) == 0 or np.std(pheno_vals) == 0:
             continue
         r, p = stats.pearsonr(metric_vals, pheno_vals)
+        rho, p_s = stats.spearmanr(metric_vals, pheno_vals)
         residue_records.append({
             "residue_index": res_idx,
             "correlation": r,
             "p_value": p,
+            "spearman": rho,
+            "spearman_p_value": p_s,
             "n_sequences": len(pairs),
         })
     per_residue_df = pd.DataFrame(residue_records)

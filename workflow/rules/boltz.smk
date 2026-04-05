@@ -68,6 +68,8 @@ rule run_boltz_predict:
         chunk_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}",
     output:
         done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
+    benchmark:
+        f"{OUTPUT}/benchmarks/boltz/predict_{{chunk_id}}_run_{{run_id}}.tsv"
     params:
         output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         cache_dir = BOLTZ_CFG.get("cache_dir", ""),

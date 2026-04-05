@@ -56,6 +56,8 @@ rule run_colabfold_search:
         combined = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/combined.fasta",
     output:
         done = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output/.done",
+    benchmark:
+        f"{OUTPUT}/benchmarks/msa/colabfold_search_{{chunk_id}}.tsv"
     params:
         output_dir = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output",
         mmseq2_db = MSA_CFG.get("mmseq2_db", ""),

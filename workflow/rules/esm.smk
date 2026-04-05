@@ -36,12 +36,13 @@ checkpoint chunk_yamls_for_esm:
     params:
         yaml_dir = ESM_YAML_SOURCE,
         num_chunks = ESM_CFG.get("num_chunks", 1),
+        esm_chunks_dir = ESM_CHUNKS,
     localrule: True
     shell:
         """
         python workflow/scripts/chunk_yamls_for_esm.py \
             --yaml_dir {params.yaml_dir} \
-            --output_dir {ESM_CHUNKS} \
+            --output_dir {params.esm_chunks_dir} \
             --num_chunks {params.num_chunks}
         """
 
@@ -66,11 +67,16 @@ rule run_esm_chunk:
         script = "slurm_scripts/run_esm.py",
     output:
         done = f"{ESM_CHUNKS}/chunk_{{chunk_id}}.done",
+    benchmark:
+        f"{OUTPUT}/benchmarks/esm/esm_chunk_{{chunk_id}}.tsv"
+    log:
+        f"{ESM_CHUNKS}/esm_chunk_{{chunk_id}}.log",
     params:
         output_dir = SEQUENCES_DIR,
         env_path = ESM_CFG.get("env_path", ""),
         cache_dir = ESM_CFG.get("cache_dir", ""),
         container_cmd = container_cmd("esm"),
+        esm_chunks_dir = ESM_CHUNKS,
     resources:
         cpus_per_task = 16,
         mem_mb = 32000,
@@ -81,6 +87,8 @@ rule run_esm_chunk:
     shell:
         """
         set -euo pipefail
+        exec > {log} 2>&1
+        set -x
 
         # Add ProtForge root to PYTHONPATH (for utils.utils import)
         export PYTHONPATH="$(pwd)${{PYTHONPATH:+:$PYTHONPATH}}"
@@ -92,7 +100,7 @@ rule run_esm_chunk:
                 python /opt/protforge/run_esm.py \
                     --fasta_list {input.fasta_list} \
                     --output_dir {params.output_dir} \
-                    --processed_paths_file {ESM_CHUNKS}/processed_paths_{wildcards.chunk_id}.txt
+                    --processed_paths_file {params.esm_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt
         else
             module load gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
             if [ -n "{params.cache_dir}" ]; then
@@ -103,7 +111,7 @@ rule run_esm_chunk:
             {params.env_path}/bin/python {input.script} \
                 --fasta_list {input.fasta_list} \
                 --output_dir {params.output_dir} \
-                --processed_paths_file {ESM_CHUNKS}/processed_paths_{wildcards.chunk_id}.txt
+                --processed_paths_file {params.esm_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt
         fi
 
         touch {output.done}
