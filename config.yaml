@@ -6,13 +6,13 @@ pipeline:
   es: false
 
 input:
-  fasta_dir: /n/home06/tbush/gfp_function_prediction/data/20250815_102358_subsample/subsample   # fasta_dir: /n/home06/tbush/gfp_function_prediction/data/20250815_102358_subsample/subsample
+  fasta_dir: /n/home06/tbush/gfp_function_prediction/data/20250815_102426_subsample/subsample
   # When pipeline.msa is false, set to existing YAML root (dir containing .yaml)
   # yaml_dir: /path/to/chunks_20240101_120000
 
 # Output parent directory where all results will be stored
 output:
-  parent_dir: /n/netscratch/kempner_bsabatini_lab/Lab/Boltz-project/outputs_100
+  parent_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/boltz_10k
 
 # MSA (Multiple Sequence Alignment) generation settings
 msa:
@@ -24,7 +24,7 @@ msa:
 
 # Boltz structure prediction settings
 boltz:
-  max_files_per_job: 25            # Maximum number of .yaml files per boltz array job
+  max_files_per_job: 30            # Maximum number of .yaml files per boltz array job
   array_max_concurrency: 10       # Maximum concurrent boltz array tasks
   delete_msa_after_processing: false  # Delete MSA files after successful boltz processing
   recycling_steps: 10               # Number of recycling steps for boltz prediction
@@ -37,9 +37,8 @@ boltz:
 # ESM embeddings generation settings
 esm:
   num_chunks: 1                    # Number of chunks for ESM array job
-  array_max_concurrency: 20       # Maximum concurrent ESM array tasks
+  array_max_concurrency: 40       # Maximum concurrent ESM array tasks
   env_path: /n/home06/tbush/envs/esm
-  work_dir: /n/home06/tbush/gfp_function_prediction
   cache_dir: /n/home06/tbush/cache/esm  # ESM model/embedding cache (TORCH_HOME)
 
 # ES (Evolutionary Scale / Effective Strain) analysis settings
@@ -63,8 +62,8 @@ slurm:
   # Optional per-job overrides (use same keys as pipeline + checker names)
   # msa:
   #   partition: other_partition
-  # boltz:
-  #   partition: other_partition
+  boltz:
+    partition: kempner_h100
   # esm:
   #   partition: other_partition
   # es:
