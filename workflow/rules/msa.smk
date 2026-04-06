@@ -77,6 +77,9 @@ rule run_colabfold_search:
         export CUDA_VISIBLE_DEVICES=0
         export NUM_GPU_DEVICES=1
 
+        # Clean stale temp files from previous failed runs to avoid
+        # "Could not write file" errors from mmseqs2
+        rm -rf {params.output_dir}/tmp* {params.output_dir}/.done
         mkdir -p {params.output_dir}
 
         if [ -n "{params.container_cmd}" ]; then

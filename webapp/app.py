@@ -139,7 +139,7 @@ def format_elapsed(start_iso: str) -> str:
 
 
 def get_slurm_jobs() -> list[dict]:
-    """Get current user's SLURM jobs as list of dicts."""
+    """Get current user's SLURM jobs (running/pending) as list of dicts."""
     try:
         r = subprocess.run(
             ["squeue", "-u", USER, "--json"],
@@ -149,6 +149,46 @@ def get_slurm_jobs() -> list[dict]:
         return data.get("jobs", [])
     except Exception:
         return []
+
+
+def get_recent_jobs(hours: int = 24) -> list[dict]:
+    """Get recent jobs (including completed/failed) via sacct."""
+    try:
+        r = subprocess.run(
+            ["sacct", "-u", USER, "--starttime", f"now-{hours}hours",
+             "--format=JobID,JobName%50,State,ExitCode,Elapsed,Start,End,Reason%30",
+             "--noheader", "--parsable2"],
+            capture_output=True, text=True, timeout=15,
+        )
+        jobs = []
+        for line in r.stdout.strip().splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("|")
+            if len(parts) < 8:
+                continue
+            job_id = parts[0]
+            # Skip sub-steps like "12345.batch" or "12345.extern"
+            if "." in job_id:
+                continue
+            jobs.append({
+                "job_id": job_id,
+                "name": parts[1].strip(),
+                "state": parts[2],
+                "exit_code": parts[3],
+                "elapsed": parts[4],
+                "start": parts[5],
+                "end": parts[6],
+                "reason": parts[7].strip(),
+            })
+        return jobs
+    except Exception:
+        return []
+
+
+def is_protforge_job(job_name: str) -> bool:
+    """Check if a job name matches a ProtForge/Snakemake rule."""
+    return any(rule in job_name for rule in RULE_TO_STAGE)
 
 
 def job_to_stage(job_name: str) -> str:
@@ -515,13 +555,20 @@ with tab_monitor:
             st.caption(f"Auto-refreshing every {interval}s")
             st_autorefresh(interval=interval * 1000, key="monitor_refresh")
 
-    # --- SLURM jobs ---
+    # --- Active SLURM jobs ---
     st.divider()
-    st.subheader("SLURM Jobs")
-    jobs = get_slurm_jobs()
+    st.subheader("Active SLURM Jobs")
+    all_jobs = get_slurm_jobs()
+    show_all = st.toggle("Show all user jobs (not just ProtForge)", value=False)
+
+    pf_jobs = [j for j in all_jobs if is_protforge_job(j.get("name", ""))]
+    jobs = all_jobs if show_all else pf_jobs
 
     if not jobs:
-        st.info("No SLURM jobs running.")
+        if all_jobs and not pf_jobs:
+            st.info(f"No ProtForge jobs running ({len(all_jobs)} other jobs active).")
+        else:
+            st.info("No SLURM jobs running.")
     else:
         # Summary metrics
         states = {}
@@ -539,31 +586,62 @@ with tab_monitor:
 
         # Build job rows with stage labels
         rows = []
-        job_ids = []
         for j in jobs:
             state = j.get("job_state", ["?"])
             state = state[0] if isinstance(state, list) else state
             name = j.get("name", "")
-            jid = j.get("job_id", "")
             rows.append({
-                "Job ID": jid,
+                "Job ID": j.get("job_id", ""),
                 "Stage": job_to_stage(name),
                 "Rule": name,
                 "State": state,
                 "Partition": j.get("partition", ""),
                 "Nodes": j.get("nodes", ""),
             })
-            job_ids.append(jid)
 
         st.dataframe(rows, width="stretch", hide_index=True)
+
+    # --- Recent job history (including failed) ---
+    st.divider()
+    st.subheader("Recent Job History")
+    st.caption("Includes completed, failed, and cancelled jobs (last 24h)")
+
+    recent = get_recent_jobs(hours=24)
+    pf_recent = [j for j in recent if is_protforge_job(j["name"])]
+    show_all_hist = st.toggle("Show all user jobs", value=False, key="hist_all")
+    history = recent if show_all_hist else pf_recent
+
+    if not history:
+        st.info("No recent jobs found.")
+    else:
+        # Highlight failures
+        hist_rows = []
+        all_job_ids = []
+        for j in history:
+            state = j["state"]
+            hist_rows.append({
+                "Job ID": j["job_id"],
+                "Stage": job_to_stage(j["name"]),
+                "Rule": j["name"],
+                "State": state,
+                "Exit": j["exit_code"],
+                "Elapsed": j["elapsed"],
+                "Reason": j["reason"],
+            })
+            all_job_ids.append(j["job_id"])
+
+        st.dataframe(hist_rows, width="stretch", hide_index=True)
 
         # --- Job log viewer ---
         st.divider()
         st.subheader("Job Log Viewer")
         selected_job = st.selectbox(
             "Select a job to view its log",
-            options=job_ids,
-            format_func=lambda jid: f"{jid} — {job_to_stage(next((r['Rule'] for r in rows if r['Job ID'] == jid), ''))} ({next((r['Rule'] for r in rows if r['Job ID'] == jid), '')})",
+            options=all_job_ids,
+            format_func=lambda jid: next(
+                (f"{jid} — {r['Stage']} ({r['Rule']}) [{r['State']}]" for r in hist_rows if r['Job ID'] == jid),
+                str(jid),
+            ),
         )
         if selected_job and st.button("Load log"):
             log_path = get_job_log_path(selected_job)
@@ -572,3 +650,10 @@ with tab_monitor:
                 st.code(read_log_tail(log_path, 150), language="text")
             else:
                 st.warning(f"No log file found for job {selected_job}. Check .snakemake/slurm_logs/ or your SLURM log directory.")
+
+    # --- Snakemake controller log ---
+    if LOG_FILE.exists():
+        st.divider()
+        st.subheader("Snakemake Controller Log")
+        if st.button("Show snakemake log tail"):
+            st.code(read_log_tail(LOG_FILE, 100), language="text")
