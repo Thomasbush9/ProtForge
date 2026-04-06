@@ -43,10 +43,10 @@ esm:
   num_chunks: 1
   array_max_concurrency: 20
   env_path: /n/home06/<YOUR_USER>/envs/esm
-  work_dir: /n/home06/<YOUR_USER>/ProtForge
-  cache_dir: /n/home06/<YOUR_USER>/cache/esm
-  # Alternative: use shared cache if available
-  # cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/esm_cache
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # Shared ESM model weights
+  # NOTE: The ESM library has hardcoded model paths in esm/utils/constants/esm3.py.
+  # After installing the esm package, update those paths to match this cache_dir.
+  # See docs/CLUSTER_SETUP.md for details.
 
 # ES analysis (optional) - USER SETUP REQUIRED
 # Computes deformation metrics per sequence, averaging across Boltz runs.
