@@ -38,11 +38,7 @@ ES_PYTHON = f"{ES_ENV_PATH}/bin/python" if ES_ENV_PATH else "python"
 
 
 def _resolve_ref_source():
-    """Resolve reference config to a path (directory or file).
-
-    Returns empty string if none configured — the shell command will fail
-    with a clear error at runtime rather than blocking all pipeline parsing.
-    """
+    """Resolve reference config to a path (directory or file)."""
     ref_seq = ES_CFG.get("ref_seq", "")
     ref_dir = ES_CFG.get("ref_dir", "")
     ref_path = ES_CFG.get("ref_path", "")
@@ -54,11 +50,14 @@ def _resolve_ref_source():
     elif ref_path:
         return ref_path
     else:
-        print(
-            "WARNING: ES enabled but no reference configured. "
-            "Set one of: es.ref_dir, es.ref_path, or es.ref_seq in config.yaml"
+        raise ValueError(
+            "ES is enabled (pipeline.es: true) but no reference structure is configured.\n"
+            "Set one of these in config.yaml:\n"
+            "  es.ref_path: /path/to/wildtype.cif        (single CIF file)\n"
+            "  es.ref_dir:  /path/to/boltz/dir           (directory with run_N/ subdirs)\n"
+            "  es.ref_seq:  sequence_name                 (name from this pipeline's output)\n"
+            "Or disable ES with: pipeline.es: false"
         )
-        return ""
 
 
 def _ref_is_single_file():

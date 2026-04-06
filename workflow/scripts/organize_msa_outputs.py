@@ -103,15 +103,14 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
         msa_dir = seq_dir / "msa"
         msa_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy a3m file
+        # Move a3m file (avoids storing MSA twice)
         dest_a3m = msa_dir / a3m_file.name
-        shutil.copy2(a3m_file, dest_a3m)
+        shutil.move(str(a3m_file), dest_a3m)
 
-        # Also copy related files (.sto, .hhr, etc.)
+        # Also move related files (.sto, .hhr, etc.)
         a3m_basename = a3m_file.stem
         for related in colabfold_path.glob(f"{a3m_basename}.*"):
-            if related != a3m_file:
-                shutil.copy2(related, msa_dir / related.name)
+            shutil.move(str(related), msa_dir / related.name)
 
         # Create YAML file for Boltz
         yaml_path = seq_dir / f"{seq_name}.yaml"
