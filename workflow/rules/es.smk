@@ -38,7 +38,11 @@ ES_PYTHON = f"{ES_ENV_PATH}/bin/python" if ES_ENV_PATH else "python"
 
 
 def _resolve_ref_source():
-    """Resolve reference config to a path (directory or file)."""
+    """Resolve reference config to a path (directory or file).
+
+    Returns empty string if none configured — the shell command will fail
+    with a clear error at runtime rather than blocking all pipeline parsing.
+    """
     ref_seq = ES_CFG.get("ref_seq", "")
     ref_dir = ES_CFG.get("ref_dir", "")
     ref_path = ES_CFG.get("ref_path", "")
@@ -50,9 +54,11 @@ def _resolve_ref_source():
     elif ref_path:
         return ref_path
     else:
-        raise ValueError(
-            "ES config must specify one of: es.ref_dir, es.ref_path, or es.ref_seq"
+        print(
+            "WARNING: ES enabled but no reference configured. "
+            "Set one of: es.ref_dir, es.ref_path, or es.ref_seq in config.yaml"
         )
+        return ""
 
 
 def _ref_is_single_file():
