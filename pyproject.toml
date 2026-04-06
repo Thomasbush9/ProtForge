@@ -21,6 +21,11 @@ dash = [
     "plotly>=5.0",
     "dash>=2.14,<5",
 ]
+webapp = [
+    "streamlit>=1.30",
+    "streamlit-autorefresh",
+    "PyYAML>=5.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

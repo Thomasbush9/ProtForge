@@ -27,13 +27,30 @@ import yaml
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config.yaml"
-PID_FILE = REPO_ROOT / ".snakemake_pid"
+RUN_META_FILE = REPO_ROOT / ".snakemake_run.json"
 LOG_FILE = REPO_ROOT / "snakemake_run.log"
 USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
 # Per-stage auto-refresh intervals (seconds)
 REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ES": 10}
+
+# Map Snakemake rule names to pipeline stages
+RULE_TO_STAGE = {
+    "run_colabfold_search": "MSA",
+    "scatter_msa_and_create_yaml": "MSA",
+    "chunk_fastas": "MSA",
+    "msa_complete": "MSA",
+    "run_boltz_predict": "Boltz",
+    "organize_boltz_chunk": "Boltz",
+    "chunk_yamls_for_boltz": "Boltz",
+    "boltz_complete": "Boltz",
+    "run_esm_chunk": "ESM",
+    "chunk_yamls_for_esm": "ESM",
+    "esm_complete": "ESM",
+    "collect_es_paths": "ES",
+    "run_es_all": "ES",
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,7 +63,6 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
-    # Backup before overwriting
     if CONFIG_PATH.exists():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_dir = REPO_ROOT / ".config_backups"
@@ -67,27 +83,59 @@ def run_cmd(cmd: list[str], timeout: int = 30) -> str:
 
 
 def launch_snakemake(extra_args: list[str] | None = None):
-    """Launch snakemake as a background process with PID tracking."""
+    """Launch snakemake as a background process with metadata tracking."""
     cmd = ["snakemake", "--profile", "profiles/slurm/"]
     if extra_args:
         cmd.extend(extra_args)
     with open(LOG_FILE, "w") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=REPO_ROOT)
-    PID_FILE.write_text(str(proc.pid))
+    # Write metadata for robust process identification
+    meta = {
+        "pid": proc.pid,
+        "start_time": datetime.now().isoformat(),
+        "command": " ".join(cmd),
+    }
+    RUN_META_FILE.write_text(json.dumps(meta))
     return proc.pid
 
 
-def snakemake_status() -> tuple[bool, int | None]:
-    """Check if a snakemake process is running. Returns (running, pid)."""
-    if not PID_FILE.exists():
-        return False, None
-    pid = int(PID_FILE.read_text().strip())
+def snakemake_status() -> tuple[bool, int | None, str | None]:
+    """Check if a snakemake process is running. Returns (running, pid, start_time)."""
+    if not RUN_META_FILE.exists():
+        return False, None, None
     try:
-        os.kill(pid, 0)  # signal 0 = check if alive
-        return True, pid
-    except OSError:
-        PID_FILE.unlink(missing_ok=True)
-        return False, pid
+        meta = json.loads(RUN_META_FILE.read_text())
+    except (json.JSONDecodeError, ValueError):
+        return False, None, None
+    pid = meta.get("pid")
+    start_time = meta.get("start_time")
+    if pid is None:
+        return False, None, None
+    try:
+        os.kill(pid, 0)
+        # Verify it's actually snakemake, not a recycled PID
+        r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=5)
+        if "snakemake" not in r.stdout.lower() and "python" not in r.stdout.lower():
+            RUN_META_FILE.unlink(missing_ok=True)
+            return False, pid, start_time
+        return True, pid, start_time
+    except (OSError, subprocess.TimeoutExpired):
+        RUN_META_FILE.unlink(missing_ok=True)
+        return False, pid, start_time
+
+
+def format_elapsed(start_iso: str) -> str:
+    """Format elapsed time since ISO timestamp as 'Xh Ym Zs'."""
+    start = datetime.fromisoformat(start_iso)
+    delta = datetime.now() - start
+    total_secs = int(delta.total_seconds())
+    hours, remainder = divmod(total_secs, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
 
 
 def get_slurm_jobs() -> list[dict]:
@@ -103,26 +151,75 @@ def get_slurm_jobs() -> list[dict]:
         return []
 
 
+def job_to_stage(job_name: str) -> str:
+    """Map a SLURM job name to a pipeline stage."""
+    for rule, stage in RULE_TO_STAGE.items():
+        if rule in job_name:
+            return stage
+    return "Other"
+
+
+def get_job_log_path(job_id: int | str) -> Path | None:
+    """Find the SLURM log file for a job ID."""
+    slurm_logs = REPO_ROOT / ".snakemake" / "slurm_logs"
+    if slurm_logs.exists():
+        for log in slurm_logs.rglob(f"{job_id}.log"):
+            return log
+    cfg = load_config()
+    log_dir = cfg.get("slurm", {}).get("log_dir", "")
+    if log_dir:
+        log_path = Path(log_dir)
+        if log_path.exists():
+            for pattern in [f"*{job_id}*.out", f"*{job_id}*.log", f"*{job_id}*.err"]:
+                matches = list(log_path.glob(pattern))
+                if matches:
+                    return matches[0]
+    return None
+
+
+def read_log_tail(path: Path, n_lines: int = 100) -> str:
+    """Read the last n lines of a log file."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+        return "\n".join(lines[-n_lines:])
+    except Exception as e:
+        return f"Error reading log: {e}"
+
+
 def count_files(directory: Path, pattern: str) -> int:
     if not directory.exists():
         return 0
     return len(list(directory.glob(pattern)))
 
 
+def get_expected_total(cfg: dict) -> int:
+    """Count expected sequences from input sources."""
+    output_dir = Path(cfg.get("output", {}).get("parent_dir", ""))
+    seq_dir = output_dir / "sequences"
+    fasta_dir = Path(cfg.get("input", {}).get("fasta_dir", ""))
+    yaml_dir = Path(cfg.get("input", {}).get("yaml_dir", ""))
+    pipeline = cfg.get("pipeline", {})
+
+    # If MSA is off and yaml_dir is set, count YAMLs
+    if not pipeline.get("msa") and yaml_dir != Path("") and yaml_dir.is_dir():
+        return count_files(yaml_dir, "*.yaml")
+    # Otherwise count input FASTAs
+    if fasta_dir.is_dir():
+        return count_files(fasta_dir, "*.fasta") + count_files(fasta_dir, "*.fa")
+    # Fallback: count existing sequence dirs
+    if seq_dir.is_dir():
+        return len([d for d in seq_dir.iterdir() if d.is_dir()])
+    return 0
+
+
 def get_stage_progress(cfg: dict) -> dict:
     """Count done vs total for each pipeline stage based on output files."""
     output_dir = Path(cfg.get("output", {}).get("parent_dir", ""))
     seq_dir = output_dir / "sequences"
-    fasta_dir = Path(cfg.get("input", {}).get("fasta_dir", ""))
     pipeline = cfg.get("pipeline", {})
+    num_runs = cfg.get("boltz", {}).get("num_runs", 1)
 
-    if fasta_dir.is_dir():
-        total = count_files(fasta_dir, "*.fasta") + count_files(fasta_dir, "*.fa")
-    elif seq_dir.is_dir():
-        total = len([d for d in seq_dir.iterdir() if d.is_dir()])
-    else:
-        total = 0
-
+    total = get_expected_total(cfg)
     progress = {}
 
     if pipeline.get("msa"):
@@ -130,14 +227,26 @@ def get_stage_progress(cfg: dict) -> dict:
         progress["MSA"] = (done, total)
 
     if pipeline.get("boltz"):
-        done = 0
-        if seq_dir.is_dir():
-            for d in seq_dir.iterdir():
-                boltz_dir = d / "boltz"
-                if boltz_dir.is_dir():
-                    if list(boltz_dir.glob("*_model_*.cif")) or list(boltz_dir.glob("run_*/*_model_*.cif")):
+        if num_runs <= 1:
+            # Single-run: count sequences with any CIF
+            done = 0
+            if seq_dir.is_dir():
+                for d in seq_dir.iterdir():
+                    boltz_dir = d / "boltz"
+                    if boltz_dir.is_dir() and list(boltz_dir.glob("*_model_*.cif")):
                         done += 1
-        progress["Boltz"] = (done, total)
+            progress["Boltz"] = (done, total)
+        else:
+            # Multi-run: track completed runs out of total * num_runs
+            done = 0
+            if seq_dir.is_dir():
+                for d in seq_dir.iterdir():
+                    boltz_dir = d / "boltz"
+                    if boltz_dir.is_dir():
+                        for run_dir in boltz_dir.glob("run_*"):
+                            if list(run_dir.glob("*_model_*.cif")):
+                                done += 1
+            progress["Boltz"] = (done, total * num_runs)
 
     if pipeline.get("esm"):
         done = count_files(seq_dir, "*/esm/logits.npy")
@@ -213,7 +322,7 @@ with tab_config:
 
     with st.expander("Boltz Settings"):
         boltz = cfg.get("boltz", {})
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         boltz["max_files_per_job"] = c1.number_input("Files per job ", value=boltz.get("max_files_per_job", 25), min_value=1)
         boltz["num_runs"] = c2.number_input("Runs per sequence", value=boltz.get("num_runs", 1), min_value=1)
         c1, c2 = st.columns(2)
@@ -278,7 +387,7 @@ with tab_config:
         cfg["slurm"] = slurm
 
     st.divider()
-    if st.button("Save Configuration", type="primary", use_container_width=True):
+    if st.button("Save Configuration", type="primary", width="stretch"):
         save_config(cfg)
         st.success("config.yaml saved! (backup in .config_backups/)")
 
@@ -306,32 +415,37 @@ with tab_run:
     st.markdown(f"**Input:** `{inp.get('fasta_dir', 'not set')}`")
     st.markdown(f"**Output:** `{out.get('parent_dir', 'not set')}`")
 
-    # Snakemake process status
-    running, pid = snakemake_status()
+    # Snakemake process status + elapsed clock
+    running, pid, start_time = snakemake_status()
     if running:
-        st.success(f"Snakemake is running (PID {pid})")
+        elapsed = format_elapsed(start_time) if start_time else "unknown"
+        st.success(f"Snakemake is running (PID {pid}) — elapsed: {elapsed}")
         if st.button("View log tail"):
             if LOG_FILE.exists():
-                lines = LOG_FILE.read_text().splitlines()
-                st.code("\n".join(lines[-50:]), language="text")
+                st.code(read_log_tail(LOG_FILE, 50), language="text")
     else:
         if pid is not None:
-            st.info(f"Last snakemake run finished (was PID {pid}).")
+            msg = f"Last snakemake run finished (was PID {pid})"
+            if start_time:
+                msg += f" — started at {start_time}"
+            st.info(msg)
             if LOG_FILE.exists() and st.button("View last run log"):
-                lines = LOG_FILE.read_text().splitlines()
-                st.code("\n".join(lines[-80:]), language="text")
+                st.code(read_log_tail(LOG_FILE, 80), language="text")
 
     st.divider()
 
     # Dry run
     st.subheader("Dry Run")
-    if st.button("Run snakemake -n (dry run)", use_container_width=True):
+    if st.button("Run snakemake -n (dry run)", width="stretch"):
         with st.spinner("Running dry run..."):
             output = run_cmd(
-                ["snakemake", "--profile", "profiles/slurm/", "-n", "--quiet"],
+                ["snakemake", "--profile", "profiles/slurm/", "-n"],
                 timeout=60,
             )
-        st.code(output, language="text")
+        if output.strip():
+            st.code(output, language="text")
+        else:
+            st.success("Nothing to do — all outputs are up to date.")
 
     st.divider()
 
@@ -343,15 +457,15 @@ with tab_run:
         c1, c2 = st.columns(2)
         with c1:
             confirm = st.checkbox("I understand, submit SLURM jobs")
-            if st.button("Launch", type="primary", disabled=not confirm, use_container_width=True):
-                pid = launch_snakemake()
-                st.success(f"Snakemake launched in background (PID {pid}). Check log: {LOG_FILE}")
+            if st.button("Launch", type="primary", disabled=not confirm, width="stretch"):
+                new_pid = launch_snakemake()
+                st.success(f"Snakemake launched in background (PID {new_pid}).")
                 st.rerun()
         with c2:
             confirm_rerun = st.checkbox("Resume incomplete jobs")
-            if st.button("Rerun Incomplete", disabled=not confirm_rerun, use_container_width=True):
-                pid = launch_snakemake(["--rerun-incomplete"])
-                st.success(f"Snakemake --rerun-incomplete launched (PID {pid}).")
+            if st.button("Rerun Incomplete", disabled=not confirm_rerun, width="stretch"):
+                new_pid = launch_snakemake(["--rerun-incomplete"])
+                st.success(f"Snakemake --rerun-incomplete launched (PID {new_pid}).")
                 st.rerun()
 
 
@@ -361,6 +475,12 @@ with tab_run:
 with tab_monitor:
     cfg = load_config()
     output_dir = cfg.get("output", {}).get("parent_dir", "")
+
+    # --- Execution clock ---
+    running, pid, start_time = snakemake_status()
+    if running and start_time:
+        elapsed = format_elapsed(start_time)
+        st.metric("Pipeline running", elapsed)
 
     # --- Stage progress bars ---
     st.subheader("Pipeline Progress")
@@ -403,7 +523,7 @@ with tab_monitor:
     if not jobs:
         st.info("No SLURM jobs running.")
     else:
-        # Summary metrics — safe for any number of states
+        # Summary metrics
         states = {}
         for j in jobs:
             state = j.get("job_state", ["UNKNOWN"])
@@ -411,21 +531,44 @@ with tab_monitor:
             states[state] = states.get(state, 0) + 1
 
         state_items = sorted(states.items())
-        cols = st.columns(min(len(state_items) + 1, 8))
+        n_cols = min(len(state_items) + 1, 8)
+        cols = st.columns(n_cols)
         cols[0].metric("Total", len(jobs))
-        for i, (state, count) in enumerate(state_items[:7]):  # cap at 7 states
+        for i, (state, count) in enumerate(state_items[: n_cols - 1]):
             cols[i + 1].metric(state, count)
 
-        # Job table
+        # Build job rows with stage labels
         rows = []
+        job_ids = []
         for j in jobs:
             state = j.get("job_state", ["?"])
             state = state[0] if isinstance(state, list) else state
+            name = j.get("name", "")
+            jid = j.get("job_id", "")
             rows.append({
-                "Job ID": j.get("job_id", ""),
-                "Name": j.get("name", ""),
+                "Job ID": jid,
+                "Stage": job_to_stage(name),
+                "Rule": name,
                 "State": state,
                 "Partition": j.get("partition", ""),
                 "Nodes": j.get("nodes", ""),
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+            job_ids.append(jid)
+
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+        # --- Job log viewer ---
+        st.divider()
+        st.subheader("Job Log Viewer")
+        selected_job = st.selectbox(
+            "Select a job to view its log",
+            options=job_ids,
+            format_func=lambda jid: f"{jid} — {job_to_stage(next((r['Rule'] for r in rows if r['Job ID'] == jid), ''))} ({next((r['Rule'] for r in rows if r['Job ID'] == jid), '')})",
+        )
+        if selected_job and st.button("Load log"):
+            log_path = get_job_log_path(selected_job)
+            if log_path:
+                st.caption(f"Reading: {log_path}")
+                st.code(read_log_tail(log_path, 150), language="text")
+            else:
+                st.warning(f"No log file found for job {selected_job}. Check .snakemake/slurm_logs/ or your SLURM log directory.")
