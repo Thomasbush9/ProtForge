@@ -40,8 +40,7 @@ esm:
   num_chunks: 1                    # Number of chunks for ESM array job
   array_max_concurrency: 20       # Maximum concurrent ESM array tasks
   env_path: /n/home06/tbush/envs/esm
-  work_dir: /n/home06/tbush/gfp_function_prediction
-  cache_dir: /n/home06/tbush/cache/esm  # ESM model/embedding cache (TORCH_HOME)
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # ESM model/embedding cache (TORCH_HOME + HF_HOME)
 
 # ES (Evolutionary Scale / Effective Strain) analysis settings
 es:
