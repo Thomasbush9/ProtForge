@@ -457,7 +457,17 @@ tab_config, tab_run, tab_monitor = st.tabs(["Configuration", "Run Pipeline", "Jo
 # ---------------------------------------------------------------------------
 @st.dialog("Import Data", width="large")
 def import_dialog():
-    """Full import UI: browse directory, CSV/TSV upload, or random mutations."""
+    """Import UI: browse & copy from cluster, generate from CSV/TSV, or random mutations.
+
+    Files are written into the FASTA/YAML directory from the session config.
+    If that path is empty or doesn't exist, it is created.
+    """
+    # Resolve destination from the current session config
+    cfg = load_config(session)
+    inp = cfg.get("input", {})
+    fasta_dir = inp.get("fasta_dir", "")
+    yaml_dir = inp.get("yaml_dir", "")
+
     import_mode = st.radio(
         "Import mode",
         ["Browse directory", "Generate from CSV/TSV", "Random mutations"],
@@ -465,28 +475,37 @@ def import_dialog():
         key="dlg_import_mode",
     )
 
-    # Helper to apply result to session config and close dialog
-    def _apply_to_config(input_dir: str, file_type: str):
-        cfg = load_config(session)
-        if "input" not in cfg:
-            cfg["input"] = {}
-        if "pipeline" not in cfg:
-            cfg["pipeline"] = {}
+    def _get_dest(file_type: str) -> Path | None:
+        """Get the destination directory from config, or ask user to set it."""
+        dest_str = fasta_dir if file_type == "fasta" else yaml_dir
+        if not dest_str:
+            st.error(
+                f"No {'FASTA' if file_type == 'fasta' else 'YAML'} directory set in config. "
+                "Set it in the Input / Output section first, then re-open Import."
+            )
+            return None
+        dest = Path(dest_str)
+        dest.mkdir(parents=True, exist_ok=True)
+        return dest
+
+    def _update_config_after_import(file_type: str):
+        """Update pipeline.msa and clear the other input path."""
+        cfg_now = load_config(session)
+        if "pipeline" not in cfg_now:
+            cfg_now["pipeline"] = {}
         if file_type == "fasta":
-            cfg["input"]["fasta_dir"] = input_dir
-            cfg["input"].pop("yaml_dir", None)
-            cfg["pipeline"]["msa"] = True
+            cfg_now["pipeline"]["msa"] = True
+            cfg_now.get("input", {}).pop("yaml_dir", None)
         else:
-            cfg["input"]["yaml_dir"] = input_dir
-            cfg["input"].pop("fasta_dir", None)
-            cfg["pipeline"]["msa"] = False
-        save_config(session, cfg)
+            cfg_now["pipeline"]["msa"] = False
+            cfg_now.get("input", {}).pop("fasta_dir", None)
+        save_config(session, cfg_now)
 
     # =============================================================
-    # MODE 1: Browse directory
+    # MODE 1: Browse directory — copy valid files to input path
     # =============================================================
     if import_mode == "Browse directory":
-        st.caption("Browse your cluster filesystem, validate FASTA or YAML files, and set the input directory.")
+        st.caption("Browse the cluster, validate files, and copy valid ones into the configured input directory.")
 
         if "browse_path" not in st.session_state:
             st.session_state.browse_path = os.environ.get("HOME", "/")
@@ -494,9 +513,7 @@ def import_dialog():
         col_path, col_go = st.columns([5, 1])
         with col_path:
             typed_path = st.text_input(
-                "Directory path",
-                value=st.session_state.browse_path,
-                key="dlg_dir_path",
+                "Source directory", value=st.session_state.browse_path, key="dlg_dir_path",
             )
         with col_go:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -509,7 +526,7 @@ def import_dialog():
 
         browse_dir = Path(st.session_state.browse_path)
 
-        # Breadcrumb navigation
+        # Breadcrumb
         parts = browse_dir.parts
         breadcrumb_cols = st.columns(min(len(parts), 10))
         for i, part in enumerate(parts[: len(breadcrumb_cols)]):
@@ -520,7 +537,7 @@ def import_dialog():
                     st.session_state.browse_path = str(target)
                     st.rerun()
 
-        # Subdirectory listing
+        # Subdirectories
         if browse_dir.is_dir():
             try:
                 subdirs = sorted([d for d in browse_dir.iterdir() if d.is_dir() and not d.name.startswith(".")])
@@ -540,7 +557,7 @@ def import_dialog():
                                 st.rerun()
 
             st.divider()
-            st.markdown(f"**Selected:** `{browse_dir}`")
+            st.markdown(f"**Source:** `{browse_dir}`")
 
             if st.button("Scan & Validate", type="primary", use_container_width=True, key="dlg_scan"):
                 with st.spinner("Scanning files..."):
@@ -560,7 +577,7 @@ def import_dialog():
                     c4.metric("Type", result["file_type"].upper())
 
                     if result["file_type"] == "mixed":
-                        st.warning("Mixed FASTA and YAML files — choose one type per directory.")
+                        st.warning("Mixed FASTA and YAML — choose one type per directory.")
 
                     if result["fasta_results"]:
                         with st.expander(f"FASTA files ({len(result['fasta_results'])})", expanded=result["invalid_count"] > 0):
@@ -587,24 +604,21 @@ def import_dialog():
 
                     st.divider()
                     if result["valid_count"] > 0 and result["file_type"] in ("fasta", "yaml"):
+                        # Show destination
+                        dest_path = fasta_dir if result["file_type"] == "fasta" else yaml_dir
+                        if dest_path:
+                            st.info(f"**Destination:** `{dest_path}`")
                         if result["invalid_count"] > 0:
-                            st.warning(
-                                f"{result['invalid_count']} invalid file(s) found. "
-                                "Only valid files will be copied."
-                            )
-                        apply_label = (
-                            f"Apply as {'FASTA' if result['file_type'] == 'fasta' else 'YAML'} "
-                            f"input ({result['valid_count']} valid files)"
-                        )
+                            st.warning(f"{result['invalid_count']} invalid file(s) — only valid files will be copied.")
+
+                        apply_label = f"Copy {result['valid_count']} valid files to input directory"
                         if st.button(apply_label, type="primary", use_container_width=True, key="dlg_apply_dir"):
-                            clean_dir = session.dir / f"input_{result['file_type']}"
-                            if clean_dir.exists():
-                                import shutil as _shutil
-                                _shutil.rmtree(clean_dir)
-                            copy_valid_files(result, clean_dir)
-                            _apply_to_config(str(clean_dir), result["file_type"])
-                            st.success("Config updated!")
-                            st.rerun()
+                            dest = _get_dest(result["file_type"])
+                            if dest is not None:
+                                copied = copy_valid_files(result, dest)
+                                _update_config_after_import(result["file_type"])
+                                st.success(f"Copied {copied} files to `{dest}`")
+                                st.rerun()
 
                     elif result["file_type"] == "mixed":
                         st.info("Separate FASTA and YAML files into different directories.")
@@ -679,87 +693,88 @@ def import_dialog():
                             else:
                                 st.success(f"Reference: {len(ref_sequence)} residues")
 
+                    # Show destination
+                    dest_str = fasta_dir if file_type == "fasta" else yaml_dir
+                    if dest_str:
+                        st.info(f"**Destination:** `{dest_str}`")
+
                     can_gen = csv_mode == "sequences" or (csv_mode == "mutations" and ref_sequence)
                     if st.button("Generate files", type="primary", disabled=not can_gen, use_container_width=True, key="dlg_gen_csv"):
-                        output_dir = session.dir / f"generated_{file_type}"
-                        if output_dir.exists():
-                            import shutil as _shutil
-                            _shutil.rmtree(output_dir)
-                        output_dir.mkdir(parents=True, exist_ok=True)
+                        output_dir = _get_dest(file_type)
+                        if output_dir is not None:
+                            from validate import VALID_AAS as _VA
+                            errors = []
+                            generated = 0
 
-                        from validate import VALID_AAS as _VA
-                        errors = []
-                        generated = 0
+                            if csv_mode == "sequences":
+                                for _, row in df.iterrows():
+                                    name = str(row["name"]).strip()
+                                    seq = str(row["sequence"]).strip()
+                                    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+                                    if not safe_name:
+                                        continue
+                                    if set(seq.upper()) - _VA:
+                                        errors.append(f"{name}: invalid chars")
+                                        continue
+                                    if file_type == "fasta":
+                                        (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{seq}\n")
+                                    else:
+                                        (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
+                                            "version": 1,
+                                            "sequences": [{"protein": {"id": safe_name, "sequence": seq, "msa": "empty"}}],
+                                        }, default_flow_style=False, sort_keys=False))
+                                    generated += 1
+                            else:
+                                import re
+                                for _, row in df.iterrows():
+                                    mut_str = str(row["aaMutations"]).strip()
+                                    if pd.isna(row["aaMutations"]) or not mut_str:
+                                        continue
+                                    mutated = ref_sequence
+                                    valid = True
+                                    try:
+                                        for m in mut_str.split(":"):
+                                            match = re.match(r"^S([A-Za-z])(\d+)([A-Za-z])$", m)
+                                            if not match:
+                                                errors.append(f"Invalid format: {m}")
+                                                valid = False
+                                                break
+                                            src, pos_str, dest = match.groups()
+                                            pos = int(pos_str)
+                                            if pos < 1 or pos > len(ref_sequence):
+                                                errors.append(f"{m}: position out of range")
+                                                valid = False
+                                                break
+                                            idx = pos - 1
+                                            if mutated[idx].upper() != src.upper():
+                                                errors.append(f"{m}: expected {src} at pos {pos}, found {mutated[idx]}")
+                                                valid = False
+                                                break
+                                            mutated = mutated[:idx] + dest + mutated[idx + 1:]
+                                    except Exception as e:
+                                        errors.append(f"{mut_str}: {e}")
+                                        valid = False
+                                    if not valid:
+                                        continue
+                                    safe_name = mut_str.replace(":", "_")
+                                    if file_type == "fasta":
+                                        (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{mutated}\n")
+                                    else:
+                                        (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
+                                            "version": 1,
+                                            "sequences": [{"protein": {"id": safe_name, "sequence": mutated, "msa": "empty"}}],
+                                        }, default_flow_style=False, sort_keys=False))
+                                    generated += 1
 
-                        if csv_mode == "sequences":
-                            for _, row in df.iterrows():
-                                name = str(row["name"]).strip()
-                                seq = str(row["sequence"]).strip()
-                                safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-                                if not safe_name:
-                                    continue
-                                if set(seq.upper()) - _VA:
-                                    errors.append(f"{name}: invalid chars")
-                                    continue
-                                if file_type == "fasta":
-                                    (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{seq}\n")
-                                else:
-                                    (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
-                                        "version": 1,
-                                        "sequences": [{"protein": {"id": safe_name, "sequence": seq, "msa": "empty"}}],
-                                    }, default_flow_style=False, sort_keys=False))
-                                generated += 1
-                        else:
-                            import re
-                            for _, row in df.iterrows():
-                                mut_str = str(row["aaMutations"]).strip()
-                                if pd.isna(row["aaMutations"]) or not mut_str:
-                                    continue
-                                mutated = ref_sequence
-                                valid = True
-                                try:
-                                    for m in mut_str.split(":"):
-                                        match = re.match(r"^S([A-Za-z])(\d+)([A-Za-z])$", m)
-                                        if not match:
-                                            errors.append(f"Invalid format: {m}")
-                                            valid = False
-                                            break
-                                        src, pos_str, dest = match.groups()
-                                        pos = int(pos_str)
-                                        if pos < 1 or pos > len(ref_sequence):
-                                            errors.append(f"{m}: position out of range")
-                                            valid = False
-                                            break
-                                        idx = pos - 1
-                                        if mutated[idx].upper() != src.upper():
-                                            errors.append(f"{m}: expected {src} at pos {pos}, found {mutated[idx]}")
-                                            valid = False
-                                            break
-                                        mutated = mutated[:idx] + dest + mutated[idx + 1:]
-                                except Exception as e:
-                                    errors.append(f"{mut_str}: {e}")
-                                    valid = False
-                                if not valid:
-                                    continue
-                                safe_name = mut_str.replace(":", "_")
-                                if file_type == "fasta":
-                                    (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{mutated}\n")
-                                else:
-                                    (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
-                                        "version": 1,
-                                        "sequences": [{"protein": {"id": safe_name, "sequence": mutated, "msa": "empty"}}],
-                                    }, default_flow_style=False, sort_keys=False))
-                                generated += 1
-
-                        if generated > 0:
-                            _apply_to_config(str(output_dir), file_type)
-                            st.success(f"Generated {generated} files. Config updated!")
-                        else:
-                            st.error("No files generated.")
-                        if errors:
-                            with st.expander(f"Errors ({len(errors)})"):
-                                for e in errors[:50]:
-                                    st.text(e)
+                            if generated > 0:
+                                _update_config_after_import(file_type)
+                                st.success(f"Generated {generated} files in `{output_dir}`")
+                            else:
+                                st.error("No files generated.")
+                            if errors:
+                                with st.expander(f"Errors ({len(errors)})"):
+                                    for e in errors[:50]:
+                                        st.text(e)
 
     # =============================================================
     # MODE 3: Random mutations
@@ -789,54 +804,55 @@ def import_dialog():
                 file_type_rand = st.selectbox("Output format", ["fasta", "yaml"], key="dlg_rand_ft",
                                               help="fasta: MSA pipeline; yaml: skip MSA")
 
+                # Show destination
+                dest_str = fasta_dir if file_type_rand == "fasta" else yaml_dir
+                if dest_str:
+                    st.info(f"**Destination:** `{dest_str}`")
+
                 if st.button("Generate random mutants", type="primary", use_container_width=True, key="dlg_gen_rand"):
-                    import random as _random
-                    _random.seed(seed)
+                    output_dir = _get_dest(file_type_rand)
+                    if output_dir is not None:
+                        import random as _random
+                        _random.seed(seed)
 
-                    aa_list = list(_VA)
-                    seq_len = len(ref_seq_rand)
-                    output_dir = session.dir / f"random_mutants_{file_type_rand}"
-                    if output_dir.exists():
-                        import shutil as _shutil
-                        _shutil.rmtree(output_dir)
-                    output_dir.mkdir(parents=True, exist_ok=True)
+                        aa_list = list(_VA)
+                        seq_len = len(ref_seq_rand)
+                        generated = 0
+                        seen = set()
+                        with st.spinner(f"Generating {n_mutants} mutants..."):
+                            attempts = 0
+                            max_attempts = n_mutants * 10
+                            while generated < n_mutants and attempts < max_attempts:
+                                attempts += 1
+                                positions = _random.sample(range(seq_len), min(n_mutations, seq_len))
+                                mutated = list(ref_seq_rand)
+                                mut_parts = []
+                                for pos in sorted(positions):
+                                    src = ref_seq_rand[pos]
+                                    candidates = [aa for aa in aa_list if aa != src]
+                                    dest = _random.choice(candidates)
+                                    mutated[pos] = dest
+                                    mut_parts.append(f"S{src}{pos + 1}{dest}")
+                                mut_key = ":".join(mut_parts)
+                                if mut_key in seen:
+                                    continue
+                                seen.add(mut_key)
+                                mutated_seq = "".join(mutated)
+                                safe_name = mut_key.replace(":", "_")
+                                if file_type_rand == "fasta":
+                                    (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{mutated_seq}\n")
+                                else:
+                                    (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
+                                        "version": 1,
+                                        "sequences": [{"protein": {"id": safe_name, "sequence": mutated_seq, "msa": "empty"}}],
+                                    }, default_flow_style=False, sort_keys=False))
+                                generated += 1
 
-                    generated = 0
-                    seen = set()
-                    with st.spinner(f"Generating {n_mutants} mutants..."):
-                        attempts = 0
-                        max_attempts = n_mutants * 10
-                        while generated < n_mutants and attempts < max_attempts:
-                            attempts += 1
-                            positions = _random.sample(range(seq_len), min(n_mutations, seq_len))
-                            mutated = list(ref_seq_rand)
-                            mut_parts = []
-                            for pos in sorted(positions):
-                                src = ref_seq_rand[pos]
-                                candidates = [aa for aa in aa_list if aa != src]
-                                dest = _random.choice(candidates)
-                                mutated[pos] = dest
-                                mut_parts.append(f"S{src}{pos + 1}{dest}")
-                            mut_key = ":".join(mut_parts)
-                            if mut_key in seen:
-                                continue
-                            seen.add(mut_key)
-                            mutated_seq = "".join(mutated)
-                            safe_name = mut_key.replace(":", "_")
-                            if file_type_rand == "fasta":
-                                (output_dir / f"{safe_name}.fasta").write_text(f">{safe_name}\n{mutated_seq}\n")
-                            else:
-                                (output_dir / f"{safe_name}.yaml").write_text(yaml.dump({
-                                    "version": 1,
-                                    "sequences": [{"protein": {"id": safe_name, "sequence": mutated_seq, "msa": "empty"}}],
-                                }, default_flow_style=False, sort_keys=False))
-                            generated += 1
+                        if generated < n_mutants:
+                            st.warning(f"Only {generated}/{n_mutants} unique mutants (sequence space too small).")
 
-                    if generated < n_mutants:
-                        st.warning(f"Only {generated}/{n_mutants} unique mutants (sequence space too small).")
-
-                    _apply_to_config(str(output_dir), file_type_rand)
-                    st.success(f"Generated {generated} mutants. Config updated!")
+                        _update_config_after_import(file_type_rand)
+                        st.success(f"Generated {generated} mutants in `{output_dir}`")
 
 # =========================================================================
 # TAB 1: Configuration
