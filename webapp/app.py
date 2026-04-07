@@ -879,6 +879,9 @@ with tab_config:
         with col_import:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Import", use_container_width=True, key="open_import"):
+                # Save current input values so the dialog picks them up
+                cfg["input"] = inp
+                save_config(session, cfg)
                 import_dialog()
 
         yaml_dir = inp.get("yaml_dir", "")
