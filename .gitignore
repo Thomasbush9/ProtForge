@@ -6,3 +6,4 @@ __pycache__/*
 .snakemake_run.json
 snakemake_run.log
 .config_backups/
+.sessions/

@@ -1,5 +1,5 @@
 """
-ProtForge Web UI.
+ProtForge Web UI — multi-session support.
 
 Usage (on cluster login node):
     streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1
@@ -22,13 +22,25 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import yaml
 
+from session import (
+    Session,
+    migrate_legacy,
+    load_registry,
+    save_registry,
+    create_session,
+    delete_session,
+    rename_session,
+    touch_session,
+    list_sessions,
+    get_session,
+    get_active_session_id,
+    set_active_session,
+    REPO_ROOT,
+)
+
 # ---------------------------------------------------------------------------
-# Globals — resolve paths relative to the repo root, not cwd
+# Globals
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = REPO_ROOT / "config.yaml"
-RUN_META_FILE = REPO_ROOT / ".snakemake_run.json"
-LOG_FILE = REPO_ROOT / "snakemake_run.log"
 USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
@@ -53,26 +65,25 @@ RULE_TO_STAGE = {
 }
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — all session-aware
 # ---------------------------------------------------------------------------
 
-def load_config() -> dict:
-    if CONFIG_PATH.exists():
-        return yaml.safe_load(CONFIG_PATH.read_text()) or {}
+def load_config(session: Session) -> dict:
+    if session.config_path.exists():
+        return yaml.safe_load(session.config_path.read_text()) or {}
     return {}
 
 
-def save_config(cfg: dict):
-    if CONFIG_PATH.exists():
+def save_config(session: Session, cfg: dict):
+    if session.config_path.exists():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = REPO_ROOT / ".config_backups"
-        backup_dir.mkdir(exist_ok=True)
-        shutil.copy2(CONFIG_PATH, backup_dir / f"config_{ts}.yaml")
-    CONFIG_PATH.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False))
+        session.backup_dir.mkdir(exist_ok=True)
+        shutil.copy2(session.config_path, session.backup_dir / f"config_{ts}.yaml")
+    session.config_path.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False))
+    touch_session(session.id)
 
 
 def run_cmd(cmd: list[str], timeout: int = 30) -> str:
-    """Run a short-lived command and return stdout+stderr."""
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO_ROOT)
         return r.stdout + r.stderr
@@ -82,29 +93,31 @@ def run_cmd(cmd: list[str], timeout: int = 30) -> str:
         return "Command timed out."
 
 
-def launch_snakemake(extra_args: list[str] | None = None):
-    """Launch snakemake as a background process with metadata tracking."""
-    cmd = ["snakemake", "--profile", "profiles/slurm/"]
+def launch_snakemake(session: Session, extra_args: list[str] | None = None):
+    cmd = [
+        "snakemake",
+        "--profile", "profiles/slurm/",
+        "--configfile", str(session.config_path),
+    ]
     if extra_args:
         cmd.extend(extra_args)
-    with open(LOG_FILE, "w") as log:
+    with open(session.log_file, "w") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=REPO_ROOT)
-    # Write metadata for robust process identification
     meta = {
         "pid": proc.pid,
+        "session_id": session.id,
         "start_time": datetime.now().isoformat(),
         "command": " ".join(cmd),
     }
-    RUN_META_FILE.write_text(json.dumps(meta))
+    session.run_meta_file.write_text(json.dumps(meta))
     return proc.pid
 
 
-def snakemake_status() -> tuple[bool, int | None, str | None]:
-    """Check if a snakemake process is running. Returns (running, pid, start_time)."""
-    if not RUN_META_FILE.exists():
+def snakemake_status(session: Session) -> tuple[bool, int | None, str | None]:
+    if not session.run_meta_file.exists():
         return False, None, None
     try:
-        meta = json.loads(RUN_META_FILE.read_text())
+        meta = json.loads(session.run_meta_file.read_text())
     except (json.JSONDecodeError, ValueError):
         return False, None, None
     pid = meta.get("pid")
@@ -113,37 +126,34 @@ def snakemake_status() -> tuple[bool, int | None, str | None]:
         return False, None, None
     try:
         os.kill(pid, 0)
-        # Verify it's actually snakemake, not a recycled PID
         r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=5)
         if "snakemake" not in r.stdout.lower() and "python" not in r.stdout.lower():
-            RUN_META_FILE.unlink(missing_ok=True)
+            session.run_meta_file.unlink(missing_ok=True)
             return False, pid, start_time
         return True, pid, start_time
     except (OSError, subprocess.TimeoutExpired):
-        RUN_META_FILE.unlink(missing_ok=True)
+        session.run_meta_file.unlink(missing_ok=True)
         return False, pid, start_time
 
 
-def stop_snakemake() -> bool:
-    """Stop the running snakemake process. Returns True if stopped."""
-    if not RUN_META_FILE.exists():
+def stop_snakemake(session: Session) -> bool:
+    if not session.run_meta_file.exists():
         return False
     try:
-        meta = json.loads(RUN_META_FILE.read_text())
+        meta = json.loads(session.run_meta_file.read_text())
         pid = meta.get("pid")
         if pid:
             import signal
             os.kill(pid, signal.SIGTERM)
-            RUN_META_FILE.unlink(missing_ok=True)
+            session.run_meta_file.unlink(missing_ok=True)
             return True
     except (OSError, json.JSONDecodeError):
         pass
-    RUN_META_FILE.unlink(missing_ok=True)
+    session.run_meta_file.unlink(missing_ok=True)
     return False
 
 
 def format_elapsed(start_iso: str) -> str:
-    """Format elapsed time since ISO timestamp as 'Xh Ym Zs'."""
     start = datetime.fromisoformat(start_iso)
     delta = datetime.now() - start
     total_secs = int(delta.total_seconds())
@@ -157,7 +167,6 @@ def format_elapsed(start_iso: str) -> str:
 
 
 def get_slurm_jobs() -> list[dict]:
-    """Get current user's SLURM jobs (running/pending) as list of dicts."""
     try:
         r = subprocess.run(
             ["squeue", "-u", USER, "--json"],
@@ -170,7 +179,6 @@ def get_slurm_jobs() -> list[dict]:
 
 
 def get_recent_jobs(hours: int = 24) -> list[dict]:
-    """Get recent jobs (including completed/failed) via sacct."""
     try:
         r = subprocess.run(
             ["sacct", "-u", USER, "--starttime", f"now-{hours}hours",
@@ -186,7 +194,6 @@ def get_recent_jobs(hours: int = 24) -> list[dict]:
             if len(parts) < 8:
                 continue
             job_id = parts[0]
-            # Skip sub-steps like "12345.batch" or "12345.extern"
             if "." in job_id:
                 continue
             jobs.append({
@@ -205,25 +212,21 @@ def get_recent_jobs(hours: int = 24) -> list[dict]:
 
 
 def is_protforge_job(job_name: str) -> bool:
-    """Check if a job name matches a ProtForge/Snakemake rule."""
     return any(rule in job_name for rule in RULE_TO_STAGE)
 
 
 def job_to_stage(job_name: str) -> str:
-    """Map a SLURM job name to a pipeline stage."""
     for rule, stage in RULE_TO_STAGE.items():
         if rule in job_name:
             return stage
     return "Other"
 
 
-def get_job_log_path(job_id: int | str) -> Path | None:
-    """Find the SLURM log file for a job ID."""
+def get_job_log_path(job_id: int | str, cfg: dict) -> Path | None:
     slurm_logs = REPO_ROOT / ".snakemake" / "slurm_logs"
     if slurm_logs.exists():
         for log in slurm_logs.rglob(f"{job_id}.log"):
             return log
-    cfg = load_config()
     log_dir = cfg.get("slurm", {}).get("log_dir", "")
     if log_dir:
         log_path = Path(log_dir)
@@ -236,7 +239,6 @@ def get_job_log_path(job_id: int | str) -> Path | None:
 
 
 def read_log_tail(path: Path, n_lines: int = 100) -> str:
-    """Read the last n lines of a log file."""
     try:
         lines = path.read_text(errors="replace").splitlines()
         return "\n".join(lines[-n_lines:])
@@ -251,27 +253,22 @@ def count_files(directory: Path, pattern: str) -> int:
 
 
 def get_expected_total(cfg: dict) -> int:
-    """Count expected sequences from input sources."""
     output_dir = Path(cfg.get("output", {}).get("parent_dir", ""))
     seq_dir = output_dir / "sequences"
     fasta_dir = Path(cfg.get("input", {}).get("fasta_dir", ""))
     yaml_dir = Path(cfg.get("input", {}).get("yaml_dir", ""))
     pipeline = cfg.get("pipeline", {})
 
-    # If MSA is off and yaml_dir is set, count YAMLs
     if not pipeline.get("msa") and yaml_dir != Path("") and yaml_dir.is_dir():
         return count_files(yaml_dir, "*.yaml")
-    # Otherwise count input FASTAs
     if fasta_dir.is_dir():
         return count_files(fasta_dir, "*.fasta") + count_files(fasta_dir, "*.fa")
-    # Fallback: count existing sequence dirs
     if seq_dir.is_dir():
         return len([d for d in seq_dir.iterdir() if d.is_dir()])
     return 0
 
 
 def get_stage_progress(cfg: dict) -> dict:
-    """Count done vs total for each pipeline stage based on output files."""
     output_dir = Path(cfg.get("output", {}).get("parent_dir", ""))
     seq_dir = output_dir / "sequences"
     pipeline = cfg.get("pipeline", {})
@@ -286,7 +283,6 @@ def get_stage_progress(cfg: dict) -> dict:
 
     if pipeline.get("boltz"):
         if num_runs <= 1:
-            # Single-run: count sequences with any CIF
             done = 0
             if seq_dir.is_dir():
                 for d in seq_dir.iterdir():
@@ -295,7 +291,6 @@ def get_stage_progress(cfg: dict) -> dict:
                         done += 1
             progress["Boltz"] = (done, total)
         else:
-            # Multi-run: track completed runs out of total * num_runs
             done = 0
             if seq_dir.is_dir():
                 for d in seq_dir.iterdir():
@@ -319,7 +314,6 @@ def get_stage_progress(cfg: dict) -> dict:
 
 
 def fastest_refresh(progress: dict) -> int | None:
-    """Return the shortest refresh interval among active incomplete stages."""
     intervals = []
     for stage, (done, total) in progress.items():
         if total > 0 and done < total:
@@ -328,13 +322,130 @@ def fastest_refresh(progress: dict) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Bootstrap: migrate legacy config and ensure at least one session exists
+# ---------------------------------------------------------------------------
+migrate_legacy()
+
+registry = load_registry()
+if not registry["sessions"]:
+    create_session("Default")
+    registry = load_registry()
+
+# ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="ProtForge", layout="wide")
 
+# ---------------------------------------------------------------------------
+# Session state init
+# ---------------------------------------------------------------------------
+if "active_session_id" not in st.session_state:
+    st.session_state.active_session_id = get_active_session_id() or registry["sessions"][0]["id"]
+
+# ---------------------------------------------------------------------------
+# Sidebar — session management
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### Sessions")
+
+    sessions = list_sessions()
+    session_ids = [s["id"] for s in sessions]
+
+    # Ensure active session is valid
+    if st.session_state.active_session_id not in session_ids:
+        st.session_state.active_session_id = session_ids[0] if session_ids else None
+
+    # Session list
+    for s_info in sessions:
+        s_obj = get_session(s_info["id"])
+        is_active = s_info["id"] == st.session_state.active_session_id
+        running, _, _ = snakemake_status(s_obj)
+        status_dot = "🟢" if running else "⚪"
+
+        col_btn, col_status = st.columns([5, 1])
+        with col_btn:
+            label = f"**{s_info['name']}**" if is_active else s_info["name"]
+            if st.button(
+                label,
+                key=f"switch_{s_info['id']}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state.active_session_id = s_info["id"]
+                set_active_session(s_info["id"])
+                st.rerun()
+        with col_status:
+            st.markdown(status_dot)
+
+    st.divider()
+
+    # New session
+    with st.expander("New Session", expanded=False):
+        new_name = st.text_input("Session name", value="", key="new_session_name")
+        clone_options = ["Empty config"] + [s["name"] for s in sessions]
+        clone_choice = st.selectbox("Clone config from", options=clone_options, key="clone_source")
+
+        if st.button("Create", key="create_session", use_container_width=True):
+            if not new_name.strip():
+                st.error("Enter a session name.")
+            else:
+                base_config = None
+                if clone_choice != "Empty config":
+                    # Find the session to clone from
+                    for s_info in sessions:
+                        if s_info["name"] == clone_choice:
+                            base_config = load_config(get_session(s_info["id"]))
+                            break
+                new_session = create_session(new_name.strip(), base_config=base_config)
+                st.session_state.active_session_id = new_session.id
+                set_active_session(new_session.id)
+                st.rerun()
+
+    # Session actions for active session
+    if st.session_state.active_session_id:
+        active_info = next((s for s in sessions if s["id"] == st.session_state.active_session_id), None)
+        if active_info:
+            with st.expander("Session Settings", expanded=False):
+                new_label = st.text_input("Rename", value=active_info["name"], key="rename_input")
+                if new_label != active_info["name"] and st.button("Rename", key="rename_btn"):
+                    rename_session(active_info["id"], new_label)
+                    st.rerun()
+
+                st.caption(f"Created: {active_info.get('created', 'unknown')[:16]}")
+
+                # Delete (only if not running and more than one session)
+                s_obj = get_session(active_info["id"])
+                running, _, _ = snakemake_status(s_obj)
+                if len(sessions) > 1 and not running:
+                    if st.button("Delete this session", type="secondary", key="delete_btn"):
+                        st.session_state.confirm_delete = True
+
+                    if st.session_state.get("confirm_delete"):
+                        st.warning(f"Delete **{active_info['name']}** and all its config/logs?")
+                        c1, c2 = st.columns(2)
+                        if c1.button("Yes, delete", key="confirm_yes"):
+                            delete_session(active_info["id"])
+                            st.session_state.pop("confirm_delete", None)
+                            new_registry = load_registry()
+                            if new_registry["sessions"]:
+                                st.session_state.active_session_id = new_registry["sessions"][0]["id"]
+                            st.rerun()
+                        if c2.button("Cancel", key="confirm_no"):
+                            st.session_state.pop("confirm_delete", None)
+                            st.rerun()
+                elif running:
+                    st.caption("Cannot delete a running session.")
+
+# ---------------------------------------------------------------------------
+# Get active session for main content
+# ---------------------------------------------------------------------------
+session = get_session(st.session_state.active_session_id)
+
+# Header
 col_title, col_info = st.columns([3, 1])
 with col_title:
-    st.title("ProtForge")
+    active_name = next((s["name"] for s in sessions if s["id"] == session.id), session.id)
+    st.title(f"ProtForge — {active_name}")
 with col_info:
     st.caption(f"{USER}@{HOST}")
 
@@ -344,7 +455,7 @@ tab_config, tab_run, tab_monitor = st.tabs(["Configuration", "Run Pipeline", "Jo
 # TAB 1: Configuration
 # =========================================================================
 with tab_config:
-    cfg = load_config()
+    cfg = load_config(session)
 
     with st.expander("Pipeline Stages", expanded=True):
         pipeline = cfg.get("pipeline", {})
@@ -445,9 +556,9 @@ with tab_config:
         cfg["slurm"] = slurm
 
     st.divider()
-    if st.button("Save Configuration", type="primary", width="stretch"):
-        save_config(cfg)
-        st.success("config.yaml saved! (backup in .config_backups/)")
+    if st.button("Save Configuration", type="primary", use_container_width=True):
+        save_config(session, cfg)
+        st.success("Config saved! (backup in session directory)")
 
     with st.expander("View raw YAML"):
         st.code(yaml.dump(cfg, default_flow_style=False, sort_keys=False), language="yaml")
@@ -457,7 +568,7 @@ with tab_config:
 # TAB 2: Run Pipeline
 # =========================================================================
 with tab_run:
-    cfg = load_config()
+    cfg = load_config(session)
     pipeline = cfg.get("pipeline", {})
 
     st.subheader("Pipeline Summary")
@@ -474,18 +585,18 @@ with tab_run:
     st.markdown(f"**Output:** `{out.get('parent_dir', 'not set')}`")
 
     # Snakemake process status + elapsed clock
-    running, pid, start_time = snakemake_status()
+    running, pid, start_time = snakemake_status(session)
     if running:
         elapsed = format_elapsed(start_time) if start_time else "unknown"
         st.success(f"Snakemake is running (PID {pid}) — elapsed: {elapsed}")
         c1, c2 = st.columns([3, 1])
         with c1:
             if st.button("View log tail"):
-                if LOG_FILE.exists():
-                    st.code(read_log_tail(LOG_FILE, 50), language="text")
+                if session.log_file.exists():
+                    st.code(read_log_tail(session.log_file, 50), language="text")
         with c2:
             if st.button("Stop Pipeline", type="secondary"):
-                if stop_snakemake():
+                if stop_snakemake(session):
                     st.warning("Snakemake stopped. Already-submitted SLURM jobs will continue running.")
                     st.rerun()
                 else:
@@ -496,17 +607,18 @@ with tab_run:
             if start_time:
                 msg += f" — started at {start_time}"
             st.info(msg)
-            if LOG_FILE.exists() and st.button("View last run log"):
-                st.code(read_log_tail(LOG_FILE, 80), language="text")
+            if session.log_file.exists() and st.button("View last run log"):
+                st.code(read_log_tail(session.log_file, 80), language="text")
 
     st.divider()
 
     # Dry run
     st.subheader("Dry Run")
-    if st.button("Run snakemake -n (dry run)", width="stretch"):
+    if st.button("Run snakemake -n (dry run)", use_container_width=True):
         with st.spinner("Running dry run..."):
             output = run_cmd(
-                ["snakemake", "--profile", "profiles/slurm/", "-n"],
+                ["snakemake", "--profile", "profiles/slurm/",
+                 "--configfile", str(session.config_path), "-n"],
                 timeout=60,
             )
         if output.strip():
@@ -524,14 +636,14 @@ with tab_run:
         c1, c2 = st.columns(2)
         with c1:
             confirm = st.checkbox("I understand, submit SLURM jobs")
-            if st.button("Launch", type="primary", disabled=not confirm, width="stretch"):
-                new_pid = launch_snakemake()
+            if st.button("Launch", type="primary", disabled=not confirm, use_container_width=True):
+                new_pid = launch_snakemake(session)
                 st.success(f"Snakemake launched in background (PID {new_pid}).")
                 st.rerun()
         with c2:
             confirm_rerun = st.checkbox("Resume incomplete jobs")
-            if st.button("Rerun Incomplete", disabled=not confirm_rerun, width="stretch"):
-                new_pid = launch_snakemake(["--rerun-incomplete"])
+            if st.button("Rerun Incomplete", disabled=not confirm_rerun, use_container_width=True):
+                new_pid = launch_snakemake(session, ["--rerun-incomplete"])
                 st.success(f"Snakemake --rerun-incomplete launched (PID {new_pid}).")
                 st.rerun()
 
@@ -540,11 +652,11 @@ with tab_run:
 # TAB 3: Job Monitor (auto-refreshing)
 # =========================================================================
 with tab_monitor:
-    cfg = load_config()
+    cfg = load_config(session)
     output_dir = cfg.get("output", {}).get("parent_dir", "")
 
     # --- Execution clock ---
-    running, pid, start_time = snakemake_status()
+    running, pid, start_time = snakemake_status(session)
     if running and start_time:
         elapsed = format_elapsed(start_time)
         st.metric("Pipeline running", elapsed)
@@ -626,7 +738,7 @@ with tab_monitor:
                 "Nodes": j.get("nodes", ""),
             })
 
-        st.dataframe(rows, width="stretch", hide_index=True)
+        st.dataframe(rows, use_container_width=True, hide_index=True)
 
     # --- Recent job history (including failed) ---
     st.divider()
@@ -657,7 +769,7 @@ with tab_monitor:
             })
             all_job_ids.append(j["job_id"])
 
-        st.dataframe(hist_rows, width="stretch", hide_index=True)
+        st.dataframe(hist_rows, use_container_width=True, hide_index=True)
 
         # --- Job log viewer ---
         st.divider()
@@ -671,7 +783,7 @@ with tab_monitor:
             ),
         )
         if selected_job and st.button("Load log"):
-            log_path = get_job_log_path(selected_job)
+            log_path = get_job_log_path(selected_job, cfg)
             if log_path:
                 st.caption(f"Reading: {log_path}")
                 st.code(read_log_tail(log_path, 150), language="text")
@@ -679,8 +791,8 @@ with tab_monitor:
                 st.warning(f"No log file found for job {selected_job}. Check .snakemake/slurm_logs/ or your SLURM log directory.")
 
     # --- Snakemake controller log ---
-    if LOG_FILE.exists():
+    if session.log_file.exists():
         st.divider()
         st.subheader("Snakemake Controller Log")
         if st.button("Show snakemake log tail"):
-            st.code(read_log_tail(LOG_FILE, 100), language="text")
+            st.code(read_log_tail(session.log_file, 100), language="text")

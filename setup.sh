@@ -156,7 +156,7 @@ else
         echo "[...] No snakemake environment found. Creating one..."
         SNAKEMAKE_ENV="$HOME/envs/snakemake"
         conda create -p "$SNAKEMAKE_ENV" python=3.12 -y
-        "$SNAKEMAKE_ENV/bin/pip" install snakemake snakemake-executor-plugin-slurm
+        "$SNAKEMAKE_ENV/bin/pip" install snakemake snakemake-executor-plugin-slurm streamlit streamlit-autorefresh
         SNAKEMAKE_ACTIVATE="conda activate $SNAKEMAKE_ENV"
         echo "[OK] Snakemake environment created at $SNAKEMAKE_ENV"
     fi
