@@ -124,6 +124,24 @@ def snakemake_status() -> tuple[bool, int | None, str | None]:
         return False, pid, start_time
 
 
+def stop_snakemake() -> bool:
+    """Stop the running snakemake process. Returns True if stopped."""
+    if not RUN_META_FILE.exists():
+        return False
+    try:
+        meta = json.loads(RUN_META_FILE.read_text())
+        pid = meta.get("pid")
+        if pid:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+            RUN_META_FILE.unlink(missing_ok=True)
+            return True
+    except (OSError, json.JSONDecodeError):
+        pass
+    RUN_META_FILE.unlink(missing_ok=True)
+    return False
+
+
 def format_elapsed(start_iso: str) -> str:
     """Format elapsed time since ISO timestamp as 'Xh Ym Zs'."""
     start = datetime.fromisoformat(start_iso)
@@ -460,9 +478,18 @@ with tab_run:
     if running:
         elapsed = format_elapsed(start_time) if start_time else "unknown"
         st.success(f"Snakemake is running (PID {pid}) — elapsed: {elapsed}")
-        if st.button("View log tail"):
-            if LOG_FILE.exists():
-                st.code(read_log_tail(LOG_FILE, 50), language="text")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            if st.button("View log tail"):
+                if LOG_FILE.exists():
+                    st.code(read_log_tail(LOG_FILE, 50), language="text")
+        with c2:
+            if st.button("Stop Pipeline", type="secondary"):
+                if stop_snakemake():
+                    st.warning("Snakemake stopped. Already-submitted SLURM jobs will continue running.")
+                    st.rerun()
+                else:
+                    st.error("Could not stop snakemake process.")
     else:
         if pid is not None:
             msg = f"Last snakemake run finished (was PID {pid})"
@@ -492,7 +519,7 @@ with tab_run:
     # Launch / Rerun buttons
     st.subheader("Launch Pipeline")
     if running:
-        st.warning("Snakemake is already running. Wait for it to finish or stop it manually.")
+        st.warning("Snakemake is already running. Stop it above before launching a new run.")
     else:
         c1, c2 = st.columns(2)
         with c1:
