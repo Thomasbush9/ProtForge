@@ -1,9 +1,11 @@
 *__pycache__
-__pycache__/*
+*__pycache__/*
 *pyc
+__pychace__/*
 
 # Webapp runtime files
 .snakemake_run.json
 snakemake_run.log
 .config_backups/
 .sessions/
+*.cpython

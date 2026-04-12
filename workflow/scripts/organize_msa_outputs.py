@@ -114,7 +114,8 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
 
         # Create YAML file for Boltz
         yaml_path = seq_dir / f"{seq_name}.yaml"
-        a3m_absolute = str(dest_a3m.resolve())
+        # Use relative path so YAMLs stay valid when sequences are copied/subset
+        a3m_relative = dest_a3m.relative_to(seq_dir)
         yaml_content = (
             f"version: 1\n"
             f"\n"
@@ -122,7 +123,7 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
             f"  - protein:\n"
             f'      id: "{protein_id}"\n'
             f"      sequence: {sequence}\n"
-            f"      msa: {a3m_absolute}\n"
+            f"      msa: {a3m_relative}\n"
         )
         yaml_path.write_text(yaml_content)
 
