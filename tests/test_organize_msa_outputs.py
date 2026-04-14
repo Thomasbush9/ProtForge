@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "workflow" / "scripts"))
-from organize_msa_outputs import get_protein_id, organize_chunk, parse_fasta_header
+from organize_msa_outputs import get_protein_id, is_empty_msa, organize_chunk, parse_fasta_header
 from conftest import make_a3m, make_fasta
 
 
@@ -44,6 +44,18 @@ class TestGetProteinId:
         fasta = tmp_path / "fallback.fasta"
         fasta.write_text(">|empty\nMK\n")
         assert get_protein_id(fasta) == "fallback"
+
+
+class TestIsEmptyMsa:
+    def test_empty_msa(self, tmp_path):
+        """Query-only a3m (no homologs) is detected as empty."""
+        a3m = make_a3m(tmp_path, "synth", homologs=False)
+        assert is_empty_msa(a3m) is True
+
+    def test_real_msa(self, tmp_path):
+        """A3m with homologs is not empty."""
+        a3m = make_a3m(tmp_path, "natural", homologs=True)
+        assert is_empty_msa(a3m) is False
 
 
 class TestOrganizeChunk:
@@ -136,6 +148,25 @@ class TestOrganizeChunk:
         assert (msa_dir / "protA.a3m").exists()
         assert (msa_dir / "protA.sto").exists()
         assert (msa_dir / "protA.hhr").exists()
+
+    def test_empty_msa_uses_msa_empty(self, tmp_path):
+        """Synthetic proteins with no homologs get msa: empty in YAML."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        fasta = make_fasta(input_dir, "synth", "ACDEFG")
+
+        colab_dir = tmp_path / "colab"
+        colab_dir.mkdir()
+        make_a3m(colab_dir, "synth", homologs=False)
+
+        file_list = tmp_path / "file_list.txt"
+        file_list.write_text(f"{fasta.resolve()}\n")
+
+        seq_dir = tmp_path / "sequences"
+        organize_chunk(str(file_list), str(colab_dir), str(seq_dir))
+
+        yaml_content = (seq_dir / "synth" / "synth.yaml").read_text()
+        assert "msa: empty" in yaml_content
 
     def test_skips_missing_fasta(self, tmp_path):
         """Warns and skips when FASTA file doesn't exist."""

@@ -18,6 +18,19 @@ import sys
 from pathlib import Path
 
 
+def is_empty_msa(a3m_path: Path) -> bool:
+    """Check if an a3m file has no real homologs (just the query repeated)."""
+    with open(a3m_path) as f:
+        lines = [ln.strip() for ln in f if ln.strip()]
+    # Collect unique sequences (skip header lines)
+    sequences = set()
+    for line in lines:
+        if not line.startswith(">"):
+            sequences.add(line)
+    # If there's only one unique sequence, the MSA is effectively empty
+    return len(sequences) <= 1
+
+
 def parse_fasta_header(fasta_path: Path) -> tuple[str, str]:
     """Read a FASTA file and return (protein_prefix, sequence)."""
     with open(fasta_path) as f:
@@ -116,6 +129,12 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
         yaml_path = seq_dir / f"{seq_name}.yaml"
         # Use relative path so YAMLs stay valid when sequences are copied/subset
         a3m_relative = dest_a3m.relative_to(seq_dir)
+        # Detect empty MSAs (synthetic proteins with no homologs)
+        if is_empty_msa(dest_a3m):
+            msa_value = "empty"
+            print(f"  INFO: No real homologs found, using msa: empty")
+        else:
+            msa_value = str(a3m_relative)
         yaml_content = (
             f"version: 1\n"
             f"\n"
@@ -123,7 +142,7 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
             f"  - protein:\n"
             f'      id: "{protein_id}"\n'
             f"      sequence: {sequence}\n"
-            f"      msa: {a3m_relative}\n"
+            f"      msa: {msa_value}\n"
         )
         yaml_path.write_text(yaml_content)
 

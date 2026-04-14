@@ -9,3 +9,6 @@ snakemake_run.log
 .config_backups/
 .sessions/
 *.cpython
+
+# User-specific config (use config.template.yaml as starting point)
+config.yaml
