@@ -25,10 +25,13 @@ def make_yaml(directory: Path, name: str, sequence: str, msa_path: str = "empty"
     return yaml_path
 
 
-def make_a3m(directory: Path, name: str) -> Path:
-    """Create a dummy .a3m file."""
+def make_a3m(directory: Path, name: str, homologs: bool = True) -> Path:
+    """Create a dummy .a3m file. If homologs=False, only the query sequence (no real MSA)."""
     a3m_path = directory / f"{name}.a3m"
-    a3m_path.write_text(f">{name}\nMKTLAEEL\n")
+    if homologs:
+        a3m_path.write_text(f">{name}\nMKTLAEEL\n>homolog1\nMRTLAEEL\n")
+    else:
+        a3m_path.write_text(f">{name}\nMKTLAEEL\n>{name}\nMKTLAEEL\n")
     return a3m_path
 
 

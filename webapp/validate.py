@@ -11,6 +11,26 @@ VALID_AAS = set("ACDEFGHIKLMNPQRSTVWY")
 # Only lowercase — the pipeline (chunk_fastas.py) only accepts lowercase extensions
 FASTA_EXTENSIONS = {".fasta", ".fa"}
 YAML_EXTENSIONS = {".yaml", ".yml"}
+MAX_SAFE_FASTA_HEADER_LEN = 180
+
+
+def fasta_header_rename_error(header: str) -> str | None:
+    """Return an error if a FASTA header is likely to break colabfold_search.
+
+    ColabFold renames unpacked A3M files using the first FASTA header token.
+    Very long headers can exceed the filesystem filename limit and make the MSA
+    stage fail after the search itself succeeds.
+    """
+    header_token = header.split()[0] if header else ""
+    if not header_token:
+        return "Header is empty"
+    if len(header_token) > MAX_SAFE_FASTA_HEADER_LEN:
+        return (
+            f"Header token is too long for MSA output renaming "
+            f"({len(header_token)} chars > {MAX_SAFE_FASTA_HEADER_LEN}). "
+            f"Use a shorter identifier in the FASTA header."
+        )
+    return None
 
 
 def validate_fasta(path: Path) -> dict:
@@ -73,6 +93,9 @@ def validate_fasta(path: Path) -> dict:
                     )
             seq_count += 1
             current_header = line[1:].split()[0] if len(line) > 1 else f"seq_{seq_count}"
+            header_error = fasta_header_rename_error(current_header)
+            if header_error:
+                result["errors"].append(f"Sequence '{current_header}': {header_error}")
             current_seq = []
         else:
             current_seq.append(line.replace(" ", ""))

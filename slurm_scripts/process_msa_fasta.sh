@@ -44,8 +44,8 @@ while IFS= read -r -d '' INPUT_FASTA; do
     continue
   fi
 
-  # Get absolute path to a3m file
-  A3M_ABSOLUTE=$(realpath "$A3M_FILE")
+  # Use relative path so YAMLs stay valid when sequences are copied/subset
+  A3M_RELATIVE="msa/$(basename "$A3M_FILE")"
   OUTPUT_YAML="${SEQ_DIR}/${BASENAME_NOEXT}.yaml"
 
   # Read original header and sequence
@@ -68,12 +68,12 @@ while IFS= read -r -d '' INPUT_FASTA; do
     echo "  - protein:"
     echo "      id: \"$PROTEIN_ID\""
     echo "      sequence: $SEQUENCE"
-    echo "      msa: $A3M_ABSOLUTE"
+    echo "      msa: $A3M_RELATIVE"
   } >"$OUTPUT_YAML"
 
   echo "Processed: $BASENAME -> $OUTPUT_YAML"
   echo "  ID: $PROTEIN_ID"
-  echo "  MSA: $A3M_ABSOLUTE"
+  echo "  MSA: $A3M_RELATIVE"
   ((PROCESSED_COUNT++)) || true
 
 done < <(find "$ORIGINAL_FASTA_DIR" -maxdepth 1 -type f \( -name "*.fasta" -o -name "*.fa" \) -print0)

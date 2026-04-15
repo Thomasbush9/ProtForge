@@ -114,6 +114,44 @@ def launch_snakemake(session: Session, extra_args: list[str] | None = None):
     return proc.pid
 
 
+def validate_launch_inputs(cfg: dict) -> list[str]:
+    """Validate configured inputs before submitting cluster jobs."""
+    errors = []
+    pipeline = cfg.get("pipeline", {})
+    if not pipeline.get("msa", False):
+        return errors
+
+    fasta_dir_value = cfg.get("input", {}).get("fasta_dir", "")
+    if not fasta_dir_value:
+        errors.append("MSA is enabled but input.fasta_dir is not set.")
+        return errors
+
+    fasta_dir = Path(fasta_dir_value)
+    if not fasta_dir.is_dir():
+        errors.append(f"MSA input directory does not exist: {fasta_dir}")
+        return errors
+
+    scan_result = scan_directory(fasta_dir)
+    if scan_result["file_type"] == "none":
+        errors.append(f"No FASTA files found in {fasta_dir}.")
+        return errors
+
+    if scan_result["file_type"] != "fasta":
+        errors.append(f"MSA input directory must contain only FASTA files: {fasta_dir}")
+        return errors
+
+    invalid_fastas = [r for r in scan_result["fasta_results"] if not r["valid"]]
+    if invalid_fastas:
+        first = invalid_fastas[0]
+        for err in first["errors"]:
+            errors.append(f"{first['filename']}: {err}")
+        extra = len(invalid_fastas) - 1
+        if extra > 0:
+            errors.append(f"{extra} more FASTA file(s) failed validation.")
+
+    return errors
+
+
 def snakemake_status(session: Session) -> tuple[bool, int | None, str | None]:
     if not session.run_meta_file.exists():
         return False, None, None
@@ -1044,19 +1082,33 @@ with tab_run:
 
     # Launch / Rerun buttons
     st.subheader("Launch Pipeline")
+    launch_errors = validate_launch_inputs(cfg)
+    if launch_errors:
+        st.error("Launch blocked by input validation:")
+        for err in launch_errors:
+            st.text(f"- {err}")
     if running:
         st.warning("Snakemake is already running. Stop it above before launching a new run.")
     else:
         c1, c2 = st.columns(2)
         with c1:
             confirm = st.checkbox("I understand, submit SLURM jobs")
-            if st.button("Launch", type="primary", disabled=not confirm, use_container_width=True):
+            if st.button(
+                "Launch",
+                type="primary",
+                disabled=(not confirm) or bool(launch_errors),
+                use_container_width=True,
+            ):
                 new_pid = launch_snakemake(session)
                 st.success(f"Snakemake launched in background (PID {new_pid}).")
                 st.rerun()
         with c2:
             confirm_rerun = st.checkbox("Resume incomplete jobs")
-            if st.button("Rerun Incomplete", disabled=not confirm_rerun, use_container_width=True):
+            if st.button(
+                "Rerun Incomplete",
+                disabled=(not confirm_rerun) or bool(launch_errors),
+                use_container_width=True,
+            ):
                 new_pid = launch_snakemake(session, ["--rerun-incomplete"])
                 st.success(f"Snakemake --rerun-incomplete launched (PID {new_pid}).")
                 st.rerun()
