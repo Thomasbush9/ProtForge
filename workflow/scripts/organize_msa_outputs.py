@@ -127,14 +127,16 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
 
         # Create YAML file for Boltz
         yaml_path = seq_dir / f"{seq_name}.yaml"
-        # Use relative path so YAMLs stay valid when sequences are copied/subset
-        a3m_relative = dest_a3m.relative_to(seq_dir)
+        # Use absolute path so YAMLs work when symlinked into boltz_chunks/.
+        # Relative paths get resolved against the symlink's parent dir, not the
+        # symlink's target — so msa/foo.a3m would point inside boltz_chunks/
+        # where no msa/ subdir exists.
         # Detect empty MSAs (synthetic proteins with no homologs)
         if is_empty_msa(dest_a3m):
             msa_value = "empty"
             print(f"  INFO: No real homologs found, using msa: empty")
         else:
-            msa_value = str(a3m_relative)
+            msa_value = str(dest_a3m.resolve())
         yaml_content = (
             f"version: 1\n"
             f"\n"
