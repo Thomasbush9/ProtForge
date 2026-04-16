@@ -93,3 +93,25 @@ class TestCreateChunks:
         assert len(chunk_files) == 1
         lines = chunk_files[0].read_text().strip().splitlines()
         assert len(lines) == 5
+
+    def test_rerun_removes_stale_chunk_files(self, tmp_path):
+        """Rerunning with fewer chunks removes old id_N.txt files."""
+        yaml_dir = tmp_path / "yamls"
+        yaml_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        first_files = [make_yaml(yaml_dir, f"seq_{i}", "MKTL") for i in range(5)]
+        create_chunks(first_files, str(output_dir), num_chunks=3)
+        assert (output_dir / "id_2.txt").exists()
+
+        second_dir = tmp_path / "yamls_second"
+        second_dir.mkdir()
+        second_files = [make_yaml(second_dir, f"new_{i}", "ACDE") for i in range(2)]
+        chunk_files = create_chunks(second_files, str(output_dir), num_chunks=1)
+
+        assert len(chunk_files) == 1
+        assert (output_dir / "id_0.txt").exists()
+        assert not (output_dir / "id_1.txt").exists()
+        assert not (output_dir / "id_2.txt").exists()
+        lines = chunk_files[0].read_text().strip().splitlines()
+        assert len(lines) == 2

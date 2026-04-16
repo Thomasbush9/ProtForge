@@ -121,3 +121,25 @@ class TestCreateChunks:
         assert len(manifest) == len(chunks)
         for line in manifest:
             assert Path(line).is_dir()
+
+    def test_rerun_removes_stale_chunk_dirs(self, tmp_path):
+        """Rerunning with fewer files removes stale chunk_N directories."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        first_files = [make_fasta(input_dir, f"seq_{i}", "MKTL") for i in range(3)]
+        create_chunks(first_files, str(output_dir), max_files_per_job=2)
+        assert (output_dir / "chunk_1").exists()
+
+        second_input = tmp_path / "input_second"
+        second_input.mkdir()
+        second_files = [make_fasta(second_input, "seq_new", "ACDE")]
+        chunks = create_chunks(second_files, str(output_dir), max_files_per_job=2)
+
+        assert len(chunks) == 1
+        assert (output_dir / "chunk_0").exists()
+        assert not (output_dir / "chunk_1").exists()
+        lines = (output_dir / "chunk_0" / "file_list.txt").read_text().strip().splitlines()
+        assert len(lines) == 1
+        assert Path(lines[0]).name == "seq_new.fasta"

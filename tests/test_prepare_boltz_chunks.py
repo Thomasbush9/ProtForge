@@ -83,3 +83,21 @@ class TestCreateChunks:
         assert len(list(chunks[0].iterdir())) == 3
         assert len(list(chunks[1].iterdir())) == 3
         assert len(list(chunks[2].iterdir())) == 1
+
+    def test_rerun_removes_stale_symlinks(self, tmp_path):
+        """Rerunning with fewer YAMLs removes leftover symlinks in chunk_N dirs."""
+        yaml_dir = tmp_path / "yamls"
+        yaml_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        first_files = [make_yaml(yaml_dir, f"seq_{i}", "MKTL") for i in range(2)]
+        create_chunks(first_files, str(output_dir), max_files_per_job=10)
+
+        second_dir = tmp_path / "yamls_second"
+        second_dir.mkdir()
+        second_files = [make_yaml(second_dir, "fresh", "ACDE")]
+        chunks = create_chunks(second_files, str(output_dir), max_files_per_job=10)
+
+        symlinks = [f for f in chunks[0].iterdir() if f.is_symlink()]
+        assert len(symlinks) == 1
+        assert symlinks[0].resolve().name == "fresh.yaml"

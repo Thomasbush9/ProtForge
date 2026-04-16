@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "workflow" / "scripts"))
-from organize_msa_outputs import get_protein_id, is_empty_msa, organize_chunk, parse_fasta_header
+from organize_msa_outputs import (
+    get_protein_id, is_empty_msa, organize_chunk, parse_fasta_header,
+    rewrite_a3m_header, truncate_id,
+)
 from conftest import make_a3m, make_fasta
 
 
@@ -56,6 +59,38 @@ class TestIsEmptyMsa:
         """A3m with homologs is not empty."""
         a3m = make_a3m(tmp_path, "natural", homologs=True)
         assert is_empty_msa(a3m) is False
+
+
+class TestTruncateId:
+    def test_short_id_unchanged(self):
+        seen = set()
+        assert truncate_id("abc", seen) == "abc"
+        assert "abc" in seen
+
+    def test_five_char_id_unchanged(self):
+        seen = set()
+        assert truncate_id("sfGFP", seen) == "sfGFP"
+
+    def test_long_id_truncated(self):
+        seen = set()
+        assert truncate_id("mCherry", seen) == "mCher"
+
+    def test_collision_gets_suffix(self):
+        seen = {"mCher"}
+        result = truncate_id("mCherry", seen)
+        assert len(result) == 5
+        assert result != "mCher"
+        assert result.startswith("mChe")
+
+
+class TestRewriteA3mHeader:
+    def test_rewrites_first_header(self, tmp_path):
+        a3m = tmp_path / "test.a3m"
+        a3m.write_text(">101\nMKTL\n>homolog\nMRTL\n")
+        rewrite_a3m_header(a3m, "newid")
+        lines = a3m.read_text().splitlines()
+        assert lines[0] == ">newid"
+        assert lines[2] == ">homolog"
 
 
 class TestOrganizeChunk:
@@ -168,6 +203,50 @@ class TestOrganizeChunk:
 
         yaml_content = (seq_dir / "synth" / "synth.yaml").read_text()
         assert "msa: empty" in yaml_content
+
+    def test_truncates_long_id(self, tmp_path):
+        """Protein IDs longer than 5 chars are truncated for Boltz compatibility."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        fasta = make_fasta(input_dir, "mCherry", "ACDEFG")
+
+        colab_dir = tmp_path / "colab"
+        colab_dir.mkdir()
+        make_a3m(colab_dir, "mCherry")
+
+        file_list = tmp_path / "file_list.txt"
+        file_list.write_text(f"{fasta.resolve()}\n")
+
+        seq_dir = tmp_path / "sequences"
+        organize_chunk(str(file_list), str(colab_dir), str(seq_dir))
+
+        yaml_content = (seq_dir / "mCherry" / "mCherry.yaml").read_text()
+        assert '"mCher"' in yaml_content
+        # a3m header must match the truncated id
+        a3m_content = (seq_dir / "mCherry" / "msa" / "mCherry.a3m").read_text()
+        assert a3m_content.startswith(">mCher\n")
+
+    def test_rewrites_a3m_header(self, tmp_path):
+        """a3m first header is rewritten to match the YAML protein id."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        fasta = make_fasta(input_dir, "protA", "MKTL")
+
+        colab_dir = tmp_path / "colab"
+        colab_dir.mkdir()
+        # Simulate ColabFold internal index header
+        a3m_path = colab_dir / "protA.a3m"
+        a3m_path.write_text(">101\nMKTL\n>homolog1\nMRTL\n")
+
+        file_list = tmp_path / "file_list.txt"
+        file_list.write_text(f"{fasta.resolve()}\n")
+
+        seq_dir = tmp_path / "sequences"
+        organize_chunk(str(file_list), str(colab_dir), str(seq_dir))
+
+        a3m_content = (seq_dir / "protA" / "msa" / "protA.a3m").read_text()
+        assert a3m_content.startswith(">protA\n"), "First header should be rewritten to match YAML id"
+        assert ">homolog1\n" in a3m_content, "Other headers should be unchanged"
 
     def test_skips_missing_fasta(self, tmp_path):
         """Warns and skips when FASTA file doesn't exist."""
