@@ -44,12 +44,41 @@ def parse_fasta_header(fasta_path: Path) -> tuple[str, str]:
     return protein_prefix, sequence
 
 
+MAX_CHAIN_NAME = 5  # Boltz truncates chain names to 5 chars (PDB convention)
+
+
 def get_protein_id(fasta_path: Path) -> str:
     """Extract protein ID from FASTA header for YAML output."""
     with open(fasta_path) as f:
         header = f.readline().strip()
     protein_id = header.lstrip(">").split()[0].split("|")[0]
     return protein_id if protein_id else fasta_path.stem
+
+
+def truncate_id(protein_id: str, seen_ids: set[str]) -> str:
+    """Truncate protein_id to MAX_CHAIN_NAME chars, adding a suffix on collision."""
+    short = protein_id[:MAX_CHAIN_NAME]
+    if short not in seen_ids:
+        seen_ids.add(short)
+        return short
+    # Collision: try single-char suffixes (A-Z, 0-9)
+    for suffix in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
+        candidate = protein_id[: MAX_CHAIN_NAME - 1] + suffix
+        if candidate not in seen_ids:
+            seen_ids.add(candidate)
+            return candidate
+    raise ValueError(f"Cannot create unique {MAX_CHAIN_NAME}-char id for {protein_id}")
+
+
+def rewrite_a3m_header(a3m_path: Path, new_id: str):
+    """Rewrite the first '>' line in an a3m to match the YAML protein id."""
+    lines = a3m_path.read_text().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith(">"):
+            lines[i] = f">{new_id}\n"
+            a3m_path.write_text("".join(lines))
+            return
+
 
 
 def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
@@ -72,6 +101,7 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
     # Build lookup by stem
     a3m_by_stem = {f.stem: f for f in a3m_files}
 
+    seen_ids: set[str] = set()
     processed = 0
     skipped = 0
 
@@ -87,7 +117,7 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
             seq_name = seq_name[:-6]
 
         protein_prefix, sequence = parse_fasta_header(fasta_path)
-        protein_id = get_protein_id(fasta_path)
+        protein_id = truncate_id(get_protein_id(fasta_path), seen_ids)
 
         # Try to find matching a3m: by protein_prefix, then by seq_name, then by order
         a3m_file = None
@@ -119,6 +149,11 @@ def organize_chunk(file_list: str, colabfold_output: str, sequences_dir: str):
         # Move a3m file (avoids storing MSA twice)
         dest_a3m = msa_dir / a3m_file.name
         shutil.move(str(a3m_file), dest_a3m)
+
+        # Rewrite a3m first header to match the YAML protein id.
+        # ColabFold writes an internal index (e.g. ">101") which won't
+        # match the YAML id — Boltz keys chain_to_msa by this header.
+        rewrite_a3m_header(dest_a3m, protein_id)
 
         # Also move related files (.sto, .hhr, etc.)
         a3m_basename = a3m_file.stem

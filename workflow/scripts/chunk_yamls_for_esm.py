@@ -26,6 +26,13 @@ def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Reruns may shrink the chunk count. Remove previous chunk files so shell
+    # wrappers that glob id_*.txt do not resubmit stale work.
+    for stale_chunk in output_path.glob("id_*.txt"):
+        suffix = stale_chunk.stem.removeprefix("id_")
+        if suffix.isdigit():
+            stale_chunk.unlink()
+
     total = len(yaml_files)
     # Adjust num_chunks if more than total files
     num_chunks = min(num_chunks, total)

@@ -13,6 +13,7 @@ Extracted from: slurm_scripts/split_and_run_boltz.sh
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -31,6 +32,14 @@ def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: in
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    # Reruns may target an existing boltz_chunks directory. Remove only the
+    # input chunk directories (chunk_N) so stale YAML symlinks do not leak into
+    # the next submission, while preserving run outputs like chunk_N_run_M_output.
+    for stale_dir in output_path.glob("chunk_*"):
+        suffix = stale_dir.name.removeprefix("chunk_")
+        if stale_dir.is_dir() and suffix.isdigit():
+            shutil.rmtree(stale_dir)
 
     total = len(yaml_files)
     num_chunks = (total + max_files_per_job - 1) // max_files_per_job
