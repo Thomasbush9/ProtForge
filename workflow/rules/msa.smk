@@ -58,6 +58,8 @@ rule run_colabfold_search:
         done = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output/.done",
     benchmark:
         f"{OUTPUT}/benchmarks/msa/colabfold_search_{{chunk_id}}.tsv"
+    log:
+        f"{OUTPUT}/logs/msa/colabfold_search_{{chunk_id}}.log"
     params:
         output_dir = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output",
         mmseq2_db = MSA_CFG.get("mmseq2_db", ""),
@@ -74,6 +76,9 @@ rule run_colabfold_search:
     shell:
         """
         set -euo pipefail
+        exec > {log} 2>&1
+        set -x
+
         export CUDA_VISIBLE_DEVICES=0
         export NUM_GPU_DEVICES=1
 

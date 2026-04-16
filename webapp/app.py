@@ -407,7 +407,7 @@ with st.sidebar:
             if st.button(
                 label,
                 key=f"switch_{s_info['id']}",
-                use_container_width=True,
+                width="stretch",
                 type="primary" if is_active else "secondary",
             ):
                 st.session_state.active_session_id = s_info["id"]
@@ -424,7 +424,7 @@ with st.sidebar:
         clone_options = ["Empty config"] + [s["name"] for s in sessions]
         clone_choice = st.selectbox("Clone config from", options=clone_options, key="clone_source")
 
-        if st.button("Create", key="create_session", use_container_width=True):
+        if st.button("Create", key="create_session", width="stretch"):
             if not new_name.strip():
                 st.error("Enter a session name.")
             else:
@@ -555,7 +555,7 @@ def import_dialog():
             )
         with col_go:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Go", use_container_width=True, key="dlg_go"):
+            if st.button("Go", width="stretch", key="dlg_go"):
                 if Path(typed_path).is_dir():
                     st.session_state.browse_path = typed_path
                     st.rerun()
@@ -570,7 +570,7 @@ def import_dialog():
         for i, part in enumerate(parts[: len(breadcrumb_cols)]):
             with breadcrumb_cols[i]:
                 label = part if part != "/" else "/"
-                if st.button(label, key=f"dlg_bc_{i}", use_container_width=True):
+                if st.button(label, key=f"dlg_bc_{i}", width="stretch"):
                     target = Path(*parts[: i + 1]) if i > 0 else Path("/")
                     st.session_state.browse_path = str(target)
                     st.rerun()
@@ -590,14 +590,14 @@ def import_dialog():
                     cols = st.columns(4)
                     for j, d in enumerate(row_dirs):
                         with cols[j]:
-                            if st.button(f"📁 {d.name}", key=f"dlg_sd_{d.name}", use_container_width=True):
+                            if st.button(f"📁 {d.name}", key=f"dlg_sd_{d.name}", width="stretch"):
                                 st.session_state.browse_path = str(d)
                                 st.rerun()
 
             st.divider()
             st.markdown(f"**Source:** `{browse_dir}`")
 
-            if st.button("Scan & Validate", type="primary", use_container_width=True, key="dlg_scan"):
+            if st.button("Scan & Validate", type="primary", width="stretch", key="dlg_scan"):
                 with st.spinner("Scanning files..."):
                     st.session_state.scan_result = scan_directory(browse_dir)
                     st.session_state.scan_path = str(browse_dir)
@@ -626,7 +626,7 @@ def import_dialog():
                                 "Residues": r["total_residues"],
                                 "Errors": "; ".join(r["errors"]) if r["errors"] else "",
                             } for r in result["fasta_results"]]
-                            st.dataframe(rows, use_container_width=True, hide_index=True)
+                            st.dataframe(rows, width="stretch", hide_index=True)
 
                     if result["yaml_results"]:
                         with st.expander(f"YAML files ({len(result['yaml_results'])})", expanded=result["invalid_count"] > 0):
@@ -638,7 +638,7 @@ def import_dialog():
                                 "Has MSA": "Yes" if r["has_msa"] else "No",
                                 "Errors": "; ".join(r["errors"]) if r["errors"] else "",
                             } for r in result["yaml_results"]]
-                            st.dataframe(rows, use_container_width=True, hide_index=True)
+                            st.dataframe(rows, width="stretch", hide_index=True)
 
                     st.divider()
                     if result["valid_count"] > 0 and result["file_type"] in ("fasta", "yaml"):
@@ -650,7 +650,7 @@ def import_dialog():
                             st.warning(f"{result['invalid_count']} invalid file(s) — only valid files will be copied.")
 
                         apply_label = f"Copy {result['valid_count']} valid files to input directory"
-                        if st.button(apply_label, type="primary", use_container_width=True, key="dlg_apply_dir"):
+                        if st.button(apply_label, type="primary", width="stretch", key="dlg_apply_dir"):
                             dest = _get_dest(result["file_type"])
                             if dest is not None:
                                 copied = copy_valid_files(result, dest)
@@ -688,7 +688,7 @@ def import_dialog():
             if df is not None:
                 st.markdown(f"**Loaded:** {len(df)} rows, columns: `{', '.join(df.columns)}`")
                 with st.expander("Preview", expanded=True):
-                    st.dataframe(df.head(20), use_container_width=True, hide_index=True)
+                    st.dataframe(df.head(20), width="stretch", hide_index=True)
 
                 has_mutations = "aaMutations" in df.columns
                 has_sequences = "name" in df.columns and "sequence" in df.columns
@@ -737,7 +737,7 @@ def import_dialog():
                         st.info(f"**Destination:** `{dest_str}`")
 
                     can_gen = csv_mode == "sequences" or (csv_mode == "mutations" and ref_sequence)
-                    if st.button("Generate files", type="primary", disabled=not can_gen, use_container_width=True, key="dlg_gen_csv"):
+                    if st.button("Generate files", type="primary", disabled=not can_gen, width="stretch", key="dlg_gen_csv"):
                         output_dir = _get_dest(file_type)
                         if output_dir is not None:
                             from validate import VALID_AAS as _VA
@@ -847,7 +847,7 @@ def import_dialog():
                 if dest_str:
                     st.info(f"**Destination:** `{dest_str}`")
 
-                if st.button("Generate random mutants", type="primary", use_container_width=True, key="dlg_gen_rand"):
+                if st.button("Generate random mutants", type="primary", width="stretch", key="dlg_gen_rand"):
                     output_dir = _get_dest(file_type_rand)
                     if output_dir is not None:
                         import random as _random
@@ -916,7 +916,7 @@ with tab_config:
             inp["fasta_dir"] = st.text_input("FASTA directory", value=inp.get("fasta_dir", ""))
         with col_import:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Import", use_container_width=True, key="open_import"):
+            if st.button("Import", width="stretch", key="open_import"):
                 # Save current input values so the dialog picks them up
                 cfg["input"] = inp
                 save_config(session, cfg)
@@ -1008,7 +1008,7 @@ with tab_config:
         cfg["slurm"] = slurm
 
     st.divider()
-    if st.button("Save Configuration", type="primary", use_container_width=True):
+    if st.button("Save Configuration", type="primary", width="stretch"):
         save_config(session, cfg)
         st.success("Config saved! (backup in session directory)")
 
@@ -1066,7 +1066,7 @@ with tab_run:
 
     # Dry run
     st.subheader("Dry Run")
-    if st.button("Run snakemake -n (dry run)", use_container_width=True):
+    if st.button("Run snakemake -n (dry run)", width="stretch"):
         with st.spinner("Running dry run..."):
             output = run_cmd(
                 ["snakemake", "--profile", "profiles/slurm/",
@@ -1097,7 +1097,7 @@ with tab_run:
                 "Launch",
                 type="primary",
                 disabled=(not confirm) or bool(launch_errors),
-                use_container_width=True,
+                width="stretch",
             ):
                 new_pid = launch_snakemake(session)
                 st.success(f"Snakemake launched in background (PID {new_pid}).")
@@ -1107,7 +1107,7 @@ with tab_run:
             if st.button(
                 "Rerun Incomplete",
                 disabled=(not confirm_rerun) or bool(launch_errors),
-                use_container_width=True,
+                width="stretch",
             ):
                 new_pid = launch_snakemake(session, ["--rerun-incomplete"])
                 st.success(f"Snakemake --rerun-incomplete launched (PID {new_pid}).")
@@ -1204,7 +1204,7 @@ with tab_monitor:
                 "Nodes": j.get("nodes", ""),
             })
 
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
     # --- Recent job history (including failed) ---
     st.divider()
@@ -1235,7 +1235,7 @@ with tab_monitor:
             })
             all_job_ids.append(j["job_id"])
 
-        st.dataframe(hist_rows, use_container_width=True, hide_index=True)
+        st.dataframe(hist_rows, width="stretch", hide_index=True)
 
         # --- Job log viewer ---
         st.divider()

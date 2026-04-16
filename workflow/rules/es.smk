@@ -134,7 +134,7 @@ rule run_es_all:
     benchmark:
         f"{OUTPUT}/benchmarks/es/es_all.tsv"
     log:
-        f"{ES_DIR}/es_all.log",
+        f"{OUTPUT}/logs/es/es_all.log",
     params:
         es_python = ES_PYTHON,
         sequences_dir = SEQUENCES_DIR,
