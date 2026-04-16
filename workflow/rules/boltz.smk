@@ -20,6 +20,34 @@ YAML_SOURCE_DIR = f"{OUTPUT}/sequences" if RUN_MSA else config["input"].get("yam
 BOLTZ_PARTITION = SLURM_CFG.get("boltz", {}).get("partition", SLURM_CFG.get("partition", ""))
 BOLTZ_ACCOUNT   = SLURM_CFG.get("account", "")
 
+# Optional opt-in CLI flags from boltz.advanced (set via the webapp dialog).
+# Anything missing here falls back to Boltz's own defaults.
+_BOLTZ_FLAG_OPTIONS = {
+    "affinity_mw_correction", "subsample_msa", "no_kernels",
+    "use_potentials", "write_full_pae", "write_full_pde",
+}
+# Map yaml-friendly key -> actual CLI flag name (only odd ones)
+_BOLTZ_CLI_NAME = {"preprocessing_threads": "preprocessing-threads"}
+
+
+def _build_boltz_extra_args(cfg: dict) -> str:
+    """Convert boltz.advanced dict into a `boltz predict` flag string."""
+    adv = cfg.get("advanced", {}) or {}
+    parts = []
+    for key, value in adv.items():
+        cli = _BOLTZ_CLI_NAME.get(key, key)
+        if key in _BOLTZ_FLAG_OPTIONS:
+            if value:
+                parts.append(f"--{cli}")
+        else:
+            if value is None or value == "":
+                continue
+            parts.append(f"--{cli} {value}")
+    return " ".join(parts)
+
+
+BOLTZ_EXTRA_ARGS = _build_boltz_extra_args(BOLTZ_CFG)
+
 
 def boltz_chunk_input(wildcards):
     """Input for chunk_yamls_for_boltz: depend on MSA completion if MSA is enabled."""
@@ -78,6 +106,7 @@ rule run_boltz_predict:
         env_path = BOLTZ_CFG.get("env_path", ""),
         recycling_steps = BOLTZ_CFG.get("recycling_steps", 10),
         diffusion_samples = BOLTZ_CFG.get("diffusion_samples", 25),
+        extra_args = BOLTZ_EXTRA_ARGS,
         container_cmd = container_cmd("boltz"),
     resources:
         cpus_per_task = 8,
@@ -106,7 +135,8 @@ rule run_boltz_predict:
                     --cache {params.cache_dir} --out_dir {params.output_dir} \
                     --devices 1 --accelerator gpu \
                     --recycling_steps {params.recycling_steps} \
-                    --diffusion_samples {params.diffusion_samples} --override
+                    --diffusion_samples {params.diffusion_samples} \
+                    {params.extra_args} --override
         else
             module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
             mamba activate {params.env_path}
@@ -114,7 +144,8 @@ rule run_boltz_predict:
                 --cache {params.cache_dir} --out_dir {params.output_dir} \
                 --devices 1 --accelerator gpu \
                 --recycling_steps {params.recycling_steps} \
-                --diffusion_samples {params.diffusion_samples} --override
+                --diffusion_samples {params.diffusion_samples} \
+                {params.extra_args} --override
         fi
 
         touch {output.done}

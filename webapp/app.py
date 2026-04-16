@@ -892,6 +892,133 @@ def import_dialog():
                         _update_config_after_import(file_type_rand)
                         st.success(f"Generated {generated} mutants in `{output_dir}`")
 
+
+# ---------------------------------------------------------------------------
+# Advanced Boltz options dialog — extra `boltz predict` flags, all opt-in
+# ---------------------------------------------------------------------------
+@st.dialog("Advanced Boltz Options", width="large")
+def boltz_advanced_dialog():
+    """All optional `boltz predict` CLI flags. Only flags marked Enable are passed."""
+    cfg = load_config(session)
+    boltz = cfg.get("boltz", {})
+    adv = boltz.get("advanced", {}) or {}
+
+    st.caption(
+        "Optional flags for `boltz predict`. Only options marked **Enable** are passed; "
+        "the rest fall back to Boltz defaults. "
+        "See [Boltz prediction docs](https://github.com/jwohlwend/boltz/blob/main/docs/prediction.md)."
+    )
+
+    new_adv: dict = {}
+    flag_options = {
+        "affinity_mw_correction", "subsample_msa", "no_kernels",
+        "use_potentials", "write_full_pae", "write_full_pde",
+    }
+
+    def _typed_opt(key: str, label: str, default, help_text: str,
+                   kind: str = "int", choices: list[str] | None = None):
+        cur = adv.get(key)
+        c1, c2 = st.columns([1, 4])
+        enabled = c1.checkbox("Enable", value=cur is not None, key=f"adv_en_{key}")
+        with c2:
+            if kind == "int":
+                v = st.number_input(
+                    label, value=int(cur) if cur is not None else int(default), step=1,
+                    disabled=not enabled, help=help_text, key=f"adv_v_{key}",
+                )
+                if enabled:
+                    new_adv[key] = int(v)
+            elif kind == "float":
+                v = st.number_input(
+                    label, value=float(cur) if cur is not None else float(default),
+                    step=0.001, format="%.3f",
+                    disabled=not enabled, help=help_text, key=f"adv_v_{key}",
+                )
+                if enabled:
+                    new_adv[key] = float(v)
+            elif kind == "select":
+                opts = choices or []
+                idx = opts.index(cur) if cur in opts else opts.index(default)
+                v = st.selectbox(
+                    label, options=opts, index=idx,
+                    disabled=not enabled, help=help_text, key=f"adv_v_{key}",
+                )
+                if enabled:
+                    new_adv[key] = v
+            elif kind == "str":
+                v = st.text_input(
+                    label, value=str(cur) if cur is not None else str(default),
+                    disabled=not enabled, help=help_text, key=f"adv_v_{key}",
+                )
+                if enabled and str(v).strip():
+                    new_adv[key] = str(v).strip()
+
+    def _flag_opt(key: str, label: str, help_text: str):
+        v = st.checkbox(label, value=bool(adv.get(key, False)),
+                        help=help_text, key=f"adv_v_{key}")
+        if v:
+            new_adv[key] = True
+
+    st.markdown("##### Sampling")
+    _typed_opt("sampling_steps", "sampling_steps", 200, "Number of sampling steps", "int")
+    _typed_opt("step_scale", "step_scale", 1.638,
+               "Diffusion temperature; range [1-2] for diversity control", "float")
+    _typed_opt("max_parallel_samples", "max_parallel_samples", 5,
+               "Maximum samples to predict in parallel", "int")
+    _typed_opt("output_format", "output_format", "mmcif",
+               "Output structure format", "select", ["mmcif", "pdb"])
+    _typed_opt("num_workers", "num_workers", 2, "Dataloader worker threads", "int")
+    _typed_opt("method", "method", "", "Prediction method selection", "str")
+    _typed_opt("preprocessing_threads", "preprocessing-threads", 4,
+               "Preprocessing thread count (default: CPU count)", "int")
+
+    st.markdown("##### Affinity")
+    _flag_opt("affinity_mw_correction", "affinity_mw_correction",
+              "Apply molecular weight correction to affinity")
+    _typed_opt("sampling_steps_affinity", "sampling_steps_affinity", 200,
+               "Affinity prediction sampling steps", "int")
+    _typed_opt("diffusion_samples_affinity", "diffusion_samples_affinity", 5,
+               "Affinity diffusion samples", "int")
+    _typed_opt("affinity_checkpoint", "affinity_checkpoint", "",
+               "Custom affinity model checkpoint path", "str")
+
+    st.markdown("##### MSA")
+    _typed_opt("max_msa_seqs", "max_msa_seqs", 8192, "Maximum MSA sequences", "int")
+    _flag_opt("subsample_msa", "subsample_msa", "Enable MSA subsampling")
+    _typed_opt("num_subsampled_msa", "num_subsampled_msa", 1024,
+               "Number of sequences after subsampling", "int")
+    _typed_opt("msa_pairing_strategy", "msa_pairing_strategy", "greedy",
+               "MSA pairing strategy", "select", ["greedy", "complete"])
+
+    st.markdown("##### Other")
+    _flag_opt("no_kernels", "no_kernels",
+              "Disable trifast kernels for triangular updates")
+    _flag_opt("use_potentials", "use_potentials",
+              "Enable inference-time potentials")
+    _flag_opt("write_full_pae", "write_full_pae", "Save full PAE matrix file")
+    _flag_opt("write_full_pde", "write_full_pde", "Save full PDE matrix file")
+    _typed_opt("checkpoint", "checkpoint", "",
+               "Custom model checkpoint path (overrides default Boltz-2)", "str")
+
+    st.divider()
+    c1, c2 = st.columns(2)
+    if c1.button("Save", type="primary", width="stretch", key="adv_save"):
+        if new_adv:
+            boltz["advanced"] = new_adv
+        else:
+            boltz.pop("advanced", None)
+        cfg["boltz"] = boltz
+        save_config(session, cfg)
+        st.success(f"Saved {len(new_adv)} advanced option(s).")
+        st.rerun()
+    if c2.button("Reset all", width="stretch", key="adv_reset"):
+        boltz.pop("advanced", None)
+        cfg["boltz"] = boltz
+        save_config(session, cfg)
+        st.success("Reset advanced options.")
+        st.rerun()
+
+
 # =========================================================================
 # TAB 1: Configuration
 # =========================================================================
@@ -954,6 +1081,17 @@ with tab_config:
         )
         boltz["cache_dir"] = st.text_input("Boltz cache dir", value=boltz.get("cache_dir", ""))
         boltz["env_path"] = st.text_input("Boltz env path", value=boltz.get("env_path", ""))
+
+        adv_count = len(boltz.get("advanced", {}) or {})
+        adv_label = (
+            f"Advanced Boltz Options ({adv_count} set)"
+            if adv_count else "Advanced Boltz Options..."
+        )
+        if st.button(adv_label, key="open_boltz_adv"):
+            cfg["boltz"] = boltz
+            save_config(session, cfg)
+            boltz_advanced_dialog()
+
         cfg["boltz"] = boltz
 
     with st.expander("ESM Settings"):

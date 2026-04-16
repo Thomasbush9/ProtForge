@@ -122,9 +122,10 @@ class TestOrganizeChunk:
         assert "protein:" in yaml_content
         assert '"protX"' in yaml_content
         assert "sequence: ACDEFG" in yaml_content
-        assert "msa: msa/protX.a3m" in yaml_content
-        # Path must be relative so YAMLs stay valid when sequences are copied/subset
-        assert "/" + str(seq_dir) not in yaml_content, "MSA path should be relative, not absolute"
+        # Path must be absolute so YAMLs work when symlinked into boltz_chunks/
+        # (Boltz resolves relative msa paths against the symlink's parent, not target)
+        expected_a3m = (seq_dir / "protX" / "msa" / "protX.a3m").resolve()
+        assert f"msa: {expected_a3m}" in yaml_content
 
     def test_copies_related_files(self, tmp_path):
         """Copies .sto and .hhr alongside .a3m."""
