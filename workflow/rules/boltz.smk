@@ -70,6 +70,8 @@ rule run_boltz_predict:
         done = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output/.done",
     benchmark:
         f"{OUTPUT}/benchmarks/boltz/predict_{{chunk_id}}_run_{{run_id}}.tsv"
+    log:
+        f"{OUTPUT}/logs/boltz/predict_{{chunk_id}}_run_{{run_id}}.log"
     params:
         output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
         cache_dir = BOLTZ_CFG.get("cache_dir", ""),
@@ -87,6 +89,9 @@ rule run_boltz_predict:
     shell:
         """
         set -euo pipefail
+        exec > {log} 2>&1
+        set -x
+
         export CUDA_VISIBLE_DEVICES=0
         export NUM_GPU_DEVICES=1
         export TMPDIR="${{SLURM_TMPDIR:-/tmp}}"

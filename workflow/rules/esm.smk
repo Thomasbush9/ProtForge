@@ -70,7 +70,7 @@ rule run_esm_chunk:
     benchmark:
         f"{OUTPUT}/benchmarks/esm/esm_chunk_{{chunk_id}}.tsv"
     log:
-        f"{ESM_CHUNKS}/esm_chunk_{{chunk_id}}.log",
+        f"{OUTPUT}/logs/esm/esm_chunk_{{chunk_id}}.log",
     params:
         output_dir = SEQUENCES_DIR,
         env_path = ESM_CFG.get("env_path", ""),
