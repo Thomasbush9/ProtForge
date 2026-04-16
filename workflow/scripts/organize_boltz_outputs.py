@@ -96,6 +96,13 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
 
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        # Reruns can change which model files should be kept. Remove previously
+        # organized Boltz artifacts for this target so stale higher-numbered
+        # models do not survive and confuse later CIF discovery.
+        for existing in target_dir.iterdir():
+            if existing.is_file() and model_pattern.search(existing.name):
+                existing.unlink()
+
         if keep_all:
             # Copy ALL model files (model_0 through model_N)
             total_copied = 0

@@ -12,6 +12,7 @@ Extracted from: slurm_scripts/split_and_run_msa.sh
 """
 
 import argparse
+import shutil
 import os
 import sys
 from pathlib import Path
@@ -37,6 +38,12 @@ def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: i
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    # Reruns may reuse the same output directory. Remove previous chunk
+    # directories so stale FASTAs and downstream MSA outputs cannot survive.
+    for stale_dir in output_path.glob("chunk_*"):
+        if stale_dir.is_dir() and stale_dir.name.removeprefix("chunk_").isdigit():
+            shutil.rmtree(stale_dir)
 
     total = len(fasta_files)
     num_chunks = (total + max_files_per_job - 1) // max_files_per_job

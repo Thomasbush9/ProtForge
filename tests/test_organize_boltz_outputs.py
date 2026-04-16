@@ -103,3 +103,22 @@ class TestOrganizeChunk:
 
         assert not msa_dir.exists()
         assert (seq_dir / "protA" / "boltz").is_dir()
+
+    def test_rerun_replaces_stale_model_files(self, tmp_path):
+        """Rerunning removes old organized model files before copying new ones."""
+        first_boltz_dir = self._setup_predictions(tmp_path / "first", "protA", [0, 9])
+        seq_dir = tmp_path / "sequences"
+        (seq_dir / "protA").mkdir(parents=True)
+
+        organize_chunk(str(first_boltz_dir), "0", str(seq_dir))
+        assert (seq_dir / "protA" / "boltz" / "protA_model_9.cif").exists()
+
+        second_boltz_dir = self._setup_predictions(tmp_path / "second", "protA", [0])
+        organize_chunk(str(second_boltz_dir), "0", str(seq_dir))
+
+        boltz_out = seq_dir / "protA" / "boltz"
+        names = {f.name for f in boltz_out.iterdir()}
+        assert "protA_model_0.cif" in names
+        assert "protA_confidence_model_0.json" in names
+        assert "protA_model_9.cif" not in names
+        assert "protA_confidence_model_9.json" not in names
