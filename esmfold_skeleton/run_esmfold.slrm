@@ -32,4 +32,5 @@ echo "HF_HOME=$HF_HOME"
 
 python "$ESMFOLD_SCRIPT" \
     --fasta-dir "$FASTA_DIR" \
-    --output-dir "$OUTPUT_DIR"
+    --output-dir "$OUTPUT_DIR" \
+    --cache-dir "$ESMFOLD_CACHE_DIR"

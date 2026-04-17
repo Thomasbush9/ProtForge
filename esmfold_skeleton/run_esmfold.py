@@ -59,6 +59,13 @@ def main():
     ap.add_argument("--fasta-dir", required=True, type=Path)
     ap.add_argument("--output-dir", required=True, type=Path)
     ap.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="HF cache root (same path passed to download_esmfold.py, e.g. "
+             "/n/holylfs06/.../esm_models_cache). When set, loads offline.",
+    )
+    ap.add_argument(
         "--chunk-size",
         type=int,
         default=None,
@@ -72,10 +79,23 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    print(f"Loading facebook/esmfold_v1 on {device}...", flush=True)
-    tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+    hub_cache = (args.cache_dir / "hub") if args.cache_dir is not None else None
+    offline = hub_cache is not None
+    print(
+        f"Loading facebook/esmfold_v1 on {device} "
+        f"(cache={hub_cache}, offline={offline})...",
+        flush=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        "facebook/esmfold_v1",
+        cache_dir=str(hub_cache) if hub_cache else None,
+        local_files_only=offline,
+    )
     model = EsmForProteinFolding.from_pretrained(
-        "facebook/esmfold_v1", low_cpu_mem_usage=True
+        "facebook/esmfold_v1",
+        cache_dir=str(hub_cache) if hub_cache else None,
+        local_files_only=offline,
+        low_cpu_mem_usage=True,
     )
     model = model.to(device)
     if device == "cuda":
