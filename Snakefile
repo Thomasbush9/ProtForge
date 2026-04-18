@@ -18,10 +18,11 @@ configfile: "config.yaml"
 # Pipeline start time (wall-clock)
 _PIPELINE_START = _time.time()
 
-RUN_MSA   = config["pipeline"].get("msa", True)
-RUN_BOLTZ = config["pipeline"].get("boltz", True)
-RUN_ESM   = config["pipeline"].get("esm", True)
-RUN_ES    = config["pipeline"].get("es", True)
+RUN_MSA     = config["pipeline"].get("msa", True)
+RUN_BOLTZ   = config["pipeline"].get("boltz", True)
+RUN_ESM     = config["pipeline"].get("esm", True)
+RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
+RUN_ES      = config["pipeline"].get("es", True)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
 SEQUENCES_DIR = f"{OUTPUT}/sequences"
@@ -61,6 +62,8 @@ if RUN_BOLTZ:
     include: "workflow/rules/boltz.smk"
 if RUN_ESM:
     include: "workflow/rules/esm.smk"
+if RUN_ESMFOLD:
+    include: "workflow/rules/esmfold.smk"
 if RUN_ES:
     include: "workflow/rules/es.smk"
 
@@ -74,6 +77,8 @@ def get_targets():
         targets.append(f"{OUTPUT}/.boltz_complete")
     if RUN_ESM:
         targets.append(f"{OUTPUT}/.esm_complete")
+    if RUN_ESMFOLD:
+        targets.append(f"{OUTPUT}/.esmfold_complete")
     if RUN_ES:
         targets.append(f"{OUTPUT}/es/.done")
     return targets
@@ -119,7 +124,7 @@ def _write_benchmark_summary(status):
             lines.append("-" * 50)
             lines.append(f"{'Stage':<15} {'Total (s)':>12} {'# Rules':>10} {'Avg (s)':>10}")
             total_rule_time = 0
-            for stage in ["msa", "boltz", "esm", "es"]:
+            for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
                 if stage not in stage_times:
                     continue
                 times = stage_times[stage]

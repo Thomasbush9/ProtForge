@@ -46,7 +46,7 @@ USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
 # Per-stage auto-refresh intervals (seconds)
-REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ES": 10}
+REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ESMFold": 60, "ES": 10}
 
 # Map Snakemake rule names to pipeline stages
 RULE_TO_STAGE = {
@@ -61,6 +61,9 @@ RULE_TO_STAGE = {
     "run_esm_chunk": "ESM",
     "chunk_yamls_for_esm": "ESM",
     "esm_complete": "ESM",
+    "run_esmfold_chunk": "ESMFold",
+    "chunk_yamls_for_esmfold": "ESMFold",
+    "esmfold_complete": "ESMFold",
     "collect_es_paths": "ES",
     "run_es_all": "ES",
 }
@@ -343,6 +346,10 @@ def get_stage_progress(cfg: dict) -> dict:
     if pipeline.get("esm"):
         done = count_files(seq_dir, "*/esm/logits.npy")
         progress["ESM"] = (done, total)
+
+    if pipeline.get("esmfold"):
+        done = count_files(seq_dir, "*/esmfold/structure.pdb")
+        progress["ESMFold"] = (done, total)
 
     if pipeline.get("es"):
         es_dir = output_dir / "es"
@@ -1027,11 +1034,12 @@ with tab_config:
 
     with st.expander("Pipeline Stages", expanded=True):
         pipeline = cfg.get("pipeline", {})
-        cols = st.columns(4)
+        cols = st.columns(5)
         pipeline["msa"] = cols[0].toggle("MSA", value=pipeline.get("msa", True))
         pipeline["boltz"] = cols[1].toggle("Boltz", value=pipeline.get("boltz", True))
         pipeline["esm"] = cols[2].toggle("ESM", value=pipeline.get("esm", True))
-        pipeline["es"] = cols[3].toggle("ES", value=pipeline.get("es", False))
+        pipeline["esmfold"] = cols[3].toggle("ESMFold", value=pipeline.get("esmfold", False))
+        pipeline["es"] = cols[4].toggle("ES", value=pipeline.get("es", False))
         cfg["pipeline"] = pipeline
 
     with st.expander("Input / Output", expanded=True):
@@ -1101,6 +1109,43 @@ with tab_config:
         esm["cache_dir"] = st.text_input("ESM cache dir", value=esm.get("cache_dir", ""))
         cfg["esm"] = esm
 
+    with st.expander("ESMFold Settings"):
+        esmfold = cfg.get("esmfold", {})
+        current_type = esmfold.get("input_type", "yaml")
+        esmfold["input_type"] = st.selectbox(
+            "Input source",
+            options=["yaml", "fasta"],
+            index=0 if current_type == "yaml" else 1,
+            help="'yaml' reads from sequences/ (post-MSA) or input.yaml_dir. "
+                 "'fasta' reads directly from input.fasta_dir (independent of MSA/Boltz).",
+            key="esmfold_input_type",
+        )
+        esmfold["num_chunks"] = st.number_input(
+            "Chunks ",
+            value=esmfold.get("num_chunks", 1),
+            min_value=1,
+            key="esmfold_num_chunks",
+        )
+        esmfold["array_max_concurrency"] = st.number_input(
+            "Max concurrent array tasks",
+            value=esmfold.get("array_max_concurrency", 10),
+            min_value=1,
+            key="esmfold_array_max_concurrency",
+        )
+        esmfold["env_path"] = st.text_input(
+            "ESMFold env path",
+            value=esmfold.get("env_path", ""),
+            key="esmfold_env_path",
+        )
+        esmfold["cache_dir"] = st.text_input(
+            "ESMFold cache dir (HF_HOME root)",
+            value=esmfold.get("cache_dir", ""),
+            key="esmfold_cache_dir",
+            help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
+                 "esmfold_skeleton/download_esmfold.py on a login node.",
+        )
+        cfg["esmfold"] = esmfold
+
     with st.expander("ES Settings"):
         es = cfg.get("es", {})
         es["pdanalysis_dir"] = st.text_input("PDAnalysis directory", value=es.get("pdanalysis_dir", ""))
@@ -1136,7 +1181,7 @@ with tab_config:
         slurm["email"] = st.text_input("Email", value=slurm.get("email", ""))
 
         st.markdown("**Per-stage partition overrides** (leave empty for default)")
-        for stage in ["msa", "boltz", "esm", "es"]:
+        for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
             override = slurm.get(stage, {})
             val = st.text_input(f"{stage} partition", value=override.get("partition", ""), key=f"slurm_{stage}")
             if val:
@@ -1162,7 +1207,7 @@ with tab_run:
     pipeline = cfg.get("pipeline", {})
 
     st.subheader("Pipeline Summary")
-    stages = ["msa", "boltz", "esm", "es"]
+    stages = ["msa", "boltz", "esm", "esmfold", "es"]
     active = [s.upper() for s in stages if pipeline.get(s, False)]
     if active:
         st.info(f"Active stages: {' → '.join(active)}")
@@ -1272,7 +1317,7 @@ with tab_monitor:
     if not progress:
         st.info("No stages enabled or output directory not set.")
     else:
-        sentinels = {"MSA": ".msa_complete", "Boltz": ".boltz_complete", "ESM": ".esm_complete", "ES": "es/.done"}
+        sentinels = {"MSA": ".msa_complete", "Boltz": ".boltz_complete", "ESM": ".esm_complete", "ESMFold": ".esmfold_complete", "ES": "es/.done"}
 
         for stage, (done, total) in progress.items():
             sentinel = Path(output_dir) / sentinels[stage] if output_dir else None

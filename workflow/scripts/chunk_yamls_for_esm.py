@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 
 
-def find_yaml_files(search_dir: str) -> list[Path]:
-    """Recursively find all .yaml files, following symlinks, sorted."""
-    return sorted(Path(search_dir).rglob("*.yaml"))
+def find_files(search_dir: str, pattern: str = "*.yaml") -> list[Path]:
+    """Recursively find files matching pattern, following symlinks, sorted."""
+    return sorted(Path(search_dir).rglob(pattern))
 
 
 def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
@@ -65,19 +65,21 @@ def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Split YAML paths into chunks for ESM")
-    parser.add_argument("--yaml_dir", required=True, help="Directory containing YAML files (recursive)")
-    parser.add_argument("--output_dir", required=True, help="Output directory for esm_chunks/")
+    parser = argparse.ArgumentParser(description="Split file paths into chunks for a stage")
+    parser.add_argument("--yaml_dir", required=True, help="Directory containing input files (recursive)")
+    parser.add_argument("--output_dir", required=True, help="Output directory for chunk files")
     parser.add_argument("--num_chunks", type=int, required=True, help="Number of chunks to create")
+    parser.add_argument("--pattern", default="*.yaml",
+                        help="Glob pattern to match (default: *.yaml; use *.fasta for fasta mode)")
     args = parser.parse_args()
 
-    yaml_files = find_yaml_files(args.yaml_dir)
-    if not yaml_files:
-        print(f"ERROR: No .yaml files found in {args.yaml_dir}", file=sys.stderr)
+    files = find_files(args.yaml_dir, args.pattern)
+    if not files:
+        print(f"ERROR: No {args.pattern} files found in {args.yaml_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(yaml_files)} YAML files in {args.yaml_dir}")
-    create_chunks(yaml_files, args.output_dir, args.num_chunks)
+    print(f"Found {len(files)} {args.pattern} files in {args.yaml_dir}")
+    create_chunks(files, args.output_dir, args.num_chunks)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ pipeline:
   msa: true
   boltz: true
   esm: true
+  esmfold: false  # facebook/esmfold_v1 structure prediction (alternative to Boltz)
   es: false  # Requires additional setup - see docs/CLUSTER_SETUP.md
 
 # Input data
@@ -48,6 +49,15 @@ esm:
   # After installing the esm package, update those paths to match this cache_dir.
   # See docs/CLUSTER_SETUP.md for details.
 
+# ESMFold structure prediction - USER SETUP REQUIRED
+# Populate cache_dir first with: python esmfold_skeleton/download_esmfold.py --cache-dir <cache_dir>
+esmfold:
+  input_type: yaml  # "yaml" (post-MSA from sequences/) or "fasta" (raw input.fasta_dir, independent of MSA/Boltz)
+  num_chunks: 1
+  array_max_concurrency: 10
+  env_path: /n/home06/<YOUR_USER>/envs/esmfold
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # HF_HOME root; must contain hub/models--facebook--esmfold_v1
+
 # ES analysis (optional) - USER SETUP REQUIRED
 # Computes deformation metrics per sequence, averaging across Boltz runs.
 # Set exactly ONE reference option: ref_dir, ref_path, or ref_seq.
@@ -68,6 +78,7 @@ containers:
   colabfold: ""    # e.g., /n/home06/<YOUR_USER>/sifs/protforge-colabfold.sif
   boltz: ""        # e.g., /n/home06/<YOUR_USER>/sifs/protforge-boltz.sif
   esm: ""          # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esm.sif
+  esmfold: ""      # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esmfold.sif
   pdanalysis: ""   # e.g., /n/home06/<YOUR_USER>/sifs/protforge-pdanalysis.sif
   bind_paths: "/n/holylfs06,/n/home06"
 
