@@ -1134,12 +1134,20 @@ with tab_config:
         )
         esmfold["env_path"] = st.text_input(
             "ESMFold env path",
-            value=esmfold.get("env_path", ""),
+            value=esmfold.get(
+                "env_path",
+                "/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold",
+            ),
             key="esmfold_env_path",
+            help="Conda env prefix to `conda activate`. Shared lab default: "
+                 "/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold",
         )
         esmfold["cache_dir"] = st.text_input(
             "ESMFold cache dir (HF_HOME root)",
-            value=esmfold.get("cache_dir", ""),
+            value=esmfold.get(
+                "cache_dir",
+                "/n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache",
+            ),
             key="esmfold_cache_dir",
             help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
                  "esmfold_skeleton/download_esmfold.py on a login node.",
