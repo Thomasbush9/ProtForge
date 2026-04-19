@@ -112,8 +112,14 @@ rule run_esmfold_chunk:
                     --processed_paths_file {params.esmfold_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt \
                     --cache_dir {params.cache_dir}
         else
-            module load gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
-            {params.env_path}/bin/python {input.script} \
+            module load python || true
+
+            set +u
+            source "$(conda info --base)/etc/profile.d/conda.sh"
+            conda activate "{params.env_path}"
+            set -u
+
+            python {input.script} \
                 --fasta_list {input.fasta_list} \
                 --output_dir {params.output_dir} \
                 --processed_paths_file {params.esmfold_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt \
