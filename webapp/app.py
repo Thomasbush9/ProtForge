@@ -1150,7 +1150,7 @@ with tab_config:
             ),
             key="esmfold_cache_dir",
             help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
-                 "esmfold_skeleton/download_esmfold.py on a login node.",
+                 "scripts/download_esmfold.py on a login node.",
         )
         cfg["esmfold"] = esmfold
 

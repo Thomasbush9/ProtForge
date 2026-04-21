@@ -3,7 +3,7 @@
 Input paths can be .yaml (Boltz-style) or .fasta/.a3m — load_seq_ handles both.
 Saves per-sequence {output_dir}/{stem}/esmfold/{structure.pdb,plddt.npy}.
 
-Requires HF cache populated by esmfold_skeleton/download_esmfold.py before first run.
+Requires HF cache populated by scripts/download_esmfold.py before first run.
 Pass --cache_dir to force offline load (recommended on compute nodes without internet).
 """
 
