@@ -63,6 +63,15 @@ def test_short_name(raw, expected):
     assert fs.short_name(raw) == expected
 
 
+def test_header_name_for():
+    """Header is a sequential integer index — always <=5 chars at 9k scale,
+    Boltz-friendly, with the idx -> accession mapping recorded in manifest.tsv."""
+    assert fs.header_name_for(1) == "1"
+    assert fs.header_name_for(42) == "42"
+    assert fs.header_name_for(9999) == "9999"
+    assert len(fs.header_name_for(99999)) == 5
+
+
 # --- column auto-detection --------------------------------------------------
 
 def test_autodetect_url_column_picks_url_col():
@@ -159,19 +168,29 @@ def test_parse_fasta_response_invalid():
 
 
 def test_format_record_layout():
-    out = fs.format_record("THIL", "MENFKK")
-    assert out == ">THIL|protein|\nMENFKK\n"
+    out = fs.format_record("1", "MENFKK")
+    assert out == ">1|protein|\nMENFKK\n"
 
 
-def test_write_fasta_single_line_sequence(tmp_path):
-    """Verify we DON'T wrap to 60 columns -- match original.fasta layout."""
+def test_write_one_fasta_atomic(tmp_path):
+    """Verify per-file write produces the exact layout and no leftover .tmp."""
+    long_seq = "M" * 250
+    path = tmp_path / "P12345.fasta"
+    written = fs.write_one_fasta("1", long_seq, path)
+    assert written == path
+    text = path.read_text()
+    assert text == f">1|protein|\n{long_seq}\n"
+    # No leftover atomic-write temp file
+    assert not path.with_suffix(".fasta.tmp").exists()
+
+
+def test_write_fasta_combined_still_works(tmp_path):
+    """Legacy combined-output helper still produces single-line records."""
     long_seq = "M" * 250
     p = tmp_path / "out.fasta"
-    fs.write_fasta([("THIL", long_seq), ("GRP75", "ABCDEFG")], p)
+    fs.write_fasta([("1", long_seq), ("2", "ABCDEFG")], p)
     text = p.read_text()
-    assert text == f">THIL|protein|\n{long_seq}\n>GRP75|protein|\nABCDEFG\n"
-    # exactly 4 lines (2 headers + 2 single-line sequences)
-    assert text.count("\n") == 4
+    assert text == f">1|protein|\n{long_seq}\n>2|protein|\nABCDEFG\n"
 
 
 # --- HTTP fetch with mocking ------------------------------------------------
@@ -242,19 +261,30 @@ def test_fetch_sequence_retries_on_connection_error(fasta_body):
 
 # --- end-to-end pipeline with mocked HTTP -----------------------------------
 
-def _run_main_with_mocked_http(args_list, fasta_body):
+def _run_main_with_mocked_http(args_list, fasta_body, fake_get=None):
     """Run fs.main with a mocked requests.Session whose .get returns the given body."""
-    def fake_get(url, *_, **__):
-        return _mock_response(200, fasta_body)
+    if fake_get is None:
+        def fake_get(url, *_, **__):
+            return _mock_response(200, fasta_body)
 
-    with patch.object(fs.requests, "Session") as session_cls:
+    with patch.object(fs.requests, "Session") as session_cls, \
+         patch.object(fs.time, "sleep"):
         sess = MagicMock()
         sess.get.side_effect = fake_get
         session_cls.return_value = sess
         return fs.main(args_list)
 
 
-def test_pipeline_with_limit(sample_xlsx, fasta_body, tmp_path, capsys):
+def _read_headers(out_dir: Path) -> dict[str, str]:
+    """Return {accession: header_line} for every per-protein FASTA on disk."""
+    headers: dict[str, str] = {}
+    for p in sorted(out_dir.glob("*.fasta")):
+        first = p.read_text().splitlines()[0]
+        headers[p.stem] = first
+    return headers
+
+
+def test_pipeline_writes_per_protein_files(sample_xlsx, fasta_body, tmp_path, capsys):
     out_dir = tmp_path / "out"
     rc = _run_main_with_mocked_http(
         ["--input", str(sample_xlsx), "--output", str(out_dir),
@@ -262,13 +292,26 @@ def test_pipeline_with_limit(sample_xlsx, fasta_body, tmp_path, capsys):
         fasta_body,
     )
     assert rc == 0
-    fasta_text = (out_dir / "sequences.fasta").read_text()
-    lines = fasta_text.splitlines()
-    assert len(lines) == 4  # 2 records * (header + seq)
-    assert lines[0] == ">THIL|protein|"
-    assert lines[2] == ">GRP75|protein|"
+    headers = _read_headers(out_dir)
+    # Filenames are accession-based (unique on disk); headers are 1-based idx.
+    assert set(headers.keys()) == {"P12345", "Q9Y6K9"}
+    assert headers["P12345"] == ">1|protein|"
+    assert headers["Q9Y6K9"] == ">2|protein|"
+    # Sentinel touched on full success
+    assert (out_dir / ".fetch_complete").exists()
+    # Manifest doubles as the idx -> protein lookup table.
+    manifest = (out_dir / "_logs" / "manifest.tsv").read_text().splitlines()
+    assert manifest[0] == "idx\trow\taccession\tshort_name\tprotein_names_raw\theader\tlength\tstatus\tpath"
+    # idx=1 is P12345/THIL with the full ProteinNames cell preserved.
+    fields = manifest[1].split("\t")
+    assert fields[0] == "1"          # idx
+    assert fields[2] == "P12345"     # accession
+    assert fields[3] == "THIL"       # short_name
+    assert fields[4] == "THIL_HUMAN" # raw protein-name cell
+    assert fields[5] == "1"          # header
+    assert fields[7] == "OK"
     out = capsys.readouterr().out
-    assert "[1/4]" in out and "[2/4]" in out and "[3/4]" in out and "[4/4]" in out
+    assert "[1/5]" in out and "[5/5]" in out
 
 
 def test_pipeline_explicit_columns(sample_xlsx, fasta_body, tmp_path):
@@ -280,11 +323,12 @@ def test_pipeline_explicit_columns(sample_xlsx, fasta_body, tmp_path):
         fasta_body,
     )
     assert rc == 0
-    headers = [
-        ln for ln in (out_dir / "sequences.fasta").read_text().splitlines()
-        if ln.startswith(">")
-    ]
-    assert headers == [">THIL|protein|", ">GRP75|protein|", ">LRPAP|protein|"]
+    headers = _read_headers(out_dir)
+    assert headers == {
+        "P12345":     ">1|protein|",
+        "Q9Y6K9":     ">2|protein|",
+        "A0A0B4J2F0": ">3|protein|",
+    }
 
 
 def test_pipeline_with_bare_accessions(sample_xlsx_bare_accessions, fasta_body, tmp_path):
@@ -297,15 +341,15 @@ def test_pipeline_with_bare_accessions(sample_xlsx_bare_accessions, fasta_body, 
         fasta_body,
     )
     assert rc == 0
-    headers = [
-        ln for ln in (out_dir / "sequences.fasta").read_text().splitlines()
-        if ln.startswith(">")
-    ]
-    assert headers == [">THIL|protein|", ">GRP75|protein|"]
+    headers = _read_headers(out_dir)
+    assert headers == {
+        "P12345": ">1|protein|",
+        "Q9Y6K9": ">2|protein|",
+    }
 
 
-def test_pipeline_concurrent_preserves_order(sample_xlsx, fasta_body, tmp_path):
-    """With workers > 1, output order must still match input row order."""
+def test_pipeline_concurrent_writes_all_files(sample_xlsx, fasta_body, tmp_path):
+    """With workers > 1, every input row must still produce its own file."""
     out_dir = tmp_path / "out"
     rc = _run_main_with_mocked_http(
         ["--input", str(sample_xlsx), "--output", str(out_dir),
@@ -313,11 +357,13 @@ def test_pipeline_concurrent_preserves_order(sample_xlsx, fasta_body, tmp_path):
         fasta_body,
     )
     assert rc == 0
-    headers = [
-        ln for ln in (out_dir / "sequences.fasta").read_text().splitlines()
-        if ln.startswith(">")
-    ]
-    assert headers == [">THIL|protein|", ">GRP75|protein|", ">LRPAP|protein|"]
+    assert set(_read_headers(out_dir).keys()) == {"P12345", "Q9Y6K9", "A0A0B4J2F0"}
+    # Manifest preserves input row order regardless of completion order.
+    manifest_lines = (out_dir / "_logs" / "manifest.tsv").read_text().splitlines()[1:]
+    idx_in_order = [line.split("\t")[0] for line in manifest_lines]
+    accessions_in_order = [line.split("\t")[2] for line in manifest_lines]
+    assert idx_in_order == ["1", "2", "3"]
+    assert accessions_in_order == ["P12345", "Q9Y6K9", "A0A0B4J2F0"]
 
 
 def test_pipeline_unknown_column_errors(sample_xlsx, tmp_path):
@@ -329,36 +375,69 @@ def test_pipeline_unknown_column_errors(sample_xlsx, tmp_path):
     assert rc == 2
 
 
-def test_pipeline_duplicate_names_disambiguated(tmp_path, fasta_body):
-    """Two rows with the same protein short name -> second gets suffixed."""
-    df = pd.DataFrame({
-        "UniProt ID": [
-            "https://www.uniprot.org/uniprot/P12345",
-            "https://www.uniprot.org/uniprot/Q9Y6K9",
-        ],
-        "ProteinNames": ["THIL_HUMAN", "THIL_MOUSE"],
-    })
-    in_path = tmp_path / "dup.xlsx"
-    df.to_excel(in_path, index=False)
+def test_pipeline_resume_skips_existing(sample_xlsx, fasta_body, tmp_path):
+    """A second run reuses files already on disk and only fetches the rest."""
     out_dir = tmp_path / "out"
-
-    rc = _run_main_with_mocked_http(
-        ["--input", str(in_path), "--output", str(out_dir),
+    # First run: fetch 2 of 3.
+    rc1 = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
          "--limit", "2", "--workers", "1"],
         fasta_body,
     )
-    assert rc == 0
-    headers = [
-        ln for ln in (out_dir / "sequences.fasta").read_text().splitlines()
-        if ln.startswith(">")
-    ]
-    assert headers[0] == ">THIL|protein|"
-    assert headers[1] != headers[0]
-    assert len(headers[1].split("|")[0].lstrip(">")) <= fs.NAME_MAX_LEN
+    assert rc1 == 0
+    assert (out_dir / "P12345.fasta").exists()
+    assert (out_dir / "Q9Y6K9.fasta").exists()
+
+    # Second run: limit 3, but the first two are cached -> only ONE HTTP call.
+    call_count = {"n": 0}
+
+    def counting_get(url, *_, **__):
+        call_count["n"] += 1
+        return _mock_response(200, fasta_body)
+
+    rc2 = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
+         "--limit", "3", "--workers", "1"],
+        fasta_body,
+        fake_get=counting_get,
+    )
+    assert rc2 == 0
+    assert call_count["n"] == 1, "cached files must not be refetched"
+    assert (out_dir / "A0A0B4J2F0.fasta").exists()
+    # Manifest reflects mixed cached/OK statuses.
+    manifest = (out_dir / "_logs" / "manifest.tsv").read_text()
+    assert "cached" in manifest
+    assert "OK" in manifest
 
 
-def test_pipeline_partial_failure_returns_nonzero(sample_xlsx, fasta_body, tmp_path):
-    """One 404 in the batch -> rc=1 but successful records still written."""
+def test_pipeline_no_resume_refetches(sample_xlsx, fasta_body, tmp_path):
+    """--no-resume forces refetch of files already on disk."""
+    out_dir = tmp_path / "out"
+    rc1 = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
+         "--limit", "1", "--workers", "1"],
+        fasta_body,
+    )
+    assert rc1 == 0
+
+    call_count = {"n": 0}
+
+    def counting_get(url, *_, **__):
+        call_count["n"] += 1
+        return _mock_response(200, fasta_body)
+
+    rc2 = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
+         "--limit", "1", "--workers", "1", "--no-resume"],
+        fasta_body,
+        fake_get=counting_get,
+    )
+    assert rc2 == 0
+    assert call_count["n"] == 1
+
+
+def test_pipeline_partial_failure_no_sentinel(sample_xlsx, fasta_body, tmp_path):
+    """One 404 in the batch -> rc=1, sentinel NOT written, failed.txt populated."""
     counter = {"n": 0}
 
     def fake_get(url, *_, **__):
@@ -368,18 +447,37 @@ def test_pipeline_partial_failure_returns_nonzero(sample_xlsx, fasta_body, tmp_p
         return _mock_response(200, fasta_body)
 
     out_dir = tmp_path / "out"
-    with patch.object(fs.requests, "Session") as session_cls, \
-         patch.object(fs.time, "sleep"):
-        sess = MagicMock()
-        sess.get.side_effect = fake_get
-        session_cls.return_value = sess
-        rc = fs.main([
-            "--input", str(sample_xlsx), "--output", str(out_dir),
-            "--limit", "3", "--workers", "1",
-        ])
+    rc = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
+         "--limit", "3", "--workers", "1"],
+        fasta_body,
+        fake_get=fake_get,
+    )
     assert rc == 1
-    headers = [
-        ln for ln in (out_dir / "sequences.fasta").read_text().splitlines()
-        if ln.startswith(">")
-    ]
-    assert len(headers) == 2
+    # Two of three should have FASTA files on disk.
+    assert len(list(out_dir.glob("*.fasta"))) == 2
+    # No sentinel on partial failure.
+    assert not (out_dir / ".fetch_complete").exists()
+    # Failed accession recorded.
+    failed = (out_dir / "_logs" / "failed.txt").read_text().strip().splitlines()
+    assert len(failed) == 1
+
+
+def test_pipeline_clears_stale_sentinel(sample_xlsx, fasta_body, tmp_path):
+    """If a previous run touched the sentinel and a later run has failures,
+    the stale sentinel must be removed so Snakemake re-runs the rule."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / ".fetch_complete").touch()
+
+    def always_404(url, *_, **__):
+        return _mock_response(404)
+
+    rc = _run_main_with_mocked_http(
+        ["--input", str(sample_xlsx), "--output", str(out_dir),
+         "--limit", "1", "--workers", "1"],
+        "",
+        fake_get=always_404,
+    )
+    assert rc == 1
+    assert not (out_dir / ".fetch_complete").exists()
