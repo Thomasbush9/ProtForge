@@ -1,0 +1,113 @@
+"""
+UniProt FASTA fetch — Snakemake wrapper.
+
+Wraps fetch_sequences.py so this prep step matches the rest of the
+ProtForge pipeline (logging, retries, --rerun-incomplete). The script
+itself does per-accession resume (skip-if-exists) so retries are cheap.
+
+Usage:
+
+    cd scripts/uniprot_fetch
+    snakemake --cores 8 \\
+        --config input=/path/to/9k.xlsx output=./out header_row=1
+
+    # Dry run — show what would happen
+    snakemake -n --cores 1 --config input=/path/to/9k.xlsx output=./out
+
+    # Resume an interrupted or failed run (idempotent)
+    snakemake --cores 8 --config input=/path/to/9k.xlsx output=./out --rerun-incomplete
+
+    # Force everything to be refetched
+    snakemake --cores 8 --config input=/path/to/9k.xlsx output=./out no_resume=true --forceall
+
+Config keys (all optional except `input` and `output`):
+
+    input          path to .xlsx or .csv with UniProt URLs / accessions
+    output         directory for per-protein .fasta files (default: ./out)
+    header_row     0-indexed header row (default 0; pass 1 for the GA xlsx)
+    workers        concurrent HTTP workers inside the script (default 8)
+    limit          max candidates to process; -1 = all (default -1)
+    column         override URL column name (default: auto-detect)
+    name_column    override protein-name column (default: auto-detect)
+    no_resume      "true" to refetch even files already on disk (default: false)
+"""
+
+import os
+
+from snakemake.exceptions import WorkflowError
+
+
+INPUT       = config.get("input")
+OUTPUT      = config.get("output", "out")
+HEADER_ROW  = int(config.get("header_row", 0))
+WORKERS     = int(config.get("workers", 8))
+LIMIT       = int(config.get("limit", -1))
+COLUMN      = config.get("column", "")
+NAME_COLUMN = config.get("name_column", "")
+NO_RESUME   = str(config.get("no_resume", "")).lower() in ("1", "true", "yes")
+
+if not INPUT:
+    raise WorkflowError(
+        "Pass --config input=<path-to-.xlsx-or-.csv>. See the Snakefile docstring."
+    )
+
+INPUT  = os.path.abspath(INPUT)
+OUTPUT = os.path.abspath(OUTPUT)
+os.makedirs(OUTPUT, exist_ok=True)
+
+# Keep Snakemake's .snakemake/ state dir inside the output dir, not next to
+# the Snakefile. workdir: must be set before any rules are defined.
+workdir: OUTPUT
+
+
+rule all:
+    input:
+        f"{OUTPUT}/.fetch_complete",
+
+
+rule fetch_uniprot:
+    """Fetch one FASTA per UniProt accession into <output>/{ACC}.fasta.
+
+    The script skips accessions whose .fasta already exists, so re-runs
+    only fetch the missing ones. Snakemake's `retries:` covers whole-job
+    failures (e.g. the network dies mid-batch).
+    """
+    input:
+        results = INPUT,
+    output:
+        sentinel = f"{OUTPUT}/.fetch_complete",
+    log:
+        f"{OUTPUT}/_logs/snakemake.log",
+    threads: WORKERS
+    retries: 3
+    params:
+        out_dir     = OUTPUT,
+        header_row  = HEADER_ROW,
+        limit       = LIMIT,
+        column      = COLUMN,
+        name_column = NAME_COLUMN,
+        no_resume   = "--no-resume" if NO_RESUME else "",
+        script      = workflow.basedir + "/fetch_sequences.py",
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {params.out_dir}/_logs
+
+        EXTRA=""
+        if [ -n "{params.column}" ]; then
+            EXTRA="$EXTRA --column {params.column}"
+        fi
+        if [ -n "{params.name_column}" ]; then
+            EXTRA="$EXTRA --name-column {params.name_column}"
+        fi
+
+        python {params.script} \
+            --input {input.results} \
+            --output {params.out_dir} \
+            --header-row {params.header_row} \
+            --workers {threads} \
+            --limit {params.limit} \
+            {params.no_resume} \
+            $EXTRA \
+            -v 2>&1 | tee {log}
+        """

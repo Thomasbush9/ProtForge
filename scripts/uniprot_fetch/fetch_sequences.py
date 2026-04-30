@@ -2,23 +2,42 @@
 
 Reads a results file where one column contains a UniProt entry URL,
 extracts the accession from each URL, fetches the canonical FASTA from
-the UniProt REST API (rest.uniprot.org), and writes a combined FASTA.
+the UniProt REST API (rest.uniprot.org), and writes ONE FASTA FILE PER
+PROTEIN into the output directory.
 
-Output FASTA layout (one record per protein, sequence on a single line):
+Output layout:
 
-    >{NAME}|protein|
+    <output>/{ACCESSION}.fasta              # one file per protein
+    <output>/_logs/manifest.tsv             # row, accession, name, header, length, status, path
+    <output>/_logs/failed.txt               # accessions that failed this run
+    <output>/.fetch_complete                # sentinel — touched only if no failures
+
+Each FASTA file contents (sequence on a single line):
+
+    >{IDX}|protein|
     {SEQUENCE}
 
-where NAME is taken from the protein-name column, split on `_` and
-truncated to 5 characters (so e.g. ``THIL_HUMAN`` -> ``THIL``,
-``GRP75_HUMAN`` -> ``GRP75``, ``LRPAP1`` -> ``LRPAP``).
+IDX is a sequential 1-based index assigned in input-row order. It
+always fits in <=5 chars for inputs up to 99,999 rows (Boltz refuses
+longer headers, which is why we don't put the protein name here).
+
+The full mapping `idx <-> row <-> accession <-> short_name <-> raw
+protein-name cell` is written to ``<output>/_logs/manifest.tsv`` —
+that's where you look up "what is sequence 4137?".
+
+Resume / cache:
+    Files that already exist on disk are skipped. Re-running is cheap
+    and only re-fetches missing or previously-failed accessions. IDX
+    assignment is deterministic from the input file (running counter
+    of valid-accession rows), so resume keeps existing headers stable
+    as long as the input file doesn't change.
 
 Usage:
     python fetch_sequences.py \\
         --input  /path/to/results.xlsx \\
         --output ./out \\
         --header-row 1 \\
-        --limit  10 -v
+        --workers 8 -v
 """
 
 from __future__ import annotations
@@ -85,6 +104,17 @@ def short_name(value, max_len: int = NAME_MAX_LEN) -> str:
     if not s:
         return ""
     return s.split("_")[0][:max_len]
+
+
+def header_name_for(idx: int) -> str:
+    """Header name is a sequential 1-based integer index. Always <=5 chars
+    for inputs up to 99,999 rows, which keeps Boltz happy.
+
+    The mapping idx -> accession / short_name / row is recorded in
+    ``<output>/_logs/manifest.tsv`` so you can always look up which
+    protein an idx refers to.
+    """
+    return str(idx)
 
 
 def autodetect_url_column(df: pd.DataFrame, sample: int = 20) -> str:
@@ -180,20 +210,35 @@ def format_record(name: str, seq: str) -> str:
 
 
 def write_fasta(records: List[Tuple[str, str]], path: Path) -> int:
-    """Write (name, seq) records as FASTA, sequence on a single line.
-    Returns count written."""
+    """Write (name, seq) records as a single combined FASTA. Returns count.
+
+    Kept for callers that want the legacy combined layout. ``main`` uses
+    per-file output via :func:`write_one_fasta` instead.
+    """
     with path.open("w") as f:
         for name, seq in records:
             f.write(format_record(name, seq))
     return len(records)
 
 
-def _resolve_column(args_value: Optional[str], df: pd.DataFrame, kind: str, autodetect):
-    """Common --column / --name-column resolution. Returns column name or None.
+def fasta_path_for(out_dir: Path, accession: str) -> Path:
+    """Per-protein FASTA path: ``<out_dir>/<ACCESSION>.fasta``."""
+    return out_dir / f"{accession}.fasta"
 
-    ``kind`` is just for error messages. ``autodetect`` is the auto-detector
-    for this column type; if it raises or returns None we propagate.
-    """
+
+def write_one_fasta(name: str, seq: str, path: Path) -> Path:
+    """Write a single FASTA record to ``path``. Atomic via temp + rename so
+    a crash mid-write can't leave a half-written file that resume would
+    treat as cached."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as f:
+        f.write(format_record(name, seq))
+    tmp.replace(path)
+    return path
+
+
+def _resolve_column(args_value: Optional[str], df: pd.DataFrame, kind: str, autodetect):
+    """Common --column / --name-column resolution. Returns column name or None."""
     if args_value:
         if args_value not in df.columns:
             raise SystemExit(
@@ -208,7 +253,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--input", required=True, type=Path, help="Path to .xlsx or .csv results file")
-    ap.add_argument("--output", required=True, type=Path, help="Directory to write FASTA into")
+    ap.add_argument("--output", required=True, type=Path, help="Directory to write per-protein FASTAs into")
     ap.add_argument(
         "--column",
         default=None,
@@ -225,7 +270,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         default=0,
         help="0-indexed row to use as the header (default 0; pass 1 for the GA results xlsx)",
     )
-    ap.add_argument("--limit", type=int, default=10, help="Max candidate accessions to fetch (default: 10)")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=-1,
+        help="Max candidate accessions to fetch (default: -1 = all rows). Use a small value for smoke tests.",
+    )
     ap.add_argument(
         "--workers",
         type=int,
@@ -233,18 +283,25 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         help="Concurrent HTTP workers (default: 8). Use 1 for purely sequential.",
     )
     ap.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout, seconds (default: 15)")
+    ap.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Refetch even if <accession>.fasta already exists (default: skip existing).",
+    )
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     in_path = args.input.expanduser().resolve()
     out_dir = args.output.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = out_dir / "_logs"
+    logs_dir.mkdir(exist_ok=True)
 
-    print(f"[1/4] Reading {in_path}", flush=True)
+    print(f"[1/5] Reading {in_path}", flush=True)
     df = read_input(in_path, header_row=args.header_row)
     print(f"      loaded {len(df):,} rows", flush=True)
 
-    print("[2/4] Resolving columns", flush=True)
+    print("[2/5] Resolving columns", flush=True)
     try:
         url_col = _resolve_column(args.column, df, "column", autodetect_url_column)
     except SystemExit as e:
@@ -261,98 +318,154 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     name_col = args.name_column or autodetect_name_column(df)
     print(f"      protein-name column  : {name_col!r}", flush=True)
 
-    print(f"[3/4] Collecting up to {args.limit} candidate(s) from {url_col!r}", flush=True)
-    candidates: List[Tuple[int, str, str]] = []  # (row_idx, accession, short_name)
-    skipped_no_acc: List[Tuple[int, str]] = []   # (row_idx, raw_value)
-    seen_names: set[str] = set()
-    for idx, raw in df[url_col].items():
-        if len(candidates) >= args.limit:
+    limit_desc = "all" if args.limit < 0 else str(args.limit)
+    print(f"[3/5] Collecting up to {limit_desc} candidate(s) from {url_col!r}", flush=True)
+    # candidate fields: (row_idx, idx, accession, short, raw_protein_name, header)
+    # idx is a 1-based running counter of valid-accession rows — deterministic
+    # from the input file, so resume keeps headers stable.
+    candidates: List[Tuple[int, int, str, str, str, str]] = []
+    skipped_no_acc: List[Tuple[int, str]] = []
+    next_idx = 1
+    for row_idx, raw in df[url_col].items():
+        if args.limit >= 0 and len(candidates) >= args.limit:
             break
         acc = extract_accession(raw if isinstance(raw, str) else str(raw))
         if acc is None:
-            skipped_no_acc.append((idx, str(raw)))
+            skipped_no_acc.append((row_idx, str(raw)))
             continue
-        raw_name = df.loc[idx, name_col] if name_col is not None else acc
-        name = short_name(raw_name) or acc[:NAME_MAX_LEN]
-        if name in seen_names:
-            name = (name[: NAME_MAX_LEN - 1] + str(len(seen_names)))[:NAME_MAX_LEN]
-        seen_names.add(name)
-        candidates.append((idx, acc, name))
+        raw_name_val = df.loc[row_idx, name_col] if name_col is not None else acc
+        raw_name_str = "" if raw_name_val is None or (
+            isinstance(raw_name_val, float) and pd.isna(raw_name_val)
+        ) else str(raw_name_val)
+        short = short_name(raw_name_val)
+        header = header_name_for(next_idx)
+        candidates.append((row_idx, next_idx, acc, short, raw_name_str, header))
+        next_idx += 1
     print(
         f"      {len(candidates)} candidate(s) collected"
         + (f", {len(skipped_no_acc)} row(s) skipped (no accession)" if skipped_no_acc else ""),
         flush=True,
     )
 
+    # Partition: cached (already on disk) vs todo (need fetch)
+    cached_idxs: List[int] = []
+    todo_idxs: List[int] = []
+    for i, (_row, _idx, acc, _short, _raw, _hdr) in enumerate(candidates):
+        path = fasta_path_for(out_dir, acc)
+        if (not args.no_resume) and path.exists() and path.stat().st_size > 0:
+            cached_idxs.append(i)
+        else:
+            todo_idxs.append(i)
     print(
-        f"[4/4] Fetching {len(candidates)} sequence(s) from rest.uniprot.org "
+        f"[4/5] Resume scan: {len(cached_idxs)} cached on disk, "
+        f"{len(todo_idxs)} to fetch",
+        flush=True,
+    )
+
+    print(
+        f"[5/5] Fetching {len(todo_idxs)} sequence(s) from rest.uniprot.org "
         f"with {args.workers} worker(s)",
         flush=True,
     )
     session = requests.Session()
-    session.headers.update({"User-Agent": "ProtForge-uniprot-fetch/0.1 (test script)"})
+    session.headers.update({"User-Agent": "ProtForge-uniprot-fetch/0.2"})
 
-    results: List[Optional[Tuple[str, int, str]]] = [None] * len(candidates)
-    # results[i] = (status, seq_len, sequence_or_empty)
-
-    def _fetch_one(i: int, acc: str, name: str):
+    # results[i] = (status, seq_len, path_or_empty)
+    results: List[Tuple[str, int, str]] = [("", 0, "")] * len(candidates)
+    for i in cached_idxs:
+        _row, _idx, acc, _short, _raw, _hdr = candidates[i]
+        path = fasta_path_for(out_dir, acc)
         try:
-            _hdr, seq = fetch_sequence(acc, timeout=args.timeout, session=session)
-            return i, ("OK", len(seq), seq)
+            seq_len = sum(
+                len(ln.strip())
+                for ln in path.read_text().splitlines()
+                if ln and not ln.startswith(">")
+            )
+        except OSError:
+            seq_len = 0
+        results[i] = ("cached", seq_len, str(path))
+
+    def _fetch_one(i: int):
+        _row, _idx, acc, _short, _raw, hdr = candidates[i]
+        try:
+            _h, seq = fetch_sequence(acc, timeout=args.timeout, session=session)
+            path = write_one_fasta(hdr, seq, fasta_path_for(out_dir, acc))
+            return i, ("OK", len(seq), str(path))
         except requests.HTTPError as e:
             return i, (f"http-{e}", 0, "")
         except requests.RequestException as e:
             return i, (f"net-{type(e).__name__}", 0, "")
+        except OSError as e:
+            return i, (f"io-{type(e).__name__}-{e}", 0, "")
 
     workers = max(1, args.workers)
-    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [
-            ex.submit(_fetch_one, i, acc, name)
-            for i, (_idx, acc, name) in enumerate(candidates)
-        ]
-        for fut in tqdm(
-            cf.as_completed(futures),
-            total=len(futures),
-            desc="UniProt",
-            unit="seq",
-        ):
-            i, payload = fut.result()
-            results[i] = payload
-            if args.verbose:
-                idx, acc, name = candidates[i]
-                status, n, _seq = payload
-                tqdm.write(
-                    f"  row {idx}: {acc} -> {name}  "
-                    f"{'OK' if status == 'OK' else 'FAIL'}  "
-                    f"{n} aa  {status if status != 'OK' else ''}".rstrip()
-                )
+    if todo_idxs:
+        with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_fetch_one, i) for i in todo_idxs]
+            for fut in tqdm(
+                cf.as_completed(futures),
+                total=len(futures),
+                desc="UniProt",
+                unit="seq",
+            ):
+                i, payload = fut.result()
+                results[i] = payload
+                if args.verbose:
+                    row_idx, idx, acc, _short, _raw, hdr = candidates[i]
+                    status, n, _path = payload
+                    tqdm.write(
+                        f"  row {row_idx} idx {idx}: {acc} -> >{hdr}|protein|  "
+                        f"{'OK' if status == 'OK' else 'FAIL'}  "
+                        f"{n} aa  {status if status != 'OK' else ''}".rstrip()
+                    )
 
-    print()
-    print(f"{'row':>5}  {'accession':<12}  {'name':<6}  {'len':>6}  status")
-    print(f"{'-' * 5}  {'-' * 12}  {'-' * 6}  {'-' * 6}  {'-' * 30}")
-    for i, (idx, acc, name) in enumerate(candidates):
-        status, n, _seq = results[i]
-        print(f"{idx:>5}  {acc:<12}  {name:<6}  {n:>6}  {status}")
-    for idx, raw in skipped_no_acc:
-        snippet = raw[:30] + ("..." if len(raw) > 30 else "")
-        print(f"{idx:>5}  {'':<12}  {'':<6}  {0:>6}  no-accession ({snippet!r})")
+    # --- write manifest + failed list ---
+    # Manifest doubles as the index file: idx -> row, accession, short_name,
+    # full ProteinNames cell, header, file path. Look up "what is sequence
+    # 4137?" here.
+    manifest_path = logs_dir / "manifest.tsv"
+    with manifest_path.open("w") as f:
+        f.write("idx\trow\taccession\tshort_name\tprotein_names_raw\theader\tlength\tstatus\tpath\n")
+        for i, (row_idx, idx, acc, short, raw_name, hdr) in enumerate(candidates):
+            status, n, path = results[i]
+            # TSV-safe: drop tabs/newlines from the raw protein-name cell.
+            raw_clean = raw_name.replace("\t", " ").replace("\n", " ")
+            f.write(f"{idx}\t{row_idx}\t{acc}\t{short}\t{raw_clean}\t{hdr}\t{n}\t{status}\t{path}\n")
+        for row_idx, raw in skipped_no_acc:
+            raw_clean = raw.replace("\t", " ").replace("\n", " ")
+            f.write(f"\t{row_idx}\t\t\t{raw_clean}\t\t0\tno-accession\t\n")
 
-    fasta_records = [
-        (candidates[i][2], results[i][2])
+    failed = [
+        candidates[i][2]  # accession is now field 2 (after row_idx, idx)
         for i in range(len(candidates))
-        if results[i][0] == "OK"
+        if results[i][0] not in ("OK", "cached")
     ]
-    fasta_path = out_dir / "sequences.fasta"
-    n_written = write_fasta(fasta_records, fasta_path)
-    n_failed = len(candidates) - n_written
+    failed_path = logs_dir / "failed.txt"
+    failed_path.write_text("\n".join(failed) + ("\n" if failed else ""))
+
+    n_ok     = sum(1 for s, _, _ in results if s == "OK")
+    n_cached = sum(1 for s, _, _ in results if s == "cached")
+    n_failed = len(failed)
+
     print()
-    print(f"Wrote {n_written} record(s) to {fasta_path}")
+    print(f"Wrote {n_ok} new record(s); {n_cached} already cached on disk.")
+    print(f"Output dir : {out_dir}")
+    print(f"Manifest   : {manifest_path}")
     if n_failed:
         print(
-            f"  ({n_failed} candidate(s) failed; see status column above. "
-            f"Re-run with a larger --limit if you need more.)",
+            f"  {n_failed} candidate(s) failed (see {failed_path}). "
+            f"Re-run to retry — successful files are kept.",
             file=sys.stderr,
         )
+
+    sentinel = out_dir / ".fetch_complete"
+    if n_failed == 0 and (n_ok + n_cached) == len(candidates):
+        sentinel.touch()
+    else:
+        # Don't leave a stale sentinel from a previous successful run if
+        # this run had failures.
+        if sentinel.exists():
+            sentinel.unlink()
 
     return 0 if n_failed == 0 else 1
 
