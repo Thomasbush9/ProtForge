@@ -146,12 +146,12 @@ rule run_es_all:
         min_plddt = ES_MIN_PLDDT,
         lddt_cutoffs = " ".join(str(c) for c in ES_LDDT_CUTOFFS) if isinstance(ES_LDDT_CUTOFFS, list) else str(ES_LDDT_CUTOFFS),
     resources:
-        cpus_per_task = 4,
-        mem_mb = 16000,
-        runtime = 120,
+        cpus_per_task = stage_resource("es", "cpus_per_task", 4),
+        mem_mb        = stage_resource("es", "mem_mb", 16000),
+        runtime       = stage_resource("es", "runtime", 120),
         slurm_partition = ES_PARTITION,
         slurm_account = ES_ACCOUNT,
-        slurm_extra = slurm_extra(gpu=True),
+        slurm_extra = slurm_extra(gpu=stage_uses_gpu("es", True)),
     shell:
         """
         set -euo pipefail

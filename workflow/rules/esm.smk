@@ -78,12 +78,12 @@ rule run_esm_chunk:
         container_cmd = container_cmd("esm"),
         esm_chunks_dir = ESM_CHUNKS,
     resources:
-        cpus_per_task = 16,
-        mem_mb = 32000,
-        runtime = 60,
+        cpus_per_task = stage_resource("esm", "cpus_per_task", 16),
+        mem_mb        = stage_resource("esm", "mem_mb", 32000),
+        runtime       = stage_resource("esm", "runtime", 60),
         slurm_partition = ESM_PARTITION,
         slurm_account = ESM_ACCOUNT,
-        slurm_extra = slurm_extra(gpu=True),
+        slurm_extra = slurm_extra(gpu=stage_uses_gpu("esm", True)),
     shell:
         """
         set -euo pipefail
