@@ -89,12 +89,12 @@ rule run_esmfold_chunk:
         container_cmd = container_cmd("esmfold"),
         esmfold_chunks_dir = ESMFOLD_CHUNKS,
     resources:
-        cpus_per_task = 8,
-        mem_mb = 32000,
-        runtime = 120,
+        cpus_per_task = stage_resource("esmfold", "cpus_per_task", 8),
+        mem_mb        = stage_resource("esmfold", "mem_mb", 32000),
+        runtime       = stage_resource("esmfold", "runtime", 120),
         slurm_partition = ESMFOLD_PARTITION,
         slurm_account = ESMFOLD_ACCOUNT,
-        slurm_extra = slurm_extra(gpu=True),
+        slurm_extra = slurm_extra(gpu=stage_uses_gpu("esmfold", True)),
     shell:
         """
         set -euo pipefail

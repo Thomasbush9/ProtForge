@@ -13,6 +13,7 @@ out/
 ├── A0A0B4J2F0.fasta
 ├── ...
 ├── .fetch_complete     # sentinel — touched only when ALL candidates succeed
+├── .snakemake/         # snakemake state dir (only when run via the Snakefile)
 └── _logs/
     ├── manifest.tsv    # row, accession, name, header, length, status, path
     ├── failed.txt      # accessions that failed this run (empty on full success)

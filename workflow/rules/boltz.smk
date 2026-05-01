@@ -109,12 +109,12 @@ rule run_boltz_predict:
         extra_args = BOLTZ_EXTRA_ARGS,
         container_cmd = container_cmd("boltz"),
     resources:
-        cpus_per_task = 8,
-        mem_mb = 16000,
-        runtime = 60,
+        cpus_per_task = stage_resource("boltz", "cpus_per_task", 8),
+        mem_mb        = stage_resource("boltz", "mem_mb", 16000),
+        runtime       = stage_resource("boltz", "runtime", 60),
         slurm_partition = BOLTZ_PARTITION,
         slurm_account = BOLTZ_ACCOUNT,
-        slurm_extra = slurm_extra(gpu=True),
+        slurm_extra = slurm_extra(gpu=stage_uses_gpu("boltz", True)),
     shell:
         """
         set -euo pipefail
