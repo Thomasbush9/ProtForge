@@ -28,6 +28,55 @@ def find_fasta_files(input_dir: str) -> list[Path]:
     return files
 
 
+def _fasta_residue_count(path: Path) -> int:
+    """Sum residues across all sequences in a FASTA file."""
+    total = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith(">"):
+                    total += len(line.replace(" ", ""))
+    except OSError:
+        return 0
+    return total
+
+
+def _percentile(values: list[int], q: float) -> int:
+    """Inclusive integer percentile — returns the value at index ceil(q*(n-1))."""
+    if not values:
+        return 0
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return s[idx]
+
+
+def write_chunk_stats(
+    output_dir: Path,
+    chunks: list[tuple[int, list[Path]]],
+) -> Path:
+    """Write chunk_stats.tsv next to manifest.txt — join key for benchmarks/.
+
+    Schema:
+        chunk_id  num_seqs  mean_len  min_len  p95_len  max_len  total_residues
+    """
+    stats_path = output_dir / "chunk_stats.tsv"
+    with open(stats_path, "w") as sf:
+        sf.write("chunk_id\tnum_seqs\tmean_len\tmin_len\tp95_len\tmax_len\ttotal_residues\n")
+        for chunk_id, paths in chunks:
+            lengths = [_fasta_residue_count(p) for p in paths]
+            lengths = [L for L in lengths if L > 0]
+            if not lengths:
+                sf.write(f"{chunk_id}\t0\t0\t0\t0\t0\t0\n")
+                continue
+            mean_len = sum(lengths) / len(lengths)
+            sf.write(
+                f"{chunk_id}\t{len(lengths)}\t{mean_len:.1f}\t{min(lengths)}\t"
+                f"{_percentile(lengths, 0.95)}\t{max(lengths)}\t{sum(lengths)}\n"
+            )
+    return stats_path
+
+
 def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: int):
     """
     Split FASTA files into chunk directories.
@@ -49,6 +98,7 @@ def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: i
     num_chunks = (total + max_files_per_job - 1) // max_files_per_job
 
     chunk_dirs = []
+    chunks: list[tuple[int, list[Path]]] = []
     for i in range(num_chunks):
         start = i * max_files_per_job
         end = min(start + max_files_per_job, total)
@@ -58,23 +108,26 @@ def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: i
         chunk_dir = output_path / f"chunk_{i}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
+        chunk_files = fasta_files[start:end]
+
         # Write file_list.txt with absolute paths
         file_list_path = chunk_dir / "file_list.txt"
         with open(file_list_path, "w") as fl:
-            for j in range(start, end):
-                fl.write(f"{fasta_files[j].resolve()}\n")
+            for fp in chunk_files:
+                fl.write(f"{fp.resolve()}\n")
 
         # Write combined.fasta by concatenating all FASTA files in this chunk
         combined_path = chunk_dir / "combined.fasta"
         with open(combined_path, "w") as cf:
-            for j in range(start, end):
-                with open(fasta_files[j]) as f:
+            for fp in chunk_files:
+                with open(fp) as f:
                     content = f.read()
                     cf.write(content)
                     if not content.endswith("\n"):
                         cf.write("\n")
 
         chunk_dirs.append(chunk_dir)
+        chunks.append((i, chunk_files))
         print(f"Created chunk_{i} with {end - start} files")
 
     # Write manifest listing all chunk directories
@@ -83,8 +136,11 @@ def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: i
         for cd in chunk_dirs:
             mf.write(f"{cd.resolve()}\n")
 
+    stats_path = write_chunk_stats(output_path, chunks)
+
     print(f"Created {len(chunk_dirs)} chunks in {output_path}")
-    print(f"Manifest: {manifest_path}")
+    print(f"Manifest:    {manifest_path}")
+    print(f"Chunk stats: {stats_path}")
     return chunk_dirs
 
 
