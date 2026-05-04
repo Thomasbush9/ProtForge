@@ -50,7 +50,7 @@ STAGE="$1"
 GPU_TYPE="$2"
 FASTA_DIR="$(realpath "$3")"
 OUT_ROOT="${4:-/tmp/protforge_calib_${GPU_TYPE}_$(date +%Y%m%d_%H%M%S)}"
-MAX_JOBS="${CALIB_MAX_JOBS:-4}"
+MAX_JOBS="${CALIB_MAX_JOBS:-10}"
 
 case "$STAGE" in
     msa|boltz|esm|esmfold|es|all) ;;
