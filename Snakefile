@@ -11,7 +11,14 @@ Usage:
   snakemake --profile profiles/slurm/ --rerun-incomplete
 """
 
+import sys as _sys
 import time as _time
+from pathlib import Path as _Path
+
+# Make workflow.scripts importable for any rule helpers we factor out.
+_sys.path.insert(0, str(_Path(workflow.basedir) / "workflow" / "scripts"))
+from snake_helpers import stage_resource as _stage_resource_impl
+from snake_helpers import stage_uses_gpu as _stage_uses_gpu_impl
 
 configfile: "config.yaml"
 
@@ -43,6 +50,16 @@ def slurm_extra(gpu=False):
         parts.append(f"'--mail-type=END,FAIL'")
         parts.append(f"'--mail-user={SLURM_EMAIL}'")
     return " ".join(parts) if parts else "''"
+
+
+# Rule-side wrappers around workflow/scripts/snake_helpers.py — the rule files
+# call stage_resource("boltz", ...) and we supply SLURM_CFG here.
+def stage_resource(stage, key, default):
+    return _stage_resource_impl(SLURM_CFG, stage, key, default)
+
+
+def stage_uses_gpu(stage, default):
+    return _stage_uses_gpu_impl(SLURM_CFG, stage, default)
 
 # Container support (set .sif paths in config to enable)
 CONTAINERS = config.get("containers", {})
