@@ -144,6 +144,23 @@ slurm:
   account: $ACCOUNT
   log_dir: $SLURM_LOG_DIR
 $PER_STAGE_PARTITIONS
+  # Calibration-generous resource ceilings — production rule defaults
+  # (Boltz 16 GB / 60 min) are tuned for 25 sequences per chunk where each
+  # sequence gets a smaller share. Calibration runs one seq per chunk on
+  # potentially long proteins, so request a full H100 and 4 hours to avoid
+  # OOM/TIMEOUT. Snakemake's benchmark: directive still captures actual
+  # usage; SLURM only allocates what we ask, so over-asking is fine.
+  resources:
+    boltz:
+      mem_mb: 80000
+      runtime: 240
+      cpus_per_task: 8
+      gpus: 1
+    esmfold:
+      mem_mb: 80000
+      runtime: 120
+      cpus_per_task: 8
+      gpus: 1
 
 # Calibration sweep settings — one sequence per chunk gives one benchmark
 # TSV row per length value, which is exactly what we want for fitting.
