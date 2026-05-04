@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# calibrate.sh — measure SLURM consumption for one ProtForge stage on one GPU.
+# calibrate.sh — measure SLURM consumption for ProtForge stages on one GPU.
+#
+# Self-contained: writes its own config.yaml and does not read the webapp-
+# managed config.yaml at the repo root. Shared Kempner paths are baked in
+# from config.template.yaml; user-specific paths come from $USER (or env
+# var overrides).
 #
 # Usage:
 #   bash slurm_scripts/calibrate.sh <stage> <gpu_type> <fasta_dir> [output_dir]
 #
-# Example:
-#   bash slurm_scripts/calibrate.sh boltz h100 tests/calibration_inputs/fastas
+# Example (full Option A sweep on h100):
+#   bash slurm_scripts/calibrate.sh all h100 tests/calibration_inputs/fastas \
+#       /n/holylfs06/LABS/bsabatini_lab/Everyone/$USER/calib_$(date +%Y%m%d_%H%M%S)
 #
-# What it does:
-#   1. Generates a temp Snakemake config at $CALIB_DIR/config.yaml that:
-#        - enables only <stage>
-#        - points input.fasta_dir at <fasta_dir>
-#        - routes <stage> to the partition matching <gpu_type>
-#   2. Runs `snakemake --profile profiles/slurm/` against that config
-#   3. After completion, writes a one-pager at $CALIB_DIR/summary.txt with
-#      the per-rule walltimes and max RSS values.
-#
-# After you run this for each (stage × gpu_type) combination you care about,
-# point the webapp at $CALIB_DIR via the "Recalibrate from cluster benchmarks"
-# button to refit webapp/scaling_models.calibrated.yaml.
+# After completion, $OUT_ROOT contains:
+#   config.yaml          the rendered calibration config
+#   logs/                slurm.log_dir
+#   summary.txt          per-stage benchmark TSV listing
+#   run/                 output.parent_dir (chunks/, sequences/, benchmarks/)
 
 set -euo pipefail
 
@@ -26,17 +25,21 @@ usage() {
     cat <<EOF
 Usage: $0 <stage> <gpu_type> <fasta_dir> [output_dir]
 
-  stage     One of: msa, boltz, esm, esmfold, es, all
-            'all' enables msa + boltz + esm + esmfold together so MSA's
-            YAMLs feed Boltz/ESM/ESMFold in one shot (Option A calibration).
-  gpu_type  One of: a100, h100, h200  (or any partition name to use literally)
-  fasta_dir Path to a directory of .fasta files (real proteins, varied length)
-  output_dir Optional output root. Defaults to /tmp/protforge_calib_<gpu_type>_<timestamp>
+  stage      One of: msa, boltz, esm, esmfold, es, all
+             'all' enables msa + boltz + esm + esmfold together so MSA's
+             YAMLs feed Boltz/ESM/ESMFold in one shot (Option A calibration).
+  gpu_type   One of: a100, h100, h200  (or any partition name to use literally)
+  fasta_dir  Directory of .fasta files (real proteins, varied length)
+  output_dir Optional output root. Defaults to /tmp/protforge_calib_<gpu>_<ts>
+             — override with a SHARED filesystem path (compute nodes can't
+             read login-node /tmp).
 
-Env vars:
-  CALIB_MAX_JOBS  Cap concurrent SLURM jobs (default: 4). Overrides the
-                  profile's jobs:100 setting so calibration does not crowd
-                  the queue. Bump if you have headroom.
+Env vars (all optional):
+  SLURM_ACCOUNT          SLURM account.                       Default: kempner_bsabatini_lab
+  CALIB_MAX_JOBS         Cap concurrent SLURM jobs.           Default: 4
+  PROTFORGE_LOG_DIR      slurm.log_dir override.              Default: /n/home06/\$USER/job_logs
+  PROTFORGE_ESM_ENV      ESM conda env path override.         Default: /n/home06/\$USER/envs/esm
+  PROTFORGE_ESMFOLD_ENV  ESMFold conda env path override.     Default: /n/home06/\$USER/envs/esmfold
 EOF
     exit 1
 }
@@ -54,6 +57,8 @@ case "$STAGE" in
     *) echo "Unknown stage: $STAGE"; usage ;;
 esac
 
+[[ -d "$FASTA_DIR" ]] || { echo "fasta_dir does not exist: $FASTA_DIR"; exit 1; }
+
 # Resolve which pipeline toggles to flip on. 'all' covers everything except
 # 'es' (CPU-only and rarely the bottleneck for a GPU calibration).
 _pipe_flag() {
@@ -65,8 +70,6 @@ _pipe_flag() {
     fi
 }
 
-[[ -d "$FASTA_DIR" ]] || { echo "fasta_dir does not exist: $FASTA_DIR"; exit 1; }
-
 # Map gpu_type to partition (matches webapp/scaling_models.yaml gpu_specs).
 case "$GPU_TYPE" in
     a100)        PARTITION="kempner" ;;
@@ -77,15 +80,31 @@ case "$GPU_TYPE" in
     *)           PARTITION="$GPU_TYPE" ;;       # treat as literal partition name
 esac
 
+# Account default is the kempner-prefixed name because Kempner GPU partitions
+# (kempner, kempner_h100, kempner_requeue) require the kempner-prefixed
+# account, NOT the sacctmgr default which is the lab's plain account.
+# Override with: SLURM_ACCOUNT=<your_kempner_account> bash slurm_scripts/calibrate.sh ...
+ACCOUNT="${SLURM_ACCOUNT:-kempner_bsabatini_lab}"
+
+# Shared Kempner paths from config.template.yaml — stable across users.
+KEMPNER_MMSEQ2_DB="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db"
+KEMPNER_COLABFOLD_DB="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db"
+KEMPNER_COLABFOLD_BIN="/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin"
+KEMPNER_BOLTZ_CACHE="/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db"
+KEMPNER_BOLTZ_ENV="/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz"
+KEMPNER_ESM_CACHE="/n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache"
+
+# User-specific paths (env overrides take precedence).
+SLURM_LOG_DIR="${PROTFORGE_LOG_DIR:-/n/home06/$USER/job_logs}"
+ESM_ENV="${PROTFORGE_ESM_ENV:-/n/home06/$USER/envs/esm}"
+ESMFOLD_ENV="${PROTFORGE_ESMFOLD_ENV:-/n/home06/$USER/envs/esmfold}"
+
 mkdir -p "$OUT_ROOT"
 CALIB_CFG="$OUT_ROOT/config.yaml"
 
-ACCOUNT="${SLURM_ACCOUNT:-${SLURM_DEFAULT_ACCOUNT:-$(sacctmgr -nP show user $USER format=defaultaccount 2>/dev/null | head -n1)}}"
-ACCOUNT="${ACCOUNT:-kempner_bsabatini_lab}"
-
-# Build the calibration config. When STAGE=all, every GPU stage targets the
-# chosen partition; Snakemake's DAG sequences them via .msa_complete /
-# .boltz_complete sentinels.
+# Per-stage partition pin. 'all' pins every GPU stage to the chosen partition;
+# a single-stage run pins only that stage (keeps unused stages off the GPU
+# queue if anyone enables them later via config edit).
 if [[ "$STAGE" == "all" ]]; then
     PER_STAGE_PARTITIONS="$(cat <<EOF
   msa:
@@ -104,6 +123,9 @@ else
 fi
 
 cat > "$CALIB_CFG" <<EOF
+# Auto-generated by slurm_scripts/calibrate.sh — do not hand-edit.
+# Fully self-contained: shared Kempner paths baked in from config.template.yaml.
+
 pipeline:
   msa: $(_pipe_flag msa)
   boltz: $(_pipe_flag boltz)
@@ -120,48 +142,46 @@ output:
 slurm:
   partition: $PARTITION
   account: $ACCOUNT
-  log_dir: $OUT_ROOT/logs
+  log_dir: $SLURM_LOG_DIR
 $PER_STAGE_PARTITIONS
 
-# Stage-specific basics — leave file_per_job small so the calibration sweep
-# produces one benchmark TSV row per sequence (clean per-length data).
+# Calibration sweep settings — one sequence per chunk gives one benchmark
+# TSV row per length value, which is exactly what we want for fitting.
 msa:
   max_files_per_job: 1
+  mmseq2_db: $KEMPNER_MMSEQ2_DB
+  colabfold_db: $KEMPNER_COLABFOLD_DB
+  colabfold_bin: $KEMPNER_COLABFOLD_BIN
+
 boltz:
   max_files_per_job: 1
   recycling_steps: 10
   diffusion_samples: 25
   num_runs: 1
+  cache_dir: $KEMPNER_BOLTZ_CACHE
+  colabfold_db: $KEMPNER_COLABFOLD_DB
+  env_path: $KEMPNER_BOLTZ_ENV
+
 esm:
-  num_chunks: 100
+  num_chunks: 100              # capped at file count by chunker → 1 seq/chunk
+  env_path: $ESM_ENV
+  cache_dir: $KEMPNER_ESM_CACHE
+
 esmfold:
   num_chunks: 100
+  input_type: yaml             # picks up sequences/<seq>/<seq>.yaml from MSA
+  env_path: $ESMFOLD_ENV
+  cache_dir: $KEMPNER_ESM_CACHE
 EOF
 
 echo ">>> Calibration config: $CALIB_CFG"
-echo ">>> Partition: $PARTITION"
-echo ">>> FASTA dir:  $FASTA_DIR"
+echo ">>> Stage:              $STAGE"
+echo ">>> Partition:          $PARTITION"
+echo ">>> Account:            $ACCOUNT"
+echo ">>> Concurrency cap:    $MAX_JOBS"
+echo ">>> FASTA dir:          $FASTA_DIR"
+echo ">>> Output root:        $OUT_ROOT"
 echo
-
-# Ensure the user has at least pasted in the shared-resource paths from their
-# real config (cache_dir, env_path, db paths). Pull them from config.yaml if it
-# exists at repo root — calibration uses the same shared resources.
-if [[ -f config.yaml ]]; then
-    echo ">>> Merging cache/env paths from config.yaml ..."
-    python3 - <<PY
-import yaml
-base = yaml.safe_load(open("config.yaml")) or {}
-cal  = yaml.safe_load(open("$CALIB_CFG")) or {}
-for stage in ("msa", "boltz", "esm", "esmfold", "es"):
-    src = base.get(stage, {}) or {}
-    dst = cal.setdefault(stage, {})
-    for k in ("cache_dir", "env_path", "mmseq2_db", "colabfold_db",
-              "colabfold_bin", "pdanalysis_dir"):
-        if k in src and k not in dst:
-            dst[k] = src[k]
-yaml.safe_dump(cal, open("$CALIB_CFG", "w"), sort_keys=False)
-PY
-fi
 
 # Run the pipeline. --jobs overrides the profile's 100-job cap so calibration
 # stays a polite cluster citizen (default 4; bump via CALIB_MAX_JOBS=N).
@@ -201,4 +221,3 @@ fi
 
 echo
 echo ">>> Done. Summary: $SUMMARY"
-echo ">>> Feed this output dir to the webapp: 'Recalibrate from cluster benchmarks'"
