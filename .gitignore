@@ -12,3 +12,11 @@ snakemake_run.log
 
 # User-specific config (use config.template.yaml as starting point)
 config.yaml
+
+# Local virtual environments (e.g. scripts/uniprot_fetch/.venv)
+.venv/
+**/.venv/
+
+# Snakemake state dir (now lives inside the output dir; ignore everywhere)
+.snakemake/
+**/.snakemake/

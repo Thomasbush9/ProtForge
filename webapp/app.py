@@ -23,6 +23,13 @@ from streamlit_autorefresh import st_autorefresh
 import yaml
 
 from validate import scan_directory, copy_valid_files
+from estimator import (
+    ALL_STAGES,
+    apply_estimate_to_config,
+    compute_input_stats,
+    estimate_all_stages,
+    load_scaling_models,
+)
 from session import (
     Session,
     migrate_legacy,
@@ -153,6 +160,171 @@ def validate_launch_inputs(cfg: dict) -> list[str]:
             errors.append(f"{extra} more FASTA file(s) failed validation.")
 
     return errors
+
+
+@st.cache_data(show_spinner="Scanning directory…")
+def _cached_scan(path_str: str, dir_mtime: float) -> dict:
+    """scan_directory wrapped with a cache key that invalidates when the dir
+    is touched. mtime alone is good enough for the common case (adding or
+    removing files); the explicit Re-scan button below covers content edits."""
+    return scan_directory(Path(path_str))
+
+
+def autoscan_directory(path_str: str) -> dict | None:
+    """Return a scan_directory() result for `path_str`, or None if it's not
+    a usable directory. Cached so typing in the path field stays snappy."""
+    if not path_str:
+        return None
+    p = Path(path_str)
+    if not p.is_dir():
+        return None
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return None
+    return _cached_scan(path_str, mtime)
+
+
+def render_gpu_preference(stage: str) -> None:
+    """Per-stage GPU dropdown that persists in st.session_state["gpu_preferences"]."""
+    if stage not in {"msa", "boltz", "esm", "esmfold"}:
+        return
+    prefs = st.session_state.setdefault("gpu_preferences", {})
+    options = ["auto", "a100", "h100"]
+    current = prefs.get(stage, "auto")
+    if current not in options:
+        current = "auto"
+    chosen = st.selectbox(
+        "GPU preference",
+        options=options,
+        index=options.index(current),
+        key=f"gpu_pref_{stage}",
+        help="auto = pick the cheapest GPU whose memory ceiling covers the "
+             "estimated need. Pin a card if you have a specific requirement.",
+    )
+    prefs[stage] = chosen
+
+
+def render_chunk_recommendation(stage: str) -> None:
+    """If a recent estimate is cached, show 'Recommended: N' for this stage."""
+    est = st.session_state.get("last_estimate", {}).get(stage)
+    if not est:
+        return
+    if stage in {"msa", "boltz"}:
+        st.caption(
+            f"Recommended chunk size: **{est['chunk_size']}** "
+            f"({est['num_chunks']} jobs, ~{est['runtime_min']} min/job)"
+        )
+    elif stage in {"esm", "esmfold"}:
+        st.caption(
+            f"Recommended num_chunks: **{est['num_chunks']}** "
+            f"({est['chunk_size']} seqs/chunk, ~{est['runtime_min']} min/chunk)"
+        )
+
+
+def render_estimate_panel(scan_result: dict, cfg: dict, session: Session,
+                          key_prefix: str = "est") -> None:
+    """Render the resource-estimate expander given a scan_directory() result.
+
+    Computes input stats, calls the estimator for each enabled pipeline stage,
+    shows a per-stage table, and offers an "Apply to session config" button.
+    Caches stats + estimate in st.session_state for the Configuration tab.
+    """
+    file_type = scan_result.get("file_type")
+    if file_type == "fasta":
+        stats = compute_input_stats(fasta_results=scan_result.get("fasta_results", []))
+    elif file_type == "yaml":
+        stats = compute_input_stats(yaml_results=scan_result.get("yaml_results", []))
+    else:
+        return
+
+    if stats.count == 0:
+        return
+
+    # GPU preferences from session_state (set by Configuration tab dropdowns).
+    gpu_prefs = st.session_state.get("gpu_preferences", {})
+
+    try:
+        scaling = load_scaling_models()
+        estimates = estimate_all_stages(stats, cfg, scaling, gpu_prefs)
+    except Exception as exc:
+        st.error(f"Resource estimate failed: {exc}")
+        return
+
+    # Cache for Configuration tab
+    st.session_state["last_input_stats"] = stats.as_dict()
+    st.session_state["last_estimate"] = {s: e.as_dict() for s, e in estimates.items()}
+
+    if not estimates:
+        st.info(
+            f"Found {stats.count} valid {stats.file_type.upper()} file(s), "
+            "but no pipeline stages are enabled. Toggle MSA / Boltz / ESM / "
+            "ESMFold / ES above to see resource estimates."
+        )
+        return
+
+    total_node_h = sum(e.total_node_hours for e in estimates.values())
+    total_jobs = sum(e.num_chunks for e in estimates.values())
+
+    with st.expander(
+        f"Resource estimate — {total_node_h:.1f} node-hours across {total_jobs} jobs",
+        expanded=True,
+    ):
+        st.caption(
+            f"Based on {stats.count} sequence(s): "
+            f"mean length {stats.mean_len:.0f}, p95 {stats.p95_len}, max {stats.max_len}."
+        )
+
+        rows = []
+        any_notes = False
+        for stage, e in estimates.items():
+            rows.append({
+                "Stage": stage.upper(),
+                "Mem (GB)": round(e.mem_mb / 1024, 1),
+                "Runtime (min)": e.runtime_min,
+                "CPUs": e.cpus,
+                "GPU": e.gpu_type or "-",
+                "Partition": e.partition or "-",
+                "Chunk size": e.chunk_size,
+                "# Jobs": e.num_chunks,
+                "Node-hours": e.total_node_hours,
+            })
+            if e.notes:
+                any_notes = True
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+        if any_notes:
+            with st.expander("Notes from estimator", expanded=False):
+                for stage, e in estimates.items():
+                    for n in e.notes:
+                        st.write(f"- **{stage}**: {n}")
+
+        col_apply, col_info = st.columns([2, 3])
+        with col_apply:
+            if st.button(
+                "Apply estimates to session config",
+                key=f"{key_prefix}_apply",
+                type="secondary",
+                width="stretch",
+            ):
+                # Reuse estimator's writer; pass StageEstimate objects (we cached
+                # dicts in session_state, so reload them as objects).
+                try:
+                    apply_estimate_to_config(session.config_path, estimates, backup=True)
+                    touch_session(session.id)
+                    st.success(
+                        "Wrote slurm.resources.<stage> + chunk sizes to "
+                        f"`{session.config_path.name}` (backup saved)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not apply estimates: {exc}")
+        with col_info:
+            st.caption(
+                "Writes per-stage mem/runtime/cpus/gpus to slurm.resources, "
+                "partition under slurm.<stage>.partition, and chunk size into "
+                "the stage's own block."
+            )
 
 
 def snakemake_status(session: Session) -> tuple[bool, int | None, str | None]:
@@ -647,6 +819,10 @@ def import_dialog():
                             } for r in result["yaml_results"]]
                             st.dataframe(rows, width="stretch", hide_index=True)
 
+                    if result["valid_count"] > 0 and result["file_type"] in ("fasta", "yaml"):
+                        st.divider()
+                        render_estimate_panel(result, cfg, session, key_prefix="dlg_browse")
+
                     st.divider()
                     if result["valid_count"] > 0 and result["file_type"] in ("fasta", "yaml"):
                         # Show destination
@@ -814,6 +990,12 @@ def import_dialog():
                             if generated > 0:
                                 _update_config_after_import(file_type)
                                 st.success(f"Generated {generated} files in `{output_dir}`")
+                                render_estimate_panel(
+                                    scan_directory(output_dir),
+                                    load_config(session),
+                                    session,
+                                    key_prefix="dlg_csv",
+                                )
                             else:
                                 st.error("No files generated.")
                             if errors:
@@ -898,6 +1080,12 @@ def import_dialog():
 
                         _update_config_after_import(file_type_rand)
                         st.success(f"Generated {generated} mutants in `{output_dir}`")
+                        render_estimate_panel(
+                            scan_directory(output_dir),
+                            load_config(session),
+                            session,
+                            key_prefix="dlg_rand",
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -1068,9 +1256,59 @@ with tab_config:
         cfg["input"] = inp
         cfg["output"] = out
 
+        # Auto-scan + inline resource estimate.
+        # Picks fasta_dir if MSA is on (or no preference set), otherwise yaml_dir.
+        scan_path = ""
+        if cfg.get("pipeline", {}).get("msa", True):
+            scan_path = inp.get("fasta_dir", "") or inp.get("yaml_dir", "")
+        else:
+            scan_path = inp.get("yaml_dir", "") or inp.get("fasta_dir", "")
+
+        if scan_path:
+            res = autoscan_directory(scan_path)
+            if res is None:
+                st.caption(f"`{scan_path}` is not a directory (yet)")
+            elif res["file_type"] == "none":
+                st.caption(f"No FASTA/YAML files found in `{scan_path}`")
+            elif res["file_type"] == "mixed":
+                st.warning(
+                    f"Both FASTA and YAML files in `{scan_path}` — keep only one type."
+                )
+            elif res["valid_count"] == 0:
+                st.warning(
+                    f"Found {res['total_files']} file(s) in `{scan_path}` but none "
+                    "passed validation. Open Import for per-file errors."
+                )
+            else:
+                # Per-file counts + sequence length distribution
+                if res["file_type"] == "fasta":
+                    pre_stats = compute_input_stats(fasta_results=res["fasta_results"])
+                else:
+                    pre_stats = compute_input_stats(yaml_results=res["yaml_results"])
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Valid sequences", pre_stats.count)
+                m2.metric("Invalid files", res["invalid_count"])
+                m3.metric("Total residues", f"{pre_stats.total_residues:,}")
+                m4.metric("Type", res["file_type"].upper())
+
+                if pre_stats.count > 0:
+                    s1, s2, s3, s4 = st.columns(4)
+                    s1.metric("Min length", pre_stats.min_len)
+                    s2.metric("Mean length", f"{pre_stats.mean_len:.0f}")
+                    s3.metric("p95 length", pre_stats.p95_len)
+                    s4.metric("Max length", pre_stats.max_len)
+
+                if st.button("Re-scan", key="config_rescan"):
+                    _cached_scan.clear()
+                    st.rerun()
+                render_estimate_panel(res, cfg, session, key_prefix="config_inline")
+
     with st.expander("MSA Settings"):
         msa = cfg.get("msa", {})
         msa["max_files_per_job"] = st.number_input("Files per job", value=msa.get("max_files_per_job", 25), min_value=1)
+        render_chunk_recommendation("msa")
+        render_gpu_preference("msa")
         msa["mmseq2_db"] = st.text_input("MMseqs2 DB", value=msa.get("mmseq2_db", ""))
         msa["colabfold_db"] = st.text_input("ColabFold DB", value=msa.get("colabfold_db", ""))
         msa["colabfold_bin"] = st.text_input("ColabFold bin", value=msa.get("colabfold_bin", ""))
@@ -1081,6 +1319,8 @@ with tab_config:
         c1, c2 = st.columns(2)
         boltz["max_files_per_job"] = c1.number_input("Files per job ", value=boltz.get("max_files_per_job", 25), min_value=1)
         boltz["num_runs"] = c2.number_input("Runs per sequence", value=boltz.get("num_runs", 1), min_value=1)
+        render_chunk_recommendation("boltz")
+        render_gpu_preference("boltz")
         c1, c2 = st.columns(2)
         boltz["recycling_steps"] = c1.number_input("Recycling steps", value=boltz.get("recycling_steps", 10), min_value=1)
         boltz["diffusion_samples"] = c2.number_input("Diffusion samples", value=boltz.get("diffusion_samples", 25), min_value=1)
@@ -1105,6 +1345,8 @@ with tab_config:
     with st.expander("ESM Settings"):
         esm = cfg.get("esm", {})
         esm["num_chunks"] = st.number_input("Chunks", value=esm.get("num_chunks", 1), min_value=1)
+        render_chunk_recommendation("esm")
+        render_gpu_preference("esm")
         esm["env_path"] = st.text_input("ESM env path", value=esm.get("env_path", ""))
         esm["cache_dir"] = st.text_input("ESM cache dir", value=esm.get("cache_dir", ""))
         cfg["esm"] = esm
@@ -1126,6 +1368,8 @@ with tab_config:
             min_value=1,
             key="esmfold_num_chunks",
         )
+        render_chunk_recommendation("esmfold")
+        render_gpu_preference("esmfold")
         esmfold["array_max_concurrency"] = st.number_input(
             "Max concurrent array tasks",
             value=esmfold.get("array_max_concurrency", 10),
@@ -1150,7 +1394,7 @@ with tab_config:
             ),
             key="esmfold_cache_dir",
             help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
-                 "esmfold_skeleton/download_esmfold.py on a login node.",
+                 "scripts/download_esmfold.py on a login node.",
         )
         cfg["esmfold"] = esmfold
 
@@ -1193,9 +1437,36 @@ with tab_config:
             override = slurm.get(stage, {})
             val = st.text_input(f"{stage} partition", value=override.get("partition", ""), key=f"slurm_{stage}")
             if val:
-                slurm[stage] = {"partition": val}
+                # Preserve any non-partition keys that might already be set (e.g. resources)
+                preserved = {k: v for k, v in override.items() if k != "partition"}
+                slurm[stage] = {**preserved, "partition": val}
             else:
-                slurm.pop(stage, None)
+                # Drop the stage block entirely if it had only a partition key
+                if override and set(override.keys()) <= {"partition"}:
+                    slurm.pop(stage, None)
+                elif "partition" in override:
+                    override.pop("partition", None)
+                    slurm[stage] = override
+
+        # Resource overrides written by the estimator's "Apply" button
+        resources = slurm.get("resources", {})
+        if resources:
+            st.markdown("**Per-stage resource overrides** (set by Apply estimates)")
+            for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
+                r = resources.get(stage)
+                if not r:
+                    continue
+                st.caption(
+                    f"`{stage}`: mem={r.get('mem_mb', '?')}MB, "
+                    f"runtime={r.get('runtime', '?')}min, "
+                    f"cpus={r.get('cpus_per_task', '?')}, "
+                    f"gpus={r.get('gpus', '?')}"
+                )
+            if st.button("Clear resource overrides", key="clear_slurm_resources"):
+                slurm.pop("resources", None)
+                cfg["slurm"] = slurm
+                save_config(session, cfg)
+                st.rerun()
         cfg["slurm"] = slurm
 
     st.divider()

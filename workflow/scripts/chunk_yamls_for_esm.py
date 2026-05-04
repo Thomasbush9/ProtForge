@@ -12,10 +12,79 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 
 def find_files(search_dir: str, pattern: str = "*.yaml") -> list[Path]:
     """Recursively find files matching pattern, following symlinks, sorted."""
     return sorted(Path(search_dir).rglob(pattern))
+
+
+def _yaml_seq_length(path: Path) -> int:
+    try:
+        data = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    sequences = data.get("sequences") or []
+    total = 0
+    for entry in sequences:
+        if not isinstance(entry, dict):
+            continue
+        protein = entry.get("protein") or {}
+        seq = protein.get("sequence")
+        if isinstance(seq, str):
+            total += len(seq)
+    return total
+
+
+def _fasta_seq_length(path: Path) -> int:
+    total = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith(">"):
+                    total += len(line.replace(" ", ""))
+    except OSError:
+        return 0
+    return total
+
+
+def _length_for(path: Path) -> int:
+    if path.suffix in (".yaml", ".yml"):
+        return _yaml_seq_length(path)
+    if path.suffix in (".fasta", ".fa"):
+        return _fasta_seq_length(path)
+    return 0
+
+
+def _percentile(values: list[int], q: float) -> int:
+    if not values:
+        return 0
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return s[idx]
+
+
+def write_chunk_stats(output_dir: Path, chunks: list[tuple[int, list[Path]]]) -> Path:
+    """Write chunk_stats.tsv next to manifest.txt — join key for benchmarks/."""
+    stats_path = output_dir / "chunk_stats.tsv"
+    with open(stats_path, "w") as sf:
+        sf.write("chunk_id\tnum_seqs\tmean_len\tmin_len\tp95_len\tmax_len\ttotal_residues\n")
+        for chunk_id, paths in chunks:
+            lengths = [_length_for(p) for p in paths]
+            lengths = [L for L in lengths if L > 0]
+            if not lengths:
+                sf.write(f"{chunk_id}\t0\t0\t0\t0\t0\t0\n")
+                continue
+            mean_len = sum(lengths) / len(lengths)
+            sf.write(
+                f"{chunk_id}\t{len(lengths)}\t{mean_len:.1f}\t{min(lengths)}\t"
+                f"{_percentile(lengths, 0.95)}\t{max(lengths)}\t{sum(lengths)}\n"
+            )
+    return stats_path
 
 
 def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
@@ -39,6 +108,7 @@ def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
     chunk_size = (total + num_chunks - 1) // num_chunks
 
     chunk_files = []
+    chunks: list[tuple[int, list[Path]]] = []
     for i in range(num_chunks):
         start = i * chunk_size
         end = min(start + chunk_size, total)
@@ -51,6 +121,7 @@ def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
                 f.write(f"{yaml_files[j].resolve()}\n")
 
         chunk_files.append(chunk_path)
+        chunks.append((i, list(yaml_files[start:end])))
         print(f"Wrote {end - start} paths -> {chunk_path}")
 
     # Write manifest
@@ -59,8 +130,11 @@ def create_chunks(yaml_files: list[Path], output_dir: str, num_chunks: int):
         for cf in chunk_files:
             mf.write(f"{cf.resolve()}\n")
 
+    stats_path = write_chunk_stats(output_path, chunks)
+
     print(f"Created {len(chunk_files)} chunk files in {output_path}")
-    print(f"Manifest: {manifest_path}")
+    print(f"Manifest:    {manifest_path}")
+    print(f"Chunk stats: {stats_path}")
     return chunk_files
 
 

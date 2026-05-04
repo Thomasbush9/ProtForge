@@ -109,7 +109,8 @@ In `config.yaml`, each stage can be enabled/disabled:
 pipeline:
   msa: true      # MSA generation (ColabFold)
   boltz: true    # Structure prediction (Boltz)
-  esm: false     # Embedding extraction (ESM)
+  esm: false     # Embedding extraction (ESM-C)
+  esmfold: false # Structure prediction (ESMFold — alternative / complement to Boltz)
   es: false      # Evolutionary scale analysis (PDAnalysis)
 ```
 
@@ -159,13 +160,14 @@ ProtForge/
     │   ├── msa.smk            # MSA stage rules
     │   ├── boltz.smk          # Boltz stage rules
     │   ├── esm.smk            # ESM stage rules
+    │   ├── esmfold.smk        # ESMFold stage rules
     │   └── es.smk             # ES stage rules
     └── scripts/
         ├── chunk_fastas.py           # Split FASTAs into chunks
         ├── organize_msa_outputs.py   # Scatter a3m files, create YAMLs
         ├── prepare_boltz_chunks.py   # Symlink YAMLs into chunk dirs
         ├── organize_boltz_outputs.py # Copy best model to seq dir
-        └── chunk_yamls_for_esm.py    # Split YAMLs for ESM
+        └── chunk_yamls_for_esm.py    # Split YAML or FASTA paths (ESM + ESMFold)
 ```
 
 ## Sentinel Files
@@ -177,6 +179,7 @@ Snakemake tracks completion via sentinel (marker) files:
 | `.msa_complete` | All MSA chunks processed and scattered |
 | `.boltz_complete` | All Boltz runs organized |
 | `.esm_complete` | All ESM embeddings extracted |
+| `.esmfold_complete` | All ESMFold structures predicted |
 | `es/.done` | ES analysis complete |
 | `chunk_X_run_Y_output/.done` | One Boltz prediction job finished |
 
@@ -205,6 +208,47 @@ input:
 ```
 
 This submits SLURM jobs directly (without Snakemake) for N independent Boltz runs.
+
+### Run ESMFold
+
+ESMFold (`facebook/esmfold_v1` via HuggingFace) predicts structures from sequence only — no MSA required. It writes one PDB per sequence to `{output}/sequences/{seq}/esmfold/structure.pdb` plus a `plddt.npy` array.
+
+**One-time model download** (on a login node, needs internet):
+
+```bash
+conda activate /n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold
+python scripts/download_esmfold.py \
+    --cache-dir /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
+```
+
+This populates `<cache_dir>/hub/models--facebook--esmfold_v1/` (~22 GB). The SLURM worker loads from this cache offline, so compute nodes don't need internet.
+
+**Config:**
+
+```yaml
+pipeline:
+  esmfold: true
+esmfold:
+  input_type: yaml            # or "fasta" — see below
+  num_chunks: 4               # parallel GPU jobs
+  env_path: /n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
+```
+
+**Two input modes:**
+
+| `input_type` | Source dir | Glob | Upstream dependency |
+|---|---|---|---|
+| `yaml` *(default)* | `input.yaml_dir` if set, else `{output}/sequences/` | `*.yaml` | Waits for MSA/Boltz completion |
+| `fasta` | `input.fasta_dir` | `*.fasta` | None — runs independently |
+
+Use `fasta` mode when you want to fold raw sequences without MSA generation (fastest path: ~1–2 min model load + ~5–30 s per sequence on an H100).
+
+**Run it:**
+
+```bash
+snakemake --profile profiles/slurm/
+```
 
 ### Force re-run of a specific stage
 

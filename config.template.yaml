@@ -50,7 +50,7 @@ esm:
   # See docs/CLUSTER_SETUP.md for details.
 
 # ESMFold structure prediction - USER SETUP REQUIRED
-# Populate cache_dir first with: python esmfold_skeleton/download_esmfold.py --cache-dir <cache_dir>
+# Populate cache_dir first with: python scripts/download_esmfold.py --cache-dir <cache_dir>
 esmfold:
   input_type: yaml  # "yaml" (post-MSA from sequences/) or "fasta" (raw input.fasta_dir, independent of MSA/Boltz)
   num_chunks: 1
@@ -93,3 +93,13 @@ slurm:
   #   partition: kempner
   # boltz:
   #   partition: kempner
+  #
+  # Per-stage SLURM resource overrides (optional). Populated automatically by
+  # the webapp's resource estimator (Import dialog → "Apply to session config").
+  # Each entry maps a Snakemake `resources:` field; gpus=0 disables GPU request.
+  # resources:
+  #   msa:     {mem_mb: 48000, runtime: 60,  cpus_per_task: 4,  gpus: 1}
+  #   boltz:   {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
+  #   esm:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 16, gpus: 1}
+  #   esmfold: {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
+  #   es:      {mem_mb: 16000, runtime: 120, cpus_per_task: 8,  gpus: 0}
