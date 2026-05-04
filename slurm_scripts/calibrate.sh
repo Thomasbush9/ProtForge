@@ -26,10 +26,17 @@ usage() {
     cat <<EOF
 Usage: $0 <stage> <gpu_type> <fasta_dir> [output_dir]
 
-  stage     One of: msa, boltz, esm, esmfold, es
+  stage     One of: msa, boltz, esm, esmfold, es, all
+            'all' enables msa + boltz + esm + esmfold together so MSA's
+            YAMLs feed Boltz/ESM/ESMFold in one shot (Option A calibration).
   gpu_type  One of: a100, h100, h200  (or any partition name to use literally)
   fasta_dir Path to a directory of .fasta files (real proteins, varied length)
   output_dir Optional output root. Defaults to /tmp/protforge_calib_<gpu_type>_<timestamp>
+
+Env vars:
+  CALIB_MAX_JOBS  Cap concurrent SLURM jobs (default: 4). Overrides the
+                  profile's jobs:100 setting so calibration does not crowd
+                  the queue. Bump if you have headroom.
 EOF
     exit 1
 }
@@ -40,11 +47,23 @@ STAGE="$1"
 GPU_TYPE="$2"
 FASTA_DIR="$(realpath "$3")"
 OUT_ROOT="${4:-/tmp/protforge_calib_${GPU_TYPE}_$(date +%Y%m%d_%H%M%S)}"
+MAX_JOBS="${CALIB_MAX_JOBS:-4}"
 
 case "$STAGE" in
-    msa|boltz|esm|esmfold|es) ;;
+    msa|boltz|esm|esmfold|es|all) ;;
     *) echo "Unknown stage: $STAGE"; usage ;;
 esac
+
+# Resolve which pipeline toggles to flip on. 'all' covers everything except
+# 'es' (CPU-only and rarely the bottleneck for a GPU calibration).
+_pipe_flag() {
+    local s="$1"
+    if [[ "$STAGE" == "all" ]]; then
+        [[ "$s" != "es" ]] && echo true || echo false
+    else
+        [[ "$STAGE" == "$s" ]] && echo true || echo false
+    fi
+}
 
 [[ -d "$FASTA_DIR" ]] || { echo "fasta_dir does not exist: $FASTA_DIR"; exit 1; }
 
@@ -64,14 +83,33 @@ CALIB_CFG="$OUT_ROOT/config.yaml"
 ACCOUNT="${SLURM_ACCOUNT:-${SLURM_DEFAULT_ACCOUNT:-$(sacctmgr -nP show user $USER format=defaultaccount 2>/dev/null | head -n1)}}"
 ACCOUNT="${ACCOUNT:-kempner_bsabatini_lab}"
 
-# Build a minimal config that enables only the chosen stage.
+# Build the calibration config. When STAGE=all, every GPU stage targets the
+# chosen partition; Snakemake's DAG sequences them via .msa_complete /
+# .boltz_complete sentinels.
+if [[ "$STAGE" == "all" ]]; then
+    PER_STAGE_PARTITIONS="$(cat <<EOF
+  msa:
+    partition: $PARTITION
+  boltz:
+    partition: $PARTITION
+  esm:
+    partition: $PARTITION
+  esmfold:
+    partition: $PARTITION
+EOF
+)"
+else
+    PER_STAGE_PARTITIONS="  $STAGE:
+    partition: $PARTITION"
+fi
+
 cat > "$CALIB_CFG" <<EOF
 pipeline:
-  msa: $([[ "$STAGE" == "msa" ]] && echo true || echo false)
-  boltz: $([[ "$STAGE" == "boltz" ]] && echo true || echo false)
-  esm: $([[ "$STAGE" == "esm" ]] && echo true || echo false)
-  esmfold: $([[ "$STAGE" == "esmfold" ]] && echo true || echo false)
-  es: $([[ "$STAGE" == "es" ]] && echo true || echo false)
+  msa: $(_pipe_flag msa)
+  boltz: $(_pipe_flag boltz)
+  esm: $(_pipe_flag esm)
+  esmfold: $(_pipe_flag esmfold)
+  es: $(_pipe_flag es)
 
 input:
   fasta_dir: $FASTA_DIR
@@ -83,11 +121,10 @@ slurm:
   partition: $PARTITION
   account: $ACCOUNT
   log_dir: $OUT_ROOT/logs
-  $STAGE:
-    partition: $PARTITION
+$PER_STAGE_PARTITIONS
 
 # Stage-specific basics — leave file_per_job small so the calibration sweep
-# produces multiple per-chunk benchmark TSV rows for a better fit.
+# produces one benchmark TSV row per sequence (clean per-length data).
 msa:
   max_files_per_job: 1
 boltz:
@@ -96,9 +133,9 @@ boltz:
   diffusion_samples: 25
   num_runs: 1
 esm:
-  num_chunks: 5
+  num_chunks: 100
 esmfold:
-  num_chunks: 5
+  num_chunks: 100
 EOF
 
 echo ">>> Calibration config: $CALIB_CFG"
@@ -126,30 +163,40 @@ yaml.safe_dump(cal, open("$CALIB_CFG", "w"), sort_keys=False)
 PY
 fi
 
-# Run the pipeline
+# Run the pipeline. --jobs overrides the profile's 100-job cap so calibration
+# stays a polite cluster citizen (default 4; bump via CALIB_MAX_JOBS=N).
 snakemake --profile profiles/slurm/ \
     --configfile "$CALIB_CFG" \
+    --jobs "$MAX_JOBS" \
     --rerun-triggers mtime
 
-# Summarize benchmarks
+# Summarize benchmarks across every stage that ran.
 SUMMARY="$OUT_ROOT/summary.txt"
+if [[ "$STAGE" == "all" ]]; then
+    SUMMARY_STAGES="msa boltz esm esmfold"
+else
+    SUMMARY_STAGES="$STAGE"
+fi
 {
     echo "ProtForge calibration — $STAGE on $GPU_TYPE ($PARTITION)"
     echo "==============================================="
     echo "Output root: $OUT_ROOT"
     echo "Started:     $(date)"
     echo
-    BENCH_DIR="$OUT_ROOT/run/benchmarks/$STAGE"
-    if [[ -d "$BENCH_DIR" ]]; then
-        echo "Per-rule benchmark TSVs ($BENCH_DIR):"
-        for tsv in "$BENCH_DIR"/*.tsv; do
-            [[ -f "$tsv" ]] || continue
-            echo "  $tsv"
-            head -2 "$tsv" | column -t -s $'\t'
-        done
-    else
-        echo "No benchmarks/ found at $BENCH_DIR — did the pipeline run?"
-    fi
+    for s in $SUMMARY_STAGES; do
+        BENCH_DIR="$OUT_ROOT/run/benchmarks/$s"
+        if [[ -d "$BENCH_DIR" ]]; then
+            echo "[$s] Per-rule benchmark TSVs ($BENCH_DIR):"
+            for tsv in "$BENCH_DIR"/*.tsv; do
+                [[ -f "$tsv" ]] || continue
+                echo "  $tsv"
+                head -2 "$tsv" | column -t -s $'\t'
+            done
+            echo
+        else
+            echo "[$s] No benchmarks/ found at $BENCH_DIR — did this stage run?"
+        fi
+    done
 } > "$SUMMARY"
 
 echo
