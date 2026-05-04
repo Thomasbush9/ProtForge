@@ -17,10 +17,59 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 
 def find_yaml_files(search_dir: str) -> list[Path]:
     """Recursively find all .yaml files, sorted."""
     return sorted(Path(search_dir).rglob("*.yaml"))
+
+
+def _yaml_seq_length(path: Path) -> int:
+    """Return total residues across all proteins in a Boltz YAML, or 0 on failure."""
+    try:
+        data = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    sequences = data.get("sequences") or []
+    total = 0
+    for entry in sequences:
+        if not isinstance(entry, dict):
+            continue
+        protein = entry.get("protein") or {}
+        seq = protein.get("sequence")
+        if isinstance(seq, str):
+            total += len(seq)
+    return total
+
+
+def _percentile(values: list[int], q: float) -> int:
+    if not values:
+        return 0
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return s[idx]
+
+
+def write_chunk_stats(output_dir: Path, chunks: list[tuple[int, list[Path]]]) -> Path:
+    """Write chunk_stats.tsv next to manifest.txt — join key for benchmarks/."""
+    stats_path = output_dir / "chunk_stats.tsv"
+    with open(stats_path, "w") as sf:
+        sf.write("chunk_id\tnum_seqs\tmean_len\tmin_len\tp95_len\tmax_len\ttotal_residues\n")
+        for chunk_id, paths in chunks:
+            lengths = [_yaml_seq_length(p) for p in paths]
+            lengths = [L for L in lengths if L > 0]
+            if not lengths:
+                sf.write(f"{chunk_id}\t0\t0\t0\t0\t0\t0\n")
+                continue
+            mean_len = sum(lengths) / len(lengths)
+            sf.write(
+                f"{chunk_id}\t{len(lengths)}\t{mean_len:.1f}\t{min(lengths)}\t"
+                f"{_percentile(lengths, 0.95)}\t{max(lengths)}\t{sum(lengths)}\n"
+            )
+    return stats_path
 
 
 def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: int):
@@ -45,6 +94,7 @@ def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: in
     num_chunks = (total + max_files_per_job - 1) // max_files_per_job
 
     chunk_dirs = []
+    chunks: list[tuple[int, list[Path]]] = []
     for i in range(num_chunks):
         start = i * max_files_per_job
         end = min(start + max_files_per_job, total)
@@ -54,15 +104,17 @@ def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: in
         chunk_dir = output_path / f"chunk_{i}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        for j in range(start, end):
-            src = yaml_files[j].resolve()
-            dst = chunk_dir / yaml_files[j].name
+        chunk_files = yaml_files[start:end]
+        for fp in chunk_files:
+            src = fp.resolve()
+            dst = chunk_dir / fp.name
             # Remove existing symlink if present (for reruns)
             if dst.is_symlink() or dst.exists():
                 dst.unlink()
             os.symlink(src, dst)
 
         chunk_dirs.append(chunk_dir)
+        chunks.append((i, chunk_files))
         print(f"Created chunk_{i} with {end - start} YAML symlinks")
 
     # Write manifest
@@ -71,8 +123,11 @@ def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: in
         for cd in chunk_dirs:
             mf.write(f"{cd.resolve()}\n")
 
+    stats_path = write_chunk_stats(output_path, chunks)
+
     print(f"Created {len(chunk_dirs)} chunks in {output_path}")
-    print(f"Manifest: {manifest_path}")
+    print(f"Manifest:    {manifest_path}")
+    print(f"Chunk stats: {stats_path}")
     return chunk_dirs
 
 
