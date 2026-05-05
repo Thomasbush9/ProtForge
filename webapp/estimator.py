@@ -320,9 +320,21 @@ def estimate_stage(
         runtime_sec = per_seq_sec * chunk_size * time_safety
         num_chunks = math.ceil(stats.count / chunk_size) * num_runs
     elif stage in ("esm", "esmfold"):
-        per_seq_sec = _eval_time_per_seq(
-            coeffs_per_gpu["runtime_sec_per_seq"], mean_len=stats.mean_len
-        )
+        # ESMFold has two coefficient sets: un-chunked (fast, OOM at long L) and
+        # chunked (model.trunk.set_chunk_size, slower but no OOM). Pick based
+        # on `chunk_threshold` from the stage block (default high → never chunk).
+        rt_block = coeffs_per_gpu["runtime_sec_per_seq"]
+        if stage == "esmfold":
+            chunk_threshold = stage_models.get("chunk_threshold", 10**9)
+            chunked_block = coeffs_per_gpu.get("runtime_sec_per_seq_chunked")
+            if chunked_block is not None and stats.p95_len >= chunk_threshold:
+                rt_block = chunked_block
+                gpu_notes.append(
+                    f"ESMFold: p95_len {stats.p95_len} ≥ chunk_threshold "
+                    f"{chunk_threshold} — using chunked trunk path "
+                    f"(slower but avoids OOM). Pass --chunk_size 64 to run_esmfold.py."
+                )
+        per_seq_sec = _eval_time_per_seq(rt_block, mean_len=stats.mean_len)
         per_seq_sec = max(per_seq_sec, 0.5)
         chunk_size = max(min_chunk, min(max_chunk,
             int(math.floor((target_chunk_min * 60) / per_seq_sec))))
