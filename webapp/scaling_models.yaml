@@ -45,20 +45,23 @@ gpu_specs:
 # ---- Stages ---------------------------------------------------------------
 
 msa:
-  # ColabFold/MMseq2: DB-bound, GPU helps but isn't compute-heavy
+  # ColabFold/MMseq2: DB-bound. v3 calibration shows ~1270s/seq at
+  # max_files_per_job: 1; the DB scan dominates. Per-residue cost is below noise.
   default_gpu: a100         # MSA tolerates MIG/A100 just fine
   cpus: 4
   gpus: 1
   per_gpu:
     a100:
       mem_mb:   {base: 16000, per_residue: 0.5, alpha_L2: 0.0}
-      runtime_sec_per_chunk: {base: 60, per_seq: 8, per_residue: 0.02}
+      runtime_sec_per_chunk: {base: 1500, per_seq: 10, per_residue: 0.02}
     h100:
+      # v3 calibrated (2026-05-05): base ~1270s constant, mostly DB scan amortized
+      # per chunk. per_seq + per_residue carry small safety margin for batches >1.
       mem_mb:   {base: 16000, per_residue: 0.5, alpha_L2: 0.0}
-      runtime_sec_per_chunk: {base: 50, per_seq: 6, per_residue: 0.015}
-  target_chunk_runtime_min: 30
+      runtime_sec_per_chunk: {base: 1270, per_seq: 10, per_residue: 0.02}
+  target_chunk_runtime_min: 45
   max_chunk_size: 50
-  min_chunk_size: 5
+  min_chunk_size: 1
 
 boltz:
   # O(L^2) attention; runtime dominates with recycling*samples*runs multiplier
@@ -70,8 +73,10 @@ boltz:
       mem_mb: {base: 8000, per_residue: 0.0, alpha_L2: 0.0010}
       runtime_sec_per_seq: {base: 45, alpha_L2: 0.0009}
     h100:
-      mem_mb: {base: 8000, per_residue: 0.0, alpha_L2: 0.0008}
-      runtime_sec_per_seq: {base: 30, alpha_L2: 0.0006}
+      # v3 calibrated (2026-05-05) — recycling=10, samples=25 (250 work units).
+      # estimator scales linearly with the user's recycling*samples settings.
+      mem_mb: {base: 16000, per_residue: 0.0, alpha_L2: 0.0008}
+      runtime_sec_per_seq: {base: 52, alpha_L: 0.17, alpha_L2: 0.00013}
   target_chunk_runtime_min: 45
   max_chunk_size: 40
   min_chunk_size: 1
@@ -86,26 +91,44 @@ esm:
       mem_mb: {base: 8000, per_residue: 8, alpha_L2: 0.0002}
       runtime_sec_per_seq: {base: 3, alpha_L: 0.08, alpha_L2: 0.0}
     h100:
-      mem_mb: {base: 8000, per_residue: 8, alpha_L2: 0.0002}
-      runtime_sec_per_seq: {base: 2, alpha_L: 0.05, alpha_L2: 0.0}
+      # v3 calibrated (2026-05-05): host RSS is ~0.5–2 GB at 1-per-job;
+      # heuristic was over-allocating 10–25×. base set to 4 GB with safety margin.
+      # runtime in calibration is ~50s constant (startup-dominated at 1-per-job);
+      # for production batches the per-residue cost takes over — keep alpha_L=0.05.
+      mem_mb: {base: 4000, per_residue: 1.0, alpha_L2: 0.0}
+      runtime_sec_per_seq: {base: 5, alpha_L: 0.05, alpha_L2: 0.0}
   target_chunk_runtime_min: 30
-  max_chunk_size: 500
-  min_chunk_size: 10
+  max_chunk_size: 30
+  min_chunk_size: 1
 
 esmfold:
   # facebook/esmfold_v1 (~3B params). Memory dominated by O(L²) activations on
-  # top of ~14 GB of model weights. Anchored to the docs note "5–30 s/seq on
-  # H100" and published benchmarks (~25 GB at L=1000).
+  # top of ~14 GB of model weights. v3 calibration (2026-05-05) shows that
+  # un-chunked the model OOMs on H100 80GB above L≈1300aa; with
+  # `model.trunk.set_chunk_size(64)` the same sequences fit (slightly slower).
+  #
+  # The estimator switches between two coefficient sets at `chunk_threshold`:
+  #   - L < chunk_threshold : runtime_sec_per_seq        (fast path, no OOM risk)
+  #   - L >= chunk_threshold: runtime_sec_per_seq_chunked (chunked trunk, ~1.5×)
+  # `slurm_scripts/run_esmfold.py:--chunk_size_threshold` enables this in the rule.
   default_gpu: h100
   cpus: 8
   gpus: 1
+  chunk_threshold: 1200
   per_gpu:
     a100:
       mem_mb: {base: 14000, alpha_L2: 0.020}
-      runtime_sec_per_seq: {base: 5, alpha_L2: 0.00004}
+      runtime_sec_per_seq:         {base: 5, alpha_L2: 0.00004}
+      runtime_sec_per_seq_chunked: {base: 5, alpha_L: 0.18}
     h100:
+      # v3 calibrated (2026-05-05).
+      # un-chunked fit on the 12 successful chunks (L ≤ 1159aa, warm cache):
+      #   wall_s ≈ 0.10·L  (very rough; cold-cache noise dominates at short L)
+      # chunked fit on L ≥ 562aa points (model.trunk.set_chunk_size(64)):
+      #   wall_s ≈ -43 + 0.155·L  → ~0.155 s/aa at long L
       mem_mb: {base: 14000, alpha_L2: 0.018}
-      runtime_sec_per_seq: {base: 3, alpha_L2: 0.000022}
+      runtime_sec_per_seq:         {base: 5,  alpha_L: 0.10, alpha_L2: 0.0}
+      runtime_sec_per_seq_chunked: {base: 10, alpha_L: 0.155, alpha_L2: 0.0}
   target_chunk_runtime_min: 45
   max_chunk_size: 200
   min_chunk_size: 1
