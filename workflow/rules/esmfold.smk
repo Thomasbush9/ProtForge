@@ -115,8 +115,8 @@ rule run_esmfold_chunk:
             module load python gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
 
             set +u
-            source "$(conda info --base)/etc/profile.d/conda.sh"
-            conda activate "{params.env_path}"
+            source "$(conda info --base)/etc/profile.d/mamba.sh"
+            mamba activate "{params.env_path}"
             set -u
 
             python {input.script} \
