@@ -53,6 +53,10 @@ if __name__ == "__main__":
                              "Enables offline load from compute nodes.")
     parser.add_argument("--chunk_size", type=int, default=None,
                         help="Folding-trunk chunk size. Enable for long sequences or on OOM.")
+    parser.add_argument("--chunk_size_threshold", type=int, default=1200,
+                        help="If a sequence is at least this long, enable trunk chunking "
+                             "(via --chunk_size, default 64 if --chunk_size unset). Default 1200 "
+                             "matches the H100 80GB OOM ceiling observed in calibration.")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -86,14 +90,22 @@ if __name__ == "__main__":
     model = model.to(device)
     if device == "cuda":
         model.esm = model.esm.half()
-    if args.chunk_size is not None:
-        model.trunk.set_chunk_size(args.chunk_size)
+
+    auto_chunk = args.chunk_size if args.chunk_size is not None else 64
+    current_chunk = None  # tracks what's currently set on model.trunk
 
     for path_str in paths:
         path = Path(path_str)
         is_fasta = path.suffix.lower() in (".fasta", ".fa", ".a3m")
         try:
             seq, _mapping = load_seq_(path, fasta=is_fasta)
+            seq_len = len(seq)
+            want_chunk = auto_chunk if seq_len >= args.chunk_size_threshold else None
+            if want_chunk != current_chunk:
+                model.trunk.set_chunk_size(want_chunk)
+                current_chunk = want_chunk
+                print(f"[{path.name}] L={seq_len} chunk_size={want_chunk}",
+                      flush=True)
             input_ids = tokenizer(
                 [seq], return_tensors="pt", add_special_tokens=False,
             )["input_ids"].to(device)

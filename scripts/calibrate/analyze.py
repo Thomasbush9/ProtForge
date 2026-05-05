@@ -36,14 +36,14 @@ STAGE_BENCH_PATTERN = {
     "msa":     re.compile(r"colabfold_search_(\d+)\.tsv$"),
     "boltz":   re.compile(r"predict_(\d+)_run_\d+\.tsv$"),
     "esm":     re.compile(r"esm_chunk_(\d+)\.tsv$"),
-    "esmfold": re.compile(r"esmfold_(\d+)\.tsv$"),  # placeholder; adjust if needed
+    "esmfold": re.compile(r"esmfold_chunk_(\d+)\.tsv$"),
 }
 
 STAGE_CHUNK_DIR = {
     "msa":     "msa_chunks",
     "boltz":   "boltz_chunks",
     "esm":     "esm_chunks",
-    "esmfold": "esm_chunks",  # esmfold reads YAMLs, often shares the dir
+    "esmfold": "esmfold_chunks",
 }
 
 
