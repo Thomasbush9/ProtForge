@@ -129,7 +129,7 @@ Wall-clock is bounded by Boltz, typically 2–4 hours overnight.
 | `SLURM_ACCOUNT` | `kempner_bsabatini_lab` | Account that has access to your chosen partition. Kempner GPU partitions need the `kempner_*` account, not the lab's plain account. |
 | `PROTFORGE_LOG_DIR` | `/n/home06/$USER/job_logs` | Where SLURM job logs go. |
 | `PROTFORGE_ESM_ENV` | `/n/home06/$USER/envs/esm` | ESM conda env. |
-| `PROTFORGE_ESMFOLD_ENV` | `/n/home06/$USER/envs/esmfold` | ESMFold conda env. |
+| `PROTFORGE_ESMFOLD_ENV` | `/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold` | ESMFold conda env (shared lab default — matches `webapp/app.py:1383`). |
 
 The shared MSA/Boltz paths (mmseq2_db, colabfold_db, boltz cache, etc.) are
 hardcoded in `calibrate.sh` from `config.template.yaml` and don't need

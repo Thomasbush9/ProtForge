@@ -39,7 +39,8 @@ Env vars (all optional):
   CALIB_MAX_JOBS         Cap concurrent SLURM jobs.           Default: 4
   PROTFORGE_LOG_DIR      slurm.log_dir override.              Default: /n/home06/\$USER/job_logs
   PROTFORGE_ESM_ENV      ESM conda env path override.         Default: /n/home06/\$USER/envs/esm
-  PROTFORGE_ESMFOLD_ENV  ESMFold conda env path override.     Default: /n/home06/\$USER/envs/esmfold
+  PROTFORGE_ESMFOLD_ENV  ESMFold conda env path override.     Default: shared lab env
+                         (/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold)
 EOF
     exit 1
 }
@@ -97,7 +98,10 @@ KEMPNER_ESM_CACHE="/n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache"
 # User-specific paths (env overrides take precedence).
 SLURM_LOG_DIR="${PROTFORGE_LOG_DIR:-/n/home06/$USER/job_logs}"
 ESM_ENV="${PROTFORGE_ESM_ENV:-/n/home06/$USER/envs/esm}"
-ESMFOLD_ENV="${PROTFORGE_ESMFOLD_ENV:-/n/home06/$USER/envs/esmfold}"
+# ESMFold default points at the shared lab env that the webapp uses
+# (webapp/app.py:1383). The user-specific path in config.template.yaml
+# is misleading — most users do not have their own ESMFold env.
+ESMFOLD_ENV="${PROTFORGE_ESMFOLD_ENV:-/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold}"
 
 mkdir -p "$OUT_ROOT"
 CALIB_CFG="$OUT_ROOT/config.yaml"
