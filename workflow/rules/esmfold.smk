@@ -5,6 +5,12 @@ checkpoint chunk_yamls_for_esmfold -> run_esmfold_chunk (per chunk) -> esmfold_c
 
 Calls slurm_scripts/run_esmfold.py to fold sequences via facebook/esmfold_v1.
 Reuses workflow/scripts/chunk_yamls_for_esm.py for chunking (format-agnostic).
+
+Smart binning: when esmfold.bin_by_length is true, the chunker partitions
+sequences into a "short" pool (L < length_threshold) and a "long" pool
+(L >= length_threshold), each chunked independently. Chunk wildcards then
+look like `short_0`, `short_1`, ..., `long_0`, ... — the run rule's
+`resources:` callable inspects the prefix and applies pool-specific mem/time.
 """
 
 ESMFOLD_CFG    = config.get("esmfold", {})
@@ -23,6 +29,61 @@ else:
 
 ESMFOLD_PARTITION = SLURM_CFG.get("esmfold", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESMFOLD_ACCOUNT   = SLURM_CFG.get("account", "")
+
+ESMFOLD_BIN_BY_LENGTH = bool(ESMFOLD_CFG.get("bin_by_length", False))
+
+
+def _build_esmfold_chunker_args() -> str:
+    """Optional flags for chunk_yamls_for_esm.py — built once at module load."""
+    parts = []
+    max_seq_len = ESMFOLD_CFG.get("max_seq_len")
+    if max_seq_len is not None:
+        parts.append(f"--max_seq_len {int(max_seq_len)}")
+    if ESMFOLD_BIN_BY_LENGTH:
+        parts.append("--bin_by_length")
+        parts.append(f"--length_threshold {int(ESMFOLD_CFG.get('length_threshold', 1200))}")
+        default_n = int(ESMFOLD_CFG.get("num_chunks", 1))
+        parts.append(f"--num_chunks_short {int(ESMFOLD_CFG.get('num_chunks_short', default_n))}")
+        parts.append(f"--num_chunks_long {int(ESMFOLD_CFG.get('num_chunks_long', default_n))}")
+    return " ".join(parts)
+
+
+ESMFOLD_CHUNKER_EXTRA = _build_esmfold_chunker_args()
+
+
+def _build_esmfold_runner_args() -> str:
+    """Optional flags for run_esmfold.py."""
+    parts = []
+    threshold = ESMFOLD_CFG.get("chunk_size_threshold")
+    if threshold is not None:
+        parts.append(f"--chunk_size_threshold {int(threshold)}")
+    chunk_size = ESMFOLD_CFG.get("chunk_size")
+    if chunk_size is not None:
+        parts.append(f"--chunk_size {int(chunk_size)}")
+    return " ".join(parts)
+
+
+ESMFOLD_RUNNER_EXTRA = _build_esmfold_runner_args()
+
+
+def _is_long_chunk(chunk_id: str) -> bool:
+    return chunk_id.startswith("long_")
+
+
+def _esmfold_mem_mb(wildcards):
+    if ESMFOLD_BIN_BY_LENGTH:
+        if _is_long_chunk(wildcards.chunk_id):
+            return int(ESMFOLD_CFG.get("mem_long_mb", 80000))
+        return int(ESMFOLD_CFG.get("mem_short_mb", 32000))
+    return stage_resource("esmfold", "mem_mb", 32000)
+
+
+def _esmfold_runtime(wildcards):
+    if ESMFOLD_BIN_BY_LENGTH:
+        if _is_long_chunk(wildcards.chunk_id):
+            return int(ESMFOLD_CFG.get("time_long_min", 240))
+        return int(ESMFOLD_CFG.get("time_short_min", 60))
+    return stage_resource("esmfold", "runtime", 120)
 
 
 def esmfold_chunk_input(wildcards):
@@ -48,6 +109,7 @@ checkpoint chunk_yamls_for_esmfold:
         glob_pattern = ESMFOLD_GLOB,
         num_chunks = ESMFOLD_CFG.get("num_chunks", 1),
         esmfold_chunks_dir = ESMFOLD_CHUNKS,
+        chunker_extra = ESMFOLD_CHUNKER_EXTRA,
     localrule: True
     shell:
         """
@@ -55,7 +117,8 @@ checkpoint chunk_yamls_for_esmfold:
             --yaml_dir {params.source_dir} \
             --output_dir {params.esmfold_chunks_dir} \
             --num_chunks {params.num_chunks} \
-            --pattern '{params.glob_pattern}'
+            --pattern '{params.glob_pattern}' \
+            {params.chunker_extra}
         """
 
 
@@ -73,6 +136,8 @@ def get_esmfold_chunk_ids(wildcards):
 
 rule run_esmfold_chunk:
     """Fold sequences in a chunk with facebook/esmfold_v1."""
+    wildcard_constraints:
+        chunk_id = r"(?:short_|long_)?\d+",
     input:
         fasta_list = f"{ESMFOLD_CHUNKS}/id_{{chunk_id}}.txt",
         script = "slurm_scripts/run_esmfold.py",
@@ -88,10 +153,11 @@ rule run_esmfold_chunk:
         cache_dir = ESMFOLD_CFG.get("cache_dir", ""),
         container_cmd = container_cmd("esmfold"),
         esmfold_chunks_dir = ESMFOLD_CHUNKS,
+        runner_extra = ESMFOLD_RUNNER_EXTRA,
     resources:
         cpus_per_task = stage_resource("esmfold", "cpus_per_task", 8),
-        mem_mb        = stage_resource("esmfold", "mem_mb", 32000),
-        runtime       = stage_resource("esmfold", "runtime", 120),
+        mem_mb        = _esmfold_mem_mb,
+        runtime       = _esmfold_runtime,
         slurm_partition = ESMFOLD_PARTITION,
         slurm_account = ESMFOLD_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("esmfold", True)),
@@ -110,7 +176,8 @@ rule run_esmfold_chunk:
                     --fasta_list {input.fasta_list} \
                     --output_dir {params.output_dir} \
                     --processed_paths_file {params.esmfold_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt \
-                    --cache_dir {params.cache_dir}
+                    --cache_dir {params.cache_dir} \
+                    {params.runner_extra}
         else
             module load python gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
 
@@ -123,7 +190,8 @@ rule run_esmfold_chunk:
                 --fasta_list {input.fasta_list} \
                 --output_dir {params.output_dir} \
                 --processed_paths_file {params.esmfold_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt \
-                --cache_dir {params.cache_dir}
+                --cache_dir {params.cache_dir} \
+                {params.runner_extra}
         fi
 
         touch {output.done}

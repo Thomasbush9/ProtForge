@@ -59,6 +59,17 @@ def boltz_chunk_input(wildcards):
     return inputs
 
 
+def _boltz_chunker_extra() -> str:
+    parts = []
+    max_seq_len = BOLTZ_CFG.get("max_seq_len")
+    if max_seq_len is not None:
+        parts.append(f"--max_seq_len {int(max_seq_len)}")
+    return " ".join(parts)
+
+
+BOLTZ_CHUNKER_EXTRA = _boltz_chunker_extra()
+
+
 checkpoint chunk_yamls_for_boltz:
     """Split YAML files into chunk directories for parallel boltz predict."""
     input:
@@ -68,13 +79,15 @@ checkpoint chunk_yamls_for_boltz:
     params:
         yaml_dir = YAML_SOURCE_DIR,
         max_files = BOLTZ_CFG.get("max_files_per_job", 25),
+        chunker_extra = BOLTZ_CHUNKER_EXTRA,
     localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
             --yaml_dir {params.yaml_dir} \
             --output_dir {BOLTZ_CHUNKS} \
-            --max_files_per_job {params.max_files}
+            --max_files_per_job {params.max_files} \
+            {params.chunker_extra}
         """
 
 
