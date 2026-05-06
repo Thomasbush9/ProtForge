@@ -1327,6 +1327,23 @@ with tab_config:
         boltz["delete_msa_after_processing"] = st.toggle(
             "Delete MSA after Boltz", value=boltz.get("delete_msa_after_processing", False),
         )
+        _boltz_use_cutoff = st.toggle(
+            "Skip sequences over a length cutoff",
+            value=boltz.get("max_seq_len") is not None,
+            help="Sequences longer than the cutoff are dropped before chunking. "
+                 "Skipped entries are listed in <output>/boltz_chunks/skipped_sequences.tsv. "
+                 "Useful for avoiding the long-protein organize failure (~1800aa+).",
+            key="boltz_use_max_seq_len",
+        )
+        if _boltz_use_cutoff:
+            boltz["max_seq_len"] = st.number_input(
+                "Max sequence length (residues)",
+                value=int(boltz.get("max_seq_len") or 1500),
+                min_value=1,
+                key="boltz_max_seq_len",
+            )
+        else:
+            boltz["max_seq_len"] = None
         boltz["cache_dir"] = st.text_input("Boltz cache dir", value=boltz.get("cache_dir", ""))
         boltz["env_path"] = st.text_input("Boltz env path", value=boltz.get("env_path", ""))
 
@@ -1396,6 +1413,104 @@ with tab_config:
             help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
                  "scripts/download_esmfold.py on a login node.",
         )
+
+        _esmfold_use_cutoff = st.toggle(
+            "Skip sequences over a length cutoff",
+            value=esmfold.get("max_seq_len") is not None,
+            help="Sequences longer than the cutoff are dropped before chunking. "
+                 "Skipped entries are listed in <output>/esmfold_chunks/skipped_sequences.tsv.",
+            key="esmfold_use_max_seq_len",
+        )
+        if _esmfold_use_cutoff:
+            esmfold["max_seq_len"] = st.number_input(
+                "Max sequence length (residues) ",
+                value=int(esmfold.get("max_seq_len") or 2500),
+                min_value=1,
+                key="esmfold_max_seq_len",
+            )
+        else:
+            esmfold["max_seq_len"] = None
+
+        st.markdown("---")
+        st.markdown("**Smart binning** — group long sequences into separate jobs")
+        esmfold["bin_by_length"] = st.toggle(
+            "Bin sequences by length",
+            value=bool(esmfold.get("bin_by_length", False)),
+            help="Partition inputs into a 'short' pool (L < threshold) and a 'long' pool "
+                 "(L ≥ threshold) and chunk each pool independently. Long-pool jobs get "
+                 "their own SLURM mem/time. Disable to use the legacy single-pool chunker.",
+            key="esmfold_bin_by_length",
+        )
+        c1, c2, c3 = st.columns(3)
+        esmfold["length_threshold"] = c1.number_input(
+            "Length threshold (aa)",
+            value=int(esmfold.get("length_threshold", 1200)),
+            min_value=1,
+            help="Sequences with L ≥ threshold go to the long pool. 1200 matches the "
+                 "H100 80GB OOM ceiling observed in calibration.",
+            key="esmfold_length_threshold",
+        )
+        esmfold["num_chunks_short"] = c2.number_input(
+            "Chunks (short pool)",
+            value=int(esmfold.get("num_chunks_short", esmfold.get("num_chunks", 1))),
+            min_value=1,
+            key="esmfold_num_chunks_short",
+        )
+        esmfold["num_chunks_long"] = c3.number_input(
+            "Chunks (long pool)",
+            value=int(esmfold.get("num_chunks_long", esmfold.get("num_chunks", 1))),
+            min_value=1,
+            key="esmfold_num_chunks_long",
+        )
+        c1, c2 = st.columns(2)
+        esmfold["mem_short_mb"] = c1.number_input(
+            "Short-pool mem (MB)",
+            value=int(esmfold.get("mem_short_mb", 32000)),
+            min_value=1000,
+            step=1000,
+            key="esmfold_mem_short_mb",
+        )
+        esmfold["mem_long_mb"] = c2.number_input(
+            "Long-pool mem (MB)",
+            value=int(esmfold.get("mem_long_mb", 80000)),
+            min_value=1000,
+            step=1000,
+            help="Long-pool jobs run the trunk-chunked path; on H100 80GB give them headroom.",
+            key="esmfold_mem_long_mb",
+        )
+        c1, c2 = st.columns(2)
+        esmfold["time_short_min"] = c1.number_input(
+            "Short-pool runtime (min)",
+            value=int(esmfold.get("time_short_min", 60)),
+            min_value=1,
+            key="esmfold_time_short_min",
+        )
+        esmfold["time_long_min"] = c2.number_input(
+            "Long-pool runtime (min)",
+            value=int(esmfold.get("time_long_min", 240)),
+            min_value=1,
+            help="Trunk-chunked path is ~50% slower per residue, so long-pool jobs need more wall time.",
+            key="esmfold_time_long_min",
+        )
+
+        st.markdown("---")
+        st.markdown("**Trunk chunking** — per-sequence OOM guard inside `run_esmfold.py`")
+        c1, c2 = st.columns(2)
+        esmfold["chunk_size_threshold"] = c1.number_input(
+            "Chunk-size threshold (aa)",
+            value=int(esmfold.get("chunk_size_threshold", 1200)),
+            min_value=1,
+            help="When a sequence's L ≥ threshold, model.trunk.set_chunk_size(chunk_size) "
+                 "is invoked at fold time to avoid OOM (slower but safe).",
+            key="esmfold_chunk_size_threshold",
+        )
+        esmfold["chunk_size"] = c2.number_input(
+            "Chunk size",
+            value=int(esmfold.get("chunk_size", 64)),
+            min_value=1,
+            key="esmfold_chunk_size",
+        )
+
         cfg["esmfold"] = esmfold
 
     with st.expander("ES Settings"):
