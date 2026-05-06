@@ -53,6 +53,16 @@ def _percentile(values: list[int], q: float) -> int:
     return s[idx]
 
 
+def write_skipped_tsv(output_dir: Path, skipped: list[tuple[Path, int, str]]) -> Path:
+    """Always written (header even if no skipped entries)."""
+    path = output_dir / "skipped_sequences.tsv"
+    with open(path, "w") as f:
+        f.write("path\tlength\treason\n")
+        for p, L, reason in skipped:
+            f.write(f"{p}\t{L}\t{reason}\n")
+    return path
+
+
 def write_chunk_stats(output_dir: Path, chunks: list[tuple[int, list[Path]]]) -> Path:
     """Write chunk_stats.tsv next to manifest.txt — join key for benchmarks/."""
     stats_path = output_dir / "chunk_stats.tsv"
@@ -136,6 +146,8 @@ def main():
     parser.add_argument("--yaml_dir", required=True, help="Directory containing YAML files (recursive search)")
     parser.add_argument("--output_dir", required=True, help="Output directory for boltz_chunks/")
     parser.add_argument("--max_files_per_job", type=int, required=True, help="Max YAML files per chunk")
+    parser.add_argument("--max_seq_len", type=int, default=None,
+                        help="Drop sequences longer than this (residues). Default: no cutoff.")
     args = parser.parse_args()
 
     yaml_files = find_yaml_files(args.yaml_dir)
@@ -144,7 +156,26 @@ def main():
         sys.exit(1)
 
     print(f"Found {len(yaml_files)} YAML files in {args.yaml_dir}")
-    create_chunks(yaml_files, args.output_dir, args.max_files_per_job)
+
+    output_path = Path(args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    skipped: list[tuple[Path, int, str]] = []
+    surviving: list[Path] = []
+    if args.max_seq_len is not None:
+        for f in yaml_files:
+            L = _yaml_seq_length(f)
+            if L > args.max_seq_len:
+                skipped.append((f.resolve(), L, f"length>{args.max_seq_len}"))
+            else:
+                surviving.append(f)
+        print(f"Filter --max_seq_len={args.max_seq_len}: kept {len(surviving)}, "
+              f"skipped {len(skipped)}")
+    else:
+        surviving = yaml_files
+
+    write_skipped_tsv(output_path, skipped)
+    create_chunks(surviving, args.output_dir, args.max_files_per_job)
 
 
 if __name__ == "__main__":
