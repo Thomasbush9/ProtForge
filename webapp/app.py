@@ -222,6 +222,55 @@ def render_chunk_recommendation(stage: str) -> None:
         )
 
 
+# Per-stage SLURM resource defaults — kept in sync with the rule fallbacks so a
+# blank session picks up reasonable values without forcing the user to run the
+# estimator first. Tuples are (mem_mb, runtime_min, cpus_per_task).
+_SLURM_DEFAULTS: dict[str, tuple[int, int, int]] = {
+    "msa":     (256000,  60, 4),
+    "boltz":   ( 16000,  60, 8),
+    "esm":     ( 32000,  60, 16),
+    "esmfold": ( 32000, 120, 8),
+    "es":      ( 16000, 120, 8),
+}
+
+
+def render_slurm_resources(cfg: dict, stage: str) -> None:
+    """Render mem / runtime / cpus number_inputs for a stage.
+
+    Reads/writes cfg['slurm']['resources'][stage]. The webapp estimator's
+    'Apply to session config' button populates the same block; values typed
+    here win on save, so this is also the manual-override surface."""
+    if stage not in _SLURM_DEFAULTS:
+        return
+    default_mem, default_runtime, default_cpus = _SLURM_DEFAULTS[stage]
+    slurm = cfg.setdefault("slurm", {})
+    resources = slurm.setdefault("resources", {})
+    stage_res = resources.setdefault(stage, {})
+    c1, c2, c3 = st.columns(3)
+    stage_res["mem_mb"] = c1.number_input(
+        "Memory (MB)",
+        value=int(stage_res.get("mem_mb", default_mem)),
+        min_value=1000,
+        step=1000,
+        key=f"{stage}_mem_mb_override",
+        help="Per-job SLURM mem request. Estimator's 'Apply' button writes here; "
+             "you can also override manually. Ensure the target partition can "
+             "actually serve this size.",
+    )
+    stage_res["runtime"] = c2.number_input(
+        "Runtime (min)",
+        value=int(stage_res.get("runtime", default_runtime)),
+        min_value=1,
+        key=f"{stage}_runtime_override",
+    )
+    stage_res["cpus_per_task"] = c3.number_input(
+        "CPUs per task",
+        value=int(stage_res.get("cpus_per_task", default_cpus)),
+        min_value=1,
+        key=f"{stage}_cpus_override",
+    )
+
+
 def render_estimate_panel(scan_result: dict, cfg: dict, session: Session,
                           key_prefix: str = "est") -> None:
     """Render the resource-estimate expander given a scan_directory() result.
@@ -1309,6 +1358,7 @@ with tab_config:
         msa["max_files_per_job"] = st.number_input("Files per job", value=msa.get("max_files_per_job", 25), min_value=1)
         render_chunk_recommendation("msa")
         render_gpu_preference("msa")
+        render_slurm_resources(cfg, "msa")
         msa["mmseq2_db"] = st.text_input("MMseqs2 DB", value=msa.get("mmseq2_db", ""))
         msa["colabfold_db"] = st.text_input("ColabFold DB", value=msa.get("colabfold_db", ""))
         msa["colabfold_bin"] = st.text_input("ColabFold bin", value=msa.get("colabfold_bin", ""))
@@ -1321,6 +1371,7 @@ with tab_config:
         boltz["num_runs"] = c2.number_input("Runs per sequence", value=boltz.get("num_runs", 1), min_value=1)
         render_chunk_recommendation("boltz")
         render_gpu_preference("boltz")
+        render_slurm_resources(cfg, "boltz")
         c1, c2 = st.columns(2)
         boltz["recycling_steps"] = c1.number_input("Recycling steps", value=boltz.get("recycling_steps", 10), min_value=1)
         boltz["diffusion_samples"] = c2.number_input("Diffusion samples", value=boltz.get("diffusion_samples", 25), min_value=1)
@@ -1364,6 +1415,7 @@ with tab_config:
         esm["num_chunks"] = st.number_input("Chunks", value=esm.get("num_chunks", 1), min_value=1)
         render_chunk_recommendation("esm")
         render_gpu_preference("esm")
+        render_slurm_resources(cfg, "esm")
         esm["env_path"] = st.text_input("ESM env path", value=esm.get("env_path", ""))
         esm["cache_dir"] = st.text_input("ESM cache dir", value=esm.get("cache_dir", ""))
         cfg["esm"] = esm
@@ -1387,6 +1439,7 @@ with tab_config:
         )
         render_chunk_recommendation("esmfold")
         render_gpu_preference("esmfold")
+        render_slurm_resources(cfg, "esmfold")
         esmfold["array_max_concurrency"] = st.number_input(
             "Max concurrent array tasks",
             value=esmfold.get("array_max_concurrency", 10),
@@ -1515,6 +1568,7 @@ with tab_config:
 
     with st.expander("ES Settings"):
         es = cfg.get("es", {})
+        render_slurm_resources(cfg, "es")
         es["pdanalysis_dir"] = st.text_input("PDAnalysis directory", value=es.get("pdanalysis_dir", ""))
 
         st.markdown("**Reference structure** (set exactly one)")

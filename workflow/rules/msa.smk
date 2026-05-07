@@ -68,7 +68,7 @@ rule run_colabfold_search:
         container_cmd = container_cmd("colabfold"),
     resources:
         cpus_per_task = stage_resource("msa", "cpus_per_task", 4),
-        mem_mb        = stage_resource("msa", "mem_mb", 48000),
+        mem_mb        = stage_resource("msa", "mem_mb", 256000),
         runtime       = stage_resource("msa", "runtime", 60),
         slurm_partition = MSA_PARTITION,
         slurm_account = MSA_ACCOUNT,
