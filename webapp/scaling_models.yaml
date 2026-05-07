@@ -47,17 +47,24 @@ gpu_specs:
 msa:
   # ColabFold/MMseq2: DB-bound. v3 calibration shows ~1270s/seq at
   # max_files_per_job: 1; the DB scan dominates. Per-residue cost is below noise.
+  #
+  # Memory note (2026-05-07 correction): the v2 calibration concluded host RSS
+  # of 110-145 GB during MSA was mmap'd DB pages excluded from cgroup accounting.
+  # That was wrong on Kempner — the ga200 production run OOM-killed every chunk
+  # at `mmseqs expandaln` with mem_mb=16000. The cgroup *does* charge mmseqs's
+  # working set against the colabfold environmental DB. Bumped base to 256 GB
+  # to stay clear of the observed peak.
   default_gpu: a100         # MSA tolerates MIG/A100 just fine
   cpus: 4
   gpus: 1
   per_gpu:
     a100:
-      mem_mb:   {base: 16000, per_residue: 0.5, alpha_L2: 0.0}
+      mem_mb:   {base: 256000, per_residue: 0.5, alpha_L2: 0.0}
       runtime_sec_per_chunk: {base: 1500, per_seq: 10, per_residue: 0.02}
     h100:
       # v3 calibrated (2026-05-05): base ~1270s constant, mostly DB scan amortized
       # per chunk. per_seq + per_residue carry small safety margin for batches >1.
-      mem_mb:   {base: 16000, per_residue: 0.5, alpha_L2: 0.0}
+      mem_mb:   {base: 256000, per_residue: 0.5, alpha_L2: 0.0}
       runtime_sec_per_chunk: {base: 1270, per_seq: 10, per_residue: 0.02}
   target_chunk_runtime_min: 45
   max_chunk_size: 50
