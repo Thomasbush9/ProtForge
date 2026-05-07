@@ -271,6 +271,99 @@ def render_slurm_resources(cfg: dict, stage: str) -> None:
     )
 
 
+def render_binning_controls(cfg: dict, stage: str) -> None:
+    """Per-stage 'Bin-aware chunking' toggle + mode + preview table.
+
+    The bins recipe (chunk_size/mem/runtime per bin) is populated by the
+    estimator's 'Apply to session config' button. The UI toggles enabled +
+    mode + num_bins; per-bin numbers are read-only here (edit config.yaml
+    for fine-grained overrides).
+    """
+    if stage not in {"msa", "boltz", "esm", "esmfold"}:
+        return
+    stage_cfg = cfg.setdefault(stage, {})
+    binning = stage_cfg.setdefault("binning", {})
+
+    enabled = st.toggle(
+        "Bin-aware chunking",
+        value=bool(binning.get("enabled", False)),
+        help="Partition sequences into length bins; each bin produces chunks "
+             "with bin-specific SLURM mem and runtime. Recipe populated by "
+             "the estimator (click 'Apply to session config' after enabling).",
+        key=f"{stage}_binning_enabled",
+    )
+    binning["enabled"] = enabled
+    if not enabled:
+        return
+
+    c1, c2 = st.columns([1, 1])
+    mode = c1.selectbox(
+        "Bin mode",
+        options=["quantile", "thresholds"],
+        index=0 if binning.get("mode", "quantile") == "quantile" else 1,
+        help="quantile: cuts derived from your input length distribution. "
+             "thresholds: explicit cuts (set under 'thresholds' in YAML).",
+        key=f"{stage}_binning_mode",
+    )
+    binning["mode"] = mode
+    if mode == "quantile":
+        binning["num_bins"] = c2.number_input(
+            "Number of bins",
+            value=int(binning.get("num_bins", 6)),
+            min_value=2,
+            max_value=10,
+            help="6 uses upper-tail-weighted cuts (q25/q50/q75/q90/q95) — "
+                 "extra resolution where O(L²) memory bites hardest. "
+                 "Other values use evenly-spaced quantiles.",
+            key=f"{stage}_binning_num_bins",
+        )
+    else:
+        thresholds_str = ",".join(str(int(t)) for t in (binning.get("thresholds") or []))
+        new_str = c2.text_input(
+            "Length cuts (comma-separated)",
+            value=thresholds_str,
+            help="Example: 400,800,1200,1800 -> 5 bins.",
+            key=f"{stage}_binning_thresholds",
+        )
+        try:
+            binning["thresholds"] = [int(x.strip()) for x in new_str.split(",") if x.strip()]
+            binning["num_bins"] = len(binning["thresholds"]) + 1
+        except ValueError:
+            st.warning("Thresholds must be integers separated by commas.")
+
+    # Preview from the latest estimate (if any). last_estimate stores dict
+    # form (asdict of StageEstimate), so bin_plan here is a dict or None.
+    est = st.session_state.get("last_estimate", {}).get(stage)
+    bin_plan = est.get("bin_plan") if isinstance(est, dict) else None
+    if bin_plan and bin_plan.get("bins"):
+        st.caption("Estimated plan (re-run estimator after changing input data):")
+        rows = []
+        total_chunks = 0
+        total_runtime = 0
+        for b in bin_plan["bins"]:
+            n = b["num_seqs"]
+            cs = max(1, b["chunk_size"])
+            n_chunks = (n + cs - 1) // cs if n else 0
+            total_chunks += n_chunks
+            total_runtime += n_chunks * b["runtime_min"]
+            rows.append({
+                "bin": b["bin_idx"],
+                "n": n,
+                "L range": f"{b['len_lo']}-{b['len_hi']}",
+                "chunk_size": cs,
+                "mem_mb": b["mem_mb"],
+                "runtime_min": b["runtime_min"],
+            })
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.caption(
+            f"Total chunks: {total_chunks}, "
+            f"total runtime budget: {total_runtime} min "
+            f"(thresholds: {bin_plan.get('thresholds', [])})"
+        )
+    else:
+        st.caption("No bin plan yet — run the estimator to populate per-bin recipes.")
+
+
 def render_estimate_panel(scan_result: dict, cfg: dict, session: Session,
                           key_prefix: str = "est") -> None:
     """Render the resource-estimate expander given a scan_directory() result.
@@ -1359,6 +1452,7 @@ with tab_config:
         render_chunk_recommendation("msa")
         render_gpu_preference("msa")
         render_slurm_resources(cfg, "msa")
+        render_binning_controls(cfg, "msa")
         msa["mmseq2_db"] = st.text_input("MMseqs2 DB", value=msa.get("mmseq2_db", ""))
         msa["colabfold_db"] = st.text_input("ColabFold DB", value=msa.get("colabfold_db", ""))
         msa["colabfold_bin"] = st.text_input("ColabFold bin", value=msa.get("colabfold_bin", ""))
@@ -1372,6 +1466,7 @@ with tab_config:
         render_chunk_recommendation("boltz")
         render_gpu_preference("boltz")
         render_slurm_resources(cfg, "boltz")
+        render_binning_controls(cfg, "boltz")
         c1, c2 = st.columns(2)
         boltz["recycling_steps"] = c1.number_input("Recycling steps", value=boltz.get("recycling_steps", 10), min_value=1)
         boltz["diffusion_samples"] = c2.number_input("Diffusion samples", value=boltz.get("diffusion_samples", 25), min_value=1)
@@ -1416,6 +1511,7 @@ with tab_config:
         render_chunk_recommendation("esm")
         render_gpu_preference("esm")
         render_slurm_resources(cfg, "esm")
+        render_binning_controls(cfg, "esm")
         esm["env_path"] = st.text_input("ESM env path", value=esm.get("env_path", ""))
         esm["cache_dir"] = st.text_input("ESM cache dir", value=esm.get("cache_dir", ""))
         cfg["esm"] = esm
@@ -1440,6 +1536,7 @@ with tab_config:
         render_chunk_recommendation("esmfold")
         render_gpu_preference("esmfold")
         render_slurm_resources(cfg, "esmfold")
+        render_binning_controls(cfg, "esmfold")
         esmfold["array_max_concurrency"] = st.number_input(
             "Max concurrent array tasks",
             value=esmfold.get("array_max_concurrency", 10),

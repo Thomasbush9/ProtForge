@@ -64,10 +64,14 @@ def _boltz_chunker_extra() -> str:
     max_seq_len = BOLTZ_CFG.get("max_seq_len")
     if max_seq_len is not None:
         parts.append(f"--max_seq_len {int(max_seq_len)}")
+    bin_args = binning_args(BOLTZ_CFG)
+    if bin_args:
+        parts.append(bin_args)
     return " ".join(parts)
 
 
 BOLTZ_CHUNKER_EXTRA = _boltz_chunker_extra()
+BOLTZ_CHUNKS_TSV = f"{BOLTZ_CHUNKS}/chunks.tsv"
 
 
 checkpoint chunk_yamls_for_boltz:
@@ -123,8 +127,14 @@ rule run_boltz_predict:
         container_cmd = container_cmd("boltz"),
     resources:
         cpus_per_task = stage_resource("boltz", "cpus_per_task", 8),
-        mem_mb        = stage_resource("boltz", "mem_mb", 16000),
-        runtime       = stage_resource("boltz", "runtime", 60),
+        mem_mb        = lambda wc: chunk_resource(
+            BOLTZ_CHUNKS_TSV, wc.chunk_id, "mem_mb",
+            stage_resource("boltz", "mem_mb", 16000),
+        ),
+        runtime       = lambda wc: chunk_resource(
+            BOLTZ_CHUNKS_TSV, wc.chunk_id, "runtime_min",
+            stage_resource("boltz", "runtime", 60),
+        ),
         slurm_partition = BOLTZ_PARTITION,
         slurm_account = BOLTZ_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("boltz", True)),

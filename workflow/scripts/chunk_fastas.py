@@ -17,6 +17,14 @@ import os
 import sys
 from pathlib import Path
 
+from binning import (
+    add_binning_argparse,
+    compute_bins,
+    parse_int_csv,
+    recipes_from_args,
+    write_chunks_tsv,
+)
+
 
 def find_fasta_files(input_dir: str) -> list[Path]:
     """Find all .fasta and .fa files in the input directory (non-recursive, sorted)."""
@@ -144,11 +152,46 @@ def create_chunks(fasta_files: list[Path], output_dir: str, max_files_per_job: i
     return chunk_dirs
 
 
+def _materialize_chunk(chunk_dir: Path, fasta_paths: list[Path]) -> None:
+    """Write file_list.txt + combined.fasta into chunk_dir."""
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    file_list_path = chunk_dir / "file_list.txt"
+    with open(file_list_path, "w") as fl:
+        for fp in fasta_paths:
+            fl.write(f"{fp.resolve()}\n")
+    combined_path = chunk_dir / "combined.fasta"
+    with open(combined_path, "w") as cf:
+        for fp in fasta_paths:
+            with open(fp) as f:
+                content = f.read()
+                cf.write(content)
+                if not content.endswith("\n"):
+                    cf.write("\n")
+
+
+def _create_binned_chunks(output_path: Path, chunks) -> list[Path]:
+    """One chunk_N/ dir per ChunkMeta with combined.fasta + file_list.txt.
+    Cleans stale chunk_*/ dirs first."""
+    for stale in output_path.glob("chunk_*"):
+        if stale.is_dir() and stale.name.removeprefix("chunk_").isdigit():
+            shutil.rmtree(stale)
+
+    chunk_dirs: list[Path] = []
+    for c in chunks:
+        chunk_dir = output_path / f"chunk_{c.chunk_id}"
+        _materialize_chunk(chunk_dir, [p for p, _ in c.items])
+        chunk_dirs.append(chunk_dir)
+        print(f"Created chunk_{c.chunk_id} with {c.num_seqs} files "
+              f"(bin {c.bin_idx}, mem={c.mem_mb}MB time={c.runtime_min}min)")
+    return chunk_dirs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Split FASTAs into chunks for MSA")
     parser.add_argument("--input_dir", required=True, help="Directory containing .fasta/.fa files")
     parser.add_argument("--output_dir", required=True, help="Output directory for msa_chunks/")
     parser.add_argument("--max_files_per_job", type=int, required=True, help="Max FASTA files per chunk")
+    add_binning_argparse(parser)
     args = parser.parse_args()
 
     fasta_files = find_fasta_files(args.input_dir)
@@ -157,6 +200,39 @@ def main():
         sys.exit(1)
 
     print(f"Found {len(fasta_files)} FASTA files in {args.input_dir}")
+
+    if args.enable_binning:
+        output_path = Path(args.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        pairs: list[tuple[Path, int]] = [(f, _fasta_residue_count(f)) for f in fasta_files]
+        recipes = recipes_from_args(args)
+        thresholds = parse_int_csv(args.bin_thresholds) if args.bin_mode == "thresholds" else None
+        chunks, eff_thresholds = compute_bins(
+            pairs,
+            mode=args.bin_mode,
+            num_bins=args.num_bins,
+            thresholds=thresholds,
+            recipes=recipes,
+        )
+        chunk_dirs = _create_binned_chunks(output_path, chunks)
+
+        manifest_path = output_path / "manifest.txt"
+        with open(manifest_path, "w") as mf:
+            for cd in chunk_dirs:
+                mf.write(f"{cd.resolve()}\n")
+
+        legacy_chunks = [(c.chunk_id, [p for p, _ in c.items]) for c in chunks]
+        stats_path = write_chunk_stats(output_path, legacy_chunks)
+        chunks_tsv = write_chunks_tsv(output_path, chunks)
+
+        print(f"Created {len(chunk_dirs)} bin-aware chunks in {output_path}")
+        print(f"Effective thresholds: {eff_thresholds}")
+        print(f"Manifest:    {manifest_path}")
+        print(f"Chunk stats: {stats_path}")
+        print(f"chunks.tsv:  {chunks_tsv}")
+        return
+
     create_chunks(fasta_files, args.output_dir, args.max_files_per_job)
 
 

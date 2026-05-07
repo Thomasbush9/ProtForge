@@ -14,6 +14,10 @@ MSA_PARTITION = SLURM_CFG.get("msa", {}).get("partition", SLURM_CFG.get("partiti
 MSA_ACCOUNT   = SLURM_CFG.get("account", "")
 
 
+MSA_BINNING_ARGS = binning_args(MSA_CFG)
+MSA_CHUNKS_TSV = f"{MSA_CHUNKS}/chunks.tsv"
+
+
 checkpoint chunk_fastas:
     """Split input FASTAs into chunk directories with combined.fasta + file_list.txt."""
     input:
@@ -22,13 +26,15 @@ checkpoint chunk_fastas:
         manifest = f"{MSA_CHUNKS}/manifest.txt",
     params:
         max_files = MSA_CFG.get("max_files_per_job", 25),
+        binning = MSA_BINNING_ARGS,
     localrule: True
     shell:
         """
         python workflow/scripts/chunk_fastas.py \
             --input_dir {input.fasta_dir} \
             --output_dir {MSA_CHUNKS} \
-            --max_files_per_job {params.max_files}
+            --max_files_per_job {params.max_files} \
+            {params.binning}
         """
 
 
@@ -68,8 +74,14 @@ rule run_colabfold_search:
         container_cmd = container_cmd("colabfold"),
     resources:
         cpus_per_task = stage_resource("msa", "cpus_per_task", 4),
-        mem_mb        = stage_resource("msa", "mem_mb", 256000),
-        runtime       = stage_resource("msa", "runtime", 60),
+        mem_mb        = lambda wc: chunk_resource(
+            MSA_CHUNKS_TSV, wc.chunk_id, "mem_mb",
+            stage_resource("msa", "mem_mb", 256000),
+        ),
+        runtime       = lambda wc: chunk_resource(
+            MSA_CHUNKS_TSV, wc.chunk_id, "runtime_min",
+            stage_resource("msa", "runtime", 60),
+        ),
         slurm_partition = MSA_PARTITION,
         slurm_account = MSA_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("msa", True)),

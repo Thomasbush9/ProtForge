@@ -41,9 +41,14 @@ class InputStats:
     p95_len: int
     total_residues: int
     file_type: str  # "fasta" | "yaml"
+    # Full sorted lengths — kept so binning can compute true quantile cuts.
+    # Optional / empty list when not populated (older callers).
+    lengths_sorted: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("lengths_sorted", None)  # keep dict serialization small for UI
+        return d
 
 
 @dataclass
@@ -60,9 +65,62 @@ class StageEstimate:
     total_node_hours: float
     calibrated: bool = False
     notes: list[str] = field(default_factory=list)
+    # Optional bin plan when the user enables `<stage>.binning.enabled` — the
+    # estimator computes per-bin chunk_size/mem/runtime sized for each bin's
+    # representative length. None when binning is off.
+    bin_plan: "BinPlan | None" = None
+
+    def as_dict(self) -> dict:
+        d = asdict(self)
+        return d
+
+
+@dataclass
+class BinSpec:
+    """Per-bin chunking + resource recommendation."""
+    bin_idx: int
+    num_seqs: int
+    len_lo: int            # min observed length in bin (inclusive)
+    len_hi: int            # max observed length in bin (inclusive)
+    repr_len: int          # length used for sizing (typically bin's p95)
+    chunk_size: int
+    mem_mb: int
+    runtime_min: int
+
+    @property
+    def num_chunks(self) -> int:
+        if self.num_seqs <= 0:
+            return 0
+        return math.ceil(self.num_seqs / max(1, self.chunk_size))
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass
+class BinPlan:
+    mode: str                          # "quantile" | "thresholds"
+    num_bins: int
+    thresholds: list[int]              # effective length cuts (len = num_bins - 1)
+    bins: list[BinSpec]
+
+    @property
+    def total_chunks(self) -> int:
+        return sum(b.num_chunks for b in self.bins)
+
+    @property
+    def total_runtime_min(self) -> int:
+        return sum(b.num_chunks * b.runtime_min for b in self.bins)
+
+    def as_dict(self) -> dict:
+        return {
+            "mode": self.mode,
+            "num_bins": self.num_bins,
+            "thresholds": list(self.thresholds),
+            "bins": [b.as_dict() for b in self.bins],
+            "total_chunks": self.total_chunks,
+            "total_runtime_min": self.total_runtime_min,
+        }
 
 
 # --- Loading scaling models -----------------------------------------------
@@ -136,6 +194,7 @@ def compute_input_stats(
         p95_len=lengths_sorted[p95_idx],
         total_residues=sum(lengths_sorted),
         file_type=file_type,
+        lengths_sorted=lengths_sorted,
     )
 
 
@@ -392,6 +451,35 @@ def estimate_stage(
     # Total cost (node-hours): one node per SLURM job × runtime
     total_node_hours = (runtime_min * num_chunks) / 60
 
+    # Optional bin plan: if `<stage>.binning.enabled` is set in config, build a
+    # per-bin chunking + resource plan now. The estimate's flat mem_mb/runtime
+    # values stay as the safety-net fallback used when chunks.tsv is missing.
+    stage_cfg = config.get(stage, {}) or {}
+    binning_cfg = stage_cfg.get("binning") or {}
+    bin_plan: BinPlan | None = None
+    if binning_cfg.get("enabled", False) and stats.lengths_sorted:
+        try:
+            bp_kwargs = dict(
+                stage=stage,
+                stats=stats,
+                coeffs_per_gpu=coeffs_per_gpu,
+                stage_models=stage_models,
+                mode=binning_cfg.get("mode", "quantile"),
+                num_bins=int(binning_cfg.get("num_bins", 6)),
+                thresholds=binning_cfg.get("thresholds"),
+                target_chunk_runtime_min=binning_cfg.get("target_chunk_runtime_min"),
+                mem_safety=mem_safety,
+                time_safety=time_safety,
+                startup_overhead_min=int(binning_cfg.get("startup_overhead_min", 5)),
+            )
+            if stage == "boltz":
+                boltz_cfg = config.get("boltz", {})
+                bp_kwargs["boltz_recycling"] = boltz_cfg.get("recycling_steps", 10)
+                bp_kwargs["boltz_samples"] = boltz_cfg.get("diffusion_samples", 25)
+            bin_plan = compute_bin_plan(**bp_kwargs)
+        except (ValueError, KeyError) as e:
+            gpu_notes.append(f"Bin plan disabled: {e}")
+
     return StageEstimate(
         stage=stage,
         mem_mb=mem_mb,
@@ -405,6 +493,170 @@ def estimate_stage(
         total_node_hours=round(total_node_hours, 2),
         calibrated=False,  # filled in by caller if scaling came from .calibrated.yaml
         notes=gpu_notes,
+        bin_plan=bin_plan,
+    )
+
+
+def _bin_lengths(lengths_sorted: list[int], thresholds: list[int]) -> list[list[int]]:
+    """Partition a sorted length list into len(thresholds)+1 buckets."""
+    n_bins = len(thresholds) + 1
+    buckets: list[list[int]] = [[] for _ in range(n_bins)]
+    for L in lengths_sorted:
+        idx = 0
+        for t in thresholds:
+            if L < t:
+                break
+            idx += 1
+        buckets[idx].append(L)
+    return buckets
+
+
+def _quantile_thresholds(lengths_sorted: list[int], num_bins: int) -> list[int]:
+    """Mirror of binning.quantile_thresholds — kept here to avoid a cross-package
+    import (binning lives in workflow/scripts/, not on the webapp's path).
+
+    For num_bins=6 uses an upper-tail-weighted cut schedule
+    (q25, q50, q75, q90, q95) — same shape as scripts/calibrate/subsample.py.
+    Other num_bins use evenly-spaced quantiles."""
+    if not lengths_sorted or num_bins < 2:
+        return []
+    n = len(lengths_sorted)
+    if num_bins == 6:
+        cuts = (0.25, 0.50, 0.75, 0.90, 0.95)  # 5 cuts → 6 bins
+    else:
+        cuts = tuple((i + 1) / num_bins for i in range(num_bins - 1))
+    out = []
+    for q in cuts:
+        idx = min(n - 1, max(0, int(round(q * (n - 1)))))
+        out.append(lengths_sorted[idx])
+    return out
+
+
+def compute_bin_plan(
+    *,
+    stage: str,
+    stats: InputStats,
+    coeffs_per_gpu: dict,
+    stage_models: dict,
+    mode: str = "quantile",
+    num_bins: int = 6,
+    thresholds: list[int] | None = None,
+    target_chunk_runtime_min: int | None = None,
+    mem_safety: float = 1.3,
+    time_safety: float = 1.3,
+    startup_overhead_min: int = 5,
+    boltz_recycling: int = 10,
+    boltz_samples: int = 25,
+) -> BinPlan:
+    """Build a per-bin chunking + resource plan for one stage.
+
+    The plan's per-bin chunk_size is derived from the scaling model evaluated
+    at the bin's p95 length. Per-bin mem is sized for the bin's max length
+    (worst case) plus `mem_safety`. Per-bin runtime is `chunk_size × per_seq +
+    startup_overhead_min × time_safety`.
+    """
+    if not stats.lengths_sorted:
+        raise ValueError(
+            "compute_bin_plan needs stats.lengths_sorted — call compute_input_stats."
+        )
+
+    if mode == "quantile":
+        eff = _quantile_thresholds(stats.lengths_sorted, num_bins)
+    elif mode == "thresholds":
+        if not thresholds:
+            raise ValueError("mode=thresholds requires non-empty thresholds")
+        eff = sorted(int(t) for t in thresholds)
+    else:
+        raise ValueError(f"Unknown bin mode: {mode!r}")
+
+    buckets = _bin_lengths(stats.lengths_sorted, eff)
+
+    target_min = target_chunk_runtime_min or stage_models.get("target_chunk_runtime_min", 30)
+    max_chunk = stage_models.get("max_chunk_size", stats.count or 1)
+    min_chunk = stage_models.get("min_chunk_size", 1)
+
+    bin_specs: list[BinSpec] = []
+    for i, bucket in enumerate(buckets):
+        if not bucket:
+            # Still emit a placeholder so the recipe length matches num_bins.
+            bin_specs.append(BinSpec(
+                bin_idx=i,
+                num_seqs=0,
+                len_lo=0, len_hi=0, repr_len=0,
+                chunk_size=max(1, min_chunk),
+                mem_mb=int(stage_models.get("per_gpu", {}).get(
+                    stage_models.get("default_gpu", "h100"), {}
+                ).get("mem_mb", {}).get("base", 16000)),
+                runtime_min=max(1, target_min),
+            ))
+            continue
+
+        len_lo = bucket[0]
+        len_hi = bucket[-1]
+        # p95 within the bin — keeps sizing safe for the upper edge.
+        p95_idx = min(len(bucket) - 1, max(0, int(round(0.95 * (len(bucket) - 1)))))
+        repr_len = bucket[p95_idx]
+
+        # Memory: size for worst-case length in the bin.
+        mem_raw = _eval_mem(
+            coeffs_per_gpu["mem_mb"],
+            p95_len=len_hi,
+            mean_len=sum(bucket) / len(bucket),
+            total_residues=sum(bucket),
+            count=len(bucket),
+        )
+        mem_mb = int(math.ceil(mem_raw * mem_safety))
+
+        # Runtime per seq: pick the right coefficient block (handles ESMFold's
+        # chunked-trunk regime when this bin is in the long tail).
+        rt_block = coeffs_per_gpu.get("runtime_sec_per_seq")
+        if stage == "esmfold":
+            chunk_threshold = stage_models.get("chunk_threshold", 10**9)
+            chunked_block = coeffs_per_gpu.get("runtime_sec_per_seq_chunked")
+            if chunked_block is not None and len_hi >= chunk_threshold:
+                rt_block = chunked_block
+
+        if rt_block is not None:
+            per_seq_sec = _eval_time_per_seq(rt_block, mean_len=repr_len)
+            per_seq_sec = max(per_seq_sec, 0.5)
+            if stage == "boltz":
+                per_seq_sec *= (boltz_recycling * boltz_samples) / 250
+        else:
+            # MSA: per-chunk runtime is approximately constant in L.
+            coeffs_t = coeffs_per_gpu.get("runtime_sec_per_chunk", {})
+            per_seq_sec = (
+                coeffs_t.get("per_seq", 0)
+                + coeffs_t.get("per_residue", 0) * repr_len
+            )
+            # If everything is constant-in-L, fall back to base / target_chunk.
+            if per_seq_sec <= 0:
+                per_seq_sec = max(1.0, coeffs_t.get("base", target_min * 60) / max(1, max_chunk))
+
+        target_sec = max(1, target_min * 60)
+        chunk_size = max(min_chunk, min(max_chunk,
+            int(math.floor(target_sec / per_seq_sec))))
+        chunk_size = max(chunk_size, 1)
+
+        runtime_sec = per_seq_sec * chunk_size * time_safety
+        # MSA-style stages have a constant `base` setup cost; add it.
+        coeffs_t_extra = coeffs_per_gpu.get("runtime_sec_per_chunk", {})
+        runtime_sec += coeffs_t_extra.get("base", 0)
+        runtime_min = max(1, int(math.ceil(runtime_sec / 60))) + max(0, startup_overhead_min)
+
+        bin_specs.append(BinSpec(
+            bin_idx=i,
+            num_seqs=len(bucket),
+            len_lo=len_lo, len_hi=len_hi, repr_len=repr_len,
+            chunk_size=chunk_size,
+            mem_mb=mem_mb,
+            runtime_min=runtime_min,
+        ))
+
+    return BinPlan(
+        mode=mode,
+        num_bins=len(eff) + 1,
+        thresholds=list(eff),
+        bins=bin_specs,
     )
 
 
@@ -488,7 +740,7 @@ def apply_estimate_to_config(
     for stage, est in estimates.items():
         if est.num_chunks == 0:
             continue
-        # SLURM resources
+        # SLURM resources (safety-net fallback; bin-aware chunks override per-job)
         slurm_resources[stage] = {
             "mem_mb": est.mem_mb,
             "runtime": est.runtime_min,
@@ -507,6 +759,34 @@ def apply_estimate_to_config(
                 stage_cfg[ck] = est.chunk_size
             else:  # esm, esmfold — num_chunks is the *number of jobs*
                 stage_cfg[ck] = est.num_chunks
+
+        # If a BinPlan was produced, populate the binning recipe so the chunker
+        # produces per-bin chunks with per-chunk SLURM resources at run time.
+        if est.bin_plan is not None:
+            stage_cfg = cfg.setdefault(stage, {})
+            existing = stage_cfg.get("binning") or {}
+            stage_cfg["binning"] = {
+                "enabled": True,
+                "mode": est.bin_plan.mode,
+                "num_bins": est.bin_plan.num_bins,
+                # Echo computed thresholds for transparency (used in thresholds mode;
+                # in quantile mode the chunker recomputes from input distribution).
+                "thresholds": list(est.bin_plan.thresholds),
+                # Optional knobs preserved if the user set them previously.
+                "target_chunk_runtime_min": existing.get("target_chunk_runtime_min"),
+                "startup_overhead_min": existing.get("startup_overhead_min", 5),
+                "bins": [
+                    {
+                        "chunk_size": b.chunk_size,
+                        "mem_mb": b.mem_mb,
+                        "runtime_min": b.runtime_min,
+                    }
+                    for b in est.bin_plan.bins
+                ],
+            }
+            # Drop None values so YAML is clean.
+            if stage_cfg["binning"]["target_chunk_runtime_min"] is None:
+                stage_cfg["binning"].pop("target_chunk_runtime_min")
 
     backup_path = config_path
     if backup:

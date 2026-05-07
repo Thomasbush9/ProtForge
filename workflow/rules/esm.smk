@@ -16,6 +16,9 @@ ESM_YAML_SOURCE = _yaml_dir_override if _yaml_dir_override else SEQUENCES_DIR
 ESM_PARTITION = SLURM_CFG.get("esm", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESM_ACCOUNT   = SLURM_CFG.get("account", "")
 
+ESM_BINNING_ARGS = binning_args(ESM_CFG)
+ESM_CHUNKS_TSV = f"{ESM_CHUNKS}/chunks.tsv"
+
 
 def esm_chunk_input(wildcards):
     """Input for chunk_yamls_for_esm: depend on upstream completion if enabled."""
@@ -37,13 +40,15 @@ checkpoint chunk_yamls_for_esm:
         yaml_dir = ESM_YAML_SOURCE,
         num_chunks = ESM_CFG.get("num_chunks", 1),
         esm_chunks_dir = ESM_CHUNKS,
+        binning = ESM_BINNING_ARGS,
     localrule: True
     shell:
         """
         python workflow/scripts/chunk_yamls_for_esm.py \
             --yaml_dir {params.yaml_dir} \
             --output_dir {params.esm_chunks_dir} \
-            --num_chunks {params.num_chunks}
+            --num_chunks {params.num_chunks} \
+            {params.binning}
         """
 
 
@@ -79,8 +84,14 @@ rule run_esm_chunk:
         esm_chunks_dir = ESM_CHUNKS,
     resources:
         cpus_per_task = stage_resource("esm", "cpus_per_task", 16),
-        mem_mb        = stage_resource("esm", "mem_mb", 32000),
-        runtime       = stage_resource("esm", "runtime", 60),
+        mem_mb        = lambda wc: chunk_resource(
+            ESM_CHUNKS_TSV, wc.chunk_id, "mem_mb",
+            stage_resource("esm", "mem_mb", 32000),
+        ),
+        runtime       = lambda wc: chunk_resource(
+            ESM_CHUNKS_TSV, wc.chunk_id, "runtime_min",
+            stage_resource("esm", "runtime", 60),
+        ),
         slurm_partition = ESM_PARTITION,
         slurm_account = ESM_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("esm", True)),
