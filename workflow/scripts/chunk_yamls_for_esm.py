@@ -22,6 +22,14 @@ from pathlib import Path
 
 import yaml
 
+from binning import (
+    add_binning_argparse,
+    compute_bins,
+    parse_int_csv,
+    recipes_from_args,
+    write_chunks_tsv,
+)
+
 
 def find_files(search_dir: str, pattern: str = "*.yaml") -> list[Path]:
     """Recursively find files matching pattern, following symlinks, sorted."""
@@ -203,6 +211,20 @@ def create_chunks(
     return chunk_files, chunks_meta
 
 
+def _write_binned_chunk(output_path: Path, chunk_id: int, items) -> Path:
+    chunk_path = output_path / f"id_{chunk_id}.txt"
+    with open(chunk_path, "w") as f:
+        for fp, _ in items:
+            f.write(f"{fp.resolve()}\n")
+    return chunk_path
+
+
+def _cleanup_stale(output_path: Path) -> None:
+    for stale in output_path.glob("id_*.txt"):
+        if _is_managed_chunk_file(stale.stem):
+            stale.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Split file paths into chunks for a stage")
     parser.add_argument("--yaml_dir", required=True, help="Directory containing input files (recursive)")
@@ -213,13 +235,14 @@ def main():
     parser.add_argument("--max_seq_len", type=int, default=None,
                         help="Drop sequences longer than this (residues). Default: no cutoff.")
     parser.add_argument("--bin_by_length", action="store_true",
-                        help="Partition into short/long pools and chunk each independently.")
+                        help="Legacy 2-pool short/long binning (superseded by --enable_binning).")
     parser.add_argument("--length_threshold", type=int, default=1200,
                         help="With --bin_by_length: sequences with L>=threshold go to long pool.")
     parser.add_argument("--num_chunks_short", type=int, default=None,
                         help="Chunk count for short pool (--bin_by_length only). Defaults to --num_chunks.")
     parser.add_argument("--num_chunks_long", type=int, default=None,
                         help="Chunk count for long pool (--bin_by_length only). Defaults to --num_chunks.")
+    add_binning_argparse(parser)
     args = parser.parse_args()
 
     files = find_files(args.yaml_dir, args.pattern)
@@ -245,6 +268,45 @@ def main():
     output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    if args.enable_binning:
+        # Bin-aware path: per-bin chunk_size + per-chunk SLURM resources via chunks.tsv.
+        _cleanup_stale(output_path)
+        recipes = recipes_from_args(args)
+        thresholds = parse_int_csv(args.bin_thresholds) if args.bin_mode == "thresholds" else None
+        chunks, eff_thresholds = compute_bins(
+            surviving,
+            mode=args.bin_mode,
+            num_bins=args.num_bins,
+            thresholds=thresholds,
+            recipes=recipes,
+        )
+        chunk_files: list[Path] = []
+        chunks_meta: list[tuple[str, list[tuple[Path, int]], str]] = []
+        for c in chunks:
+            chunk_path = _write_binned_chunk(output_path, c.chunk_id, c.items)
+            chunk_files.append(chunk_path)
+            chunks_meta.append((str(c.chunk_id), c.items, f"bin{c.bin_idx}"))
+            print(f"Wrote {c.num_seqs} paths -> {chunk_path} (bin {c.bin_idx}, "
+                  f"mem={c.mem_mb}MB time={c.runtime_min}min)")
+
+        manifest_path = output_path / "manifest.txt"
+        with open(manifest_path, "w") as mf:
+            for cf in chunk_files:
+                mf.write(f"{cf.resolve()}\n")
+
+        skipped_path = write_skipped_tsv(output_path, skipped)
+        stats_path = write_chunk_stats(output_path, chunks_meta)
+        chunks_tsv = write_chunks_tsv(output_path, chunks)
+
+        print(f"Created {len(chunk_files)} bin-aware chunks in {output_path}")
+        print(f"Effective thresholds: {eff_thresholds}")
+        print(f"Manifest:    {manifest_path}")
+        print(f"Skipped:     {skipped_path} ({len(skipped)} sequences)")
+        print(f"Chunk stats: {stats_path}")
+        print(f"chunks.tsv:  {chunks_tsv}")
+        return
+
+    # Legacy paths (unbinned or 2-pool short/long).
     chunk_files, chunks_meta = create_chunks(
         surviving,
         args.output_dir,

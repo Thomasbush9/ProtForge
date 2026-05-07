@@ -19,6 +19,14 @@ from pathlib import Path
 
 import yaml
 
+from binning import (
+    add_binning_argparse,
+    compute_bins,
+    parse_int_csv,
+    recipes_from_args,
+    write_chunks_tsv,
+)
+
 
 def find_yaml_files(search_dir: str) -> list[Path]:
     """Recursively find all .yaml files, sorted."""
@@ -141,6 +149,33 @@ def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: in
     return chunk_dirs
 
 
+def _create_binned_chunks(
+    surviving_pairs: list[tuple[Path, int]],
+    output_path: Path,
+    chunks,
+) -> list[Path]:
+    """Materialize bin-aware chunks: one chunk_N/ dir per ChunkMeta, symlinks
+    inside. Cleans stale chunk_*/ dirs first."""
+    for stale in output_path.glob("chunk_*"):
+        if stale.is_dir() and stale.name.removeprefix("chunk_").isdigit():
+            shutil.rmtree(stale)
+
+    chunk_dirs: list[Path] = []
+    for c in chunks:
+        chunk_dir = output_path / f"chunk_{c.chunk_id}"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        for fp, _ in c.items:
+            src = fp.resolve()
+            dst = chunk_dir / fp.name
+            if dst.is_symlink() or dst.exists():
+                dst.unlink()
+            os.symlink(src, dst)
+        chunk_dirs.append(chunk_dir)
+        print(f"Created chunk_{c.chunk_id} with {c.num_seqs} symlinks "
+              f"(bin {c.bin_idx}, mem={c.mem_mb}MB time={c.runtime_min}min)")
+    return chunk_dirs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare Boltz chunk directories")
     parser.add_argument("--yaml_dir", required=True, help="Directory containing YAML files (recursive search)")
@@ -148,6 +183,7 @@ def main():
     parser.add_argument("--max_files_per_job", type=int, required=True, help="Max YAML files per chunk")
     parser.add_argument("--max_seq_len", type=int, default=None,
                         help="Drop sequences longer than this (residues). Default: no cutoff.")
+    add_binning_argparse(parser)
     args = parser.parse_args()
 
     yaml_files = find_yaml_files(args.yaml_dir)
@@ -161,21 +197,53 @@ def main():
     output_path.mkdir(parents=True, exist_ok=True)
 
     skipped: list[tuple[Path, int, str]] = []
-    surviving: list[Path] = []
+    surviving_pairs: list[tuple[Path, int]] = []
     if args.max_seq_len is not None:
         for f in yaml_files:
             L = _yaml_seq_length(f)
             if L > args.max_seq_len:
                 skipped.append((f.resolve(), L, f"length>{args.max_seq_len}"))
             else:
-                surviving.append(f)
-        print(f"Filter --max_seq_len={args.max_seq_len}: kept {len(surviving)}, "
+                surviving_pairs.append((f, L))
+        print(f"Filter --max_seq_len={args.max_seq_len}: kept {len(surviving_pairs)}, "
               f"skipped {len(skipped)}")
     else:
-        surviving = yaml_files
+        surviving_pairs = [(f, _yaml_seq_length(f)) for f in yaml_files]
 
     write_skipped_tsv(output_path, skipped)
-    create_chunks(surviving, args.output_dir, args.max_files_per_job)
+
+    if args.enable_binning:
+        recipes = recipes_from_args(args)
+        thresholds = parse_int_csv(args.bin_thresholds) if args.bin_mode == "thresholds" else None
+        chunks, eff_thresholds = compute_bins(
+            surviving_pairs,
+            mode=args.bin_mode,
+            num_bins=args.num_bins,
+            thresholds=thresholds,
+            recipes=recipes,
+        )
+        chunk_dirs = _create_binned_chunks(surviving_pairs, output_path, chunks)
+
+        manifest_path = output_path / "manifest.txt"
+        with open(manifest_path, "w") as mf:
+            for cd in chunk_dirs:
+                mf.write(f"{cd.resolve()}\n")
+
+        # chunk_stats.tsv expected by calibrate analyzer (numeric IDs)
+        legacy_chunks = [(c.chunk_id, [p for p, _ in c.items]) for c in chunks]
+        stats_path = write_chunk_stats(output_path, legacy_chunks)
+        chunks_tsv = write_chunks_tsv(output_path, chunks)
+
+        print(f"Created {len(chunk_dirs)} bin-aware chunks in {output_path}")
+        print(f"Effective thresholds: {eff_thresholds}")
+        print(f"Manifest:    {manifest_path}")
+        print(f"Chunk stats: {stats_path}")
+        print(f"chunks.tsv:  {chunks_tsv}")
+        return
+
+    create_chunks(
+        [p for p, _ in surviving_pairs], args.output_dir, args.max_files_per_job
+    )
 
 
 if __name__ == "__main__":

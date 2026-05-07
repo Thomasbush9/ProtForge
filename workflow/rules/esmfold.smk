@@ -31,6 +31,8 @@ ESMFOLD_PARTITION = SLURM_CFG.get("esmfold", {}).get("partition", SLURM_CFG.get(
 ESMFOLD_ACCOUNT   = SLURM_CFG.get("account", "")
 
 ESMFOLD_BIN_BY_LENGTH = bool(ESMFOLD_CFG.get("bin_by_length", False))
+ESMFOLD_BINNING_ENABLED = bool((ESMFOLD_CFG.get("binning") or {}).get("enabled", False))
+ESMFOLD_CHUNKS_TSV = f"{ESMFOLD_CHUNKS}/chunks.tsv"
 
 
 def _build_esmfold_chunker_args() -> str:
@@ -39,7 +41,11 @@ def _build_esmfold_chunker_args() -> str:
     max_seq_len = ESMFOLD_CFG.get("max_seq_len")
     if max_seq_len is not None:
         parts.append(f"--max_seq_len {int(max_seq_len)}")
-    if ESMFOLD_BIN_BY_LENGTH:
+    bin_args = binning_args(ESMFOLD_CFG)
+    if bin_args:
+        # New bin-aware mode supersedes the legacy 2-pool short/long path.
+        parts.append(bin_args)
+    elif ESMFOLD_BIN_BY_LENGTH:
         parts.append("--bin_by_length")
         parts.append(f"--length_threshold {int(ESMFOLD_CFG.get('length_threshold', 1200))}")
         default_n = int(ESMFOLD_CFG.get("num_chunks", 1))
@@ -71,6 +77,12 @@ def _is_long_chunk(chunk_id: str) -> bool:
 
 
 def _esmfold_mem_mb(wildcards):
+    # Precedence: bin-aware (chunks.tsv) > legacy short/long pools > flat.
+    if ESMFOLD_BINNING_ENABLED:
+        return chunk_resource(
+            ESMFOLD_CHUNKS_TSV, wildcards.chunk_id, "mem_mb",
+            stage_resource("esmfold", "mem_mb", 32000),
+        )
     if ESMFOLD_BIN_BY_LENGTH:
         if _is_long_chunk(wildcards.chunk_id):
             return int(ESMFOLD_CFG.get("mem_long_mb", 80000))
@@ -79,6 +91,11 @@ def _esmfold_mem_mb(wildcards):
 
 
 def _esmfold_runtime(wildcards):
+    if ESMFOLD_BINNING_ENABLED:
+        return chunk_resource(
+            ESMFOLD_CHUNKS_TSV, wildcards.chunk_id, "runtime_min",
+            stage_resource("esmfold", "runtime", 120),
+        )
     if ESMFOLD_BIN_BY_LENGTH:
         if _is_long_chunk(wildcards.chunk_id):
             return int(ESMFOLD_CFG.get("time_long_min", 240))

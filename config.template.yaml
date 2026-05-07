@@ -95,6 +95,35 @@ es:
   lddt_cutoffs: [0.125, 0.25, 0.5, 1]     # LDDT distance thresholds
   env_path: /n/home06/<YOUR_USER>/envs/es-analysis
 
+# ---------------------------------------------------------------------------
+# Bin-aware chunking (per stage) — OPTIONAL
+# ---------------------------------------------------------------------------
+# When enabled for a stage, the chunker partitions sequences into length bins
+# and packs each bin into its own chunks with bin-specific SLURM mem/runtime.
+# Short sequences pack many-per-chunk (amortize startup); long sequences pack
+# few-per-chunk (avoid OOM/timeout).
+#
+# The webapp's "Apply to session config" button populates the `bins:` recipe
+# from webapp/scaling_models.yaml. CLI users can write the recipe by hand.
+# When `binning.enabled: false` (default) chunking is by count as before, and
+# `slurm.resources.<stage>.{mem_mb, runtime}` is what each chunk gets.
+#
+# Example block (paste under boltz: / esmfold: / esm: / msa: as needed):
+#
+# boltz:
+#   binning:
+#     enabled: true
+#     mode: quantile               # quantile | thresholds
+#     num_bins: 5                  # quantile mode: number of bins
+#     # thresholds: [400, 800, 1200, 1800]   # thresholds mode: explicit cuts
+#     startup_overhead_min: 5      # added to per-bin runtime estimate
+#     bins:                        # one entry per bin (smallest first)
+#       - {chunk_size: 25, mem_mb: 16000, runtime_min:  30}
+#       - {chunk_size: 15, mem_mb: 24000, runtime_min:  45}
+#       - {chunk_size:  8, mem_mb: 32000, runtime_min:  60}
+#       - {chunk_size:  4, mem_mb: 50000, runtime_min:  90}
+#       - {chunk_size:  1, mem_mb: 80000, runtime_min: 180}
+#
 # Container images (Singularity .sif files) — OPTIONAL
 # Set paths to enable containerized execution. Leave empty for legacy mode.
 # Pull with: singularity pull docker://ghcr.io/ORG/protforge-<stage>:latest

@@ -19,6 +19,7 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(workflow.basedir) / "workflow" / "scripts"))
 from snake_helpers import stage_resource as _stage_resource_impl
 from snake_helpers import stage_uses_gpu as _stage_uses_gpu_impl
+from binning import chunk_resource as _chunk_resource_impl
 
 configfile: "config.yaml"
 
@@ -60,6 +61,57 @@ def stage_resource(stage, key, default):
 
 def stage_uses_gpu(stage, default):
     return _stage_uses_gpu_impl(SLURM_CFG, stage, default)
+
+
+def chunk_resource(chunks_tsv_path, chunk_id, key, default):
+    """Per-chunk SLURM resource lookup from <stage>_chunks/chunks.tsv.
+
+    Returns `default` when binning is disabled (chunks.tsv missing) or the
+    row/key is absent. Used inside rule `resources:` callables."""
+    return _chunk_resource_impl(chunks_tsv_path, chunk_id, key, default)
+
+
+def binning_args(stage_cfg: dict) -> str:
+    """Render `<stage>.binning` config block as a CLI flag string for the chunker.
+
+    Returns "" when binning is disabled. Validates that the per-bin recipe is
+    well-formed (one entry per bin, all of {chunk_size, mem_mb, runtime_min})."""
+    binning = (stage_cfg or {}).get("binning") or {}
+    if not binning.get("enabled", False):
+        return ""
+    bins = binning.get("bins") or []
+    if not bins:
+        raise ValueError(
+            "binning.enabled=true but binning.bins is empty. Provide one "
+            "{chunk_size, mem_mb, runtime_min} entry per bin."
+        )
+    chunk_sizes = []
+    mems = []
+    runtimes = []
+    for i, b in enumerate(bins):
+        for k in ("chunk_size", "mem_mb", "runtime_min"):
+            if k not in b:
+                raise ValueError(f"binning.bins[{i}] missing key '{k}'")
+        chunk_sizes.append(int(b["chunk_size"]))
+        mems.append(int(b["mem_mb"]))
+        runtimes.append(int(b["runtime_min"]))
+    parts = [
+        "--enable_binning",
+        f"--bin_mode {binning.get('mode', 'quantile')}",
+        f"--num_bins {int(binning.get('num_bins', len(bins)))}",
+        f"--bin_chunk_sizes {','.join(str(x) for x in chunk_sizes)}",
+        f"--bin_mem_mb {','.join(str(x) for x in mems)}",
+        f"--bin_runtime_min {','.join(str(x) for x in runtimes)}",
+    ]
+    if binning.get("mode") == "thresholds":
+        thresholds = binning.get("thresholds") or []
+        if len(thresholds) + 1 != len(bins):
+            raise ValueError(
+                f"binning.mode=thresholds requires len(thresholds)+1 == len(bins); "
+                f"got {len(thresholds)} thresholds and {len(bins)} bins."
+            )
+        parts.append(f"--bin_thresholds {','.join(str(int(t)) for t in thresholds)}")
+    return " ".join(parts)
 
 # Container support (set .sif paths in config to enable)
 CONTAINERS = config.get("containers", {})
