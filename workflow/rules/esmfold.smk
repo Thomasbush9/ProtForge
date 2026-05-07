@@ -41,7 +41,7 @@ def _build_esmfold_chunker_args() -> str:
     max_seq_len = ESMFOLD_CFG.get("max_seq_len")
     if max_seq_len is not None:
         parts.append(f"--max_seq_len {int(max_seq_len)}")
-    bin_args = binning_args(ESMFOLD_CFG)
+    bin_args = binning_args(ESMFOLD_CFG, stage_name="esmfold")
     if bin_args:
         # New bin-aware mode supersedes the legacy 2-pool short/long path.
         parts.append(bin_args)

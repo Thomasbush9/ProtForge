@@ -64,7 +64,7 @@ def _boltz_chunker_extra() -> str:
     max_seq_len = BOLTZ_CFG.get("max_seq_len")
     if max_seq_len is not None:
         parts.append(f"--max_seq_len {int(max_seq_len)}")
-    bin_args = binning_args(BOLTZ_CFG)
+    bin_args = binning_args(BOLTZ_CFG, stage_name="boltz")
     if bin_args:
         parts.append(bin_args)
     return " ".join(parts)

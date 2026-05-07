@@ -71,35 +71,44 @@ def chunk_resource(chunks_tsv_path, chunk_id, key, default):
     return _chunk_resource_impl(chunks_tsv_path, chunk_id, key, default)
 
 
-def binning_args(stage_cfg: dict) -> str:
+def binning_args(stage_cfg: dict, *, stage_name: str = "?") -> str:
     """Render `<stage>.binning` config block as a CLI flag string for the chunker.
 
-    Returns "" when binning is disabled. Validates that the per-bin recipe is
-    well-formed (one entry per bin, all of {chunk_size, mem_mb, runtime_min})."""
+    Returns "" when binning is disabled OR when enabled-but-incomplete (missing
+    `bins:` recipe). The latter is treated as a soft fallback to non-binning
+    mode with a stderr warning, so the workflow still loads. Hard error only
+    on inconsistencies that look like real config bugs (mode=thresholds with
+    a mismatched threshold/bin count, or per-bin entries missing required keys)."""
     binning = (stage_cfg or {}).get("binning") or {}
     if not binning.get("enabled", False):
         return ""
     bins = binning.get("bins") or []
     if not bins:
-        raise ValueError(
-            "binning.enabled=true but binning.bins is empty. Provide one "
-            "{chunk_size, mem_mb, runtime_min} entry per bin."
+        _sys.stderr.write(
+            f"WARN [{stage_name}]: binning.enabled=true but binning.bins is empty. "
+            f"Falling back to non-binning chunking. Run the webapp estimator's "
+            f"'Apply to session config' to populate the recipe, or unset "
+            f"{stage_name}.binning.enabled.\n"
         )
-    chunk_sizes = []
+        return ""
     mems = []
     runtimes = []
     for i, b in enumerate(bins):
-        for k in ("chunk_size", "mem_mb", "runtime_min"):
+        for k in ("mem_mb", "runtime_min"):
             if k not in b:
-                raise ValueError(f"binning.bins[{i}] missing key '{k}'")
-        chunk_sizes.append(int(b["chunk_size"]))
+                raise ValueError(f"{stage_name}.binning.bins[{i}] missing key '{k}'")
         mems.append(int(b["mem_mb"]))
         runtimes.append(int(b["runtime_min"]))
+    chunks_per_bin = int(binning.get("chunks_per_bin", 1))
+    if chunks_per_bin < 1:
+        raise ValueError(
+            f"{stage_name}.binning.chunks_per_bin must be >= 1, got {chunks_per_bin}"
+        )
     parts = [
         "--enable_binning",
         f"--bin_mode {binning.get('mode', 'quantile')}",
         f"--num_bins {int(binning.get('num_bins', len(bins)))}",
-        f"--bin_chunk_sizes {','.join(str(x) for x in chunk_sizes)}",
+        f"--chunks_per_bin {chunks_per_bin}",
         f"--bin_mem_mb {','.join(str(x) for x in mems)}",
         f"--bin_runtime_min {','.join(str(x) for x in runtimes)}",
     ]
@@ -107,8 +116,9 @@ def binning_args(stage_cfg: dict) -> str:
         thresholds = binning.get("thresholds") or []
         if len(thresholds) + 1 != len(bins):
             raise ValueError(
-                f"binning.mode=thresholds requires len(thresholds)+1 == len(bins); "
-                f"got {len(thresholds)} thresholds and {len(bins)} bins."
+                f"{stage_name}.binning.mode=thresholds requires "
+                f"len(thresholds)+1 == len(bins); got {len(thresholds)} "
+                f"thresholds and {len(bins)} bins."
             )
         parts.append(f"--bin_thresholds {','.join(str(int(t)) for t in thresholds)}")
     return " ".join(parts)

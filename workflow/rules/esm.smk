@@ -16,7 +16,7 @@ ESM_YAML_SOURCE = _yaml_dir_override if _yaml_dir_override else SEQUENCES_DIR
 ESM_PARTITION = SLURM_CFG.get("esm", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESM_ACCOUNT   = SLURM_CFG.get("account", "")
 
-ESM_BINNING_ARGS = binning_args(ESM_CFG)
+ESM_BINNING_ARGS = binning_args(ESM_CFG, stage_name="esm")
 ESM_CHUNKS_TSV = f"{ESM_CHUNKS}/chunks.tsv"
 
 

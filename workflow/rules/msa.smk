@@ -14,7 +14,7 @@ MSA_PARTITION = SLURM_CFG.get("msa", {}).get("partition", SLURM_CFG.get("partiti
 MSA_ACCOUNT   = SLURM_CFG.get("account", "")
 
 
-MSA_BINNING_ARGS = binning_args(MSA_CFG)
+MSA_BINNING_ARGS = binning_args(MSA_CFG, stage_name="msa")
 MSA_CHUNKS_TSV = f"{MSA_CHUNKS}/chunks.tsv"
 
 

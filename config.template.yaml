@@ -114,15 +114,20 @@ es:
 #   binning:
 #     enabled: true
 #     mode: quantile               # quantile | thresholds
-#     num_bins: 5                  # quantile mode: number of bins
+#     num_bins: 6                  # quantile mode: number of bins
 #     # thresholds: [400, 800, 1200, 1800]   # thresholds mode: explicit cuts
+#     chunks_per_bin: 5            # parallel chunks per non-empty bin
+#                                  #   total chunks ≈ num_bins × chunks_per_bin
+#                                  #   bins with < chunks_per_bin items make
+#                                  #   one chunk per item.
 #     startup_overhead_min: 5      # added to per-bin runtime estimate
-#     bins:                        # one entry per bin (smallest first)
-#       - {chunk_size: 25, mem_mb: 16000, runtime_min:  30}
-#       - {chunk_size: 15, mem_mb: 24000, runtime_min:  45}
-#       - {chunk_size:  8, mem_mb: 32000, runtime_min:  60}
-#       - {chunk_size:  4, mem_mb: 50000, runtime_min:  90}
-#       - {chunk_size:  1, mem_mb: 80000, runtime_min: 180}
+#     bins:                        # mem/runtime per bin (smallest L first)
+#       - {mem_mb: 16000, runtime_min:  30}
+#       - {mem_mb: 24000, runtime_min:  45}
+#       - {mem_mb: 32000, runtime_min:  60}
+#       - {mem_mb: 50000, runtime_min:  90}
+#       - {mem_mb: 80000, runtime_min: 180}
+#       - {mem_mb: 80000, runtime_min: 240}
 #
 # Container images (Singularity .sif files) — OPTIONAL
 # Set paths to enable containerized execution. Leave empty for legacy mode.

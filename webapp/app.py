@@ -296,13 +296,13 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
     if not enabled:
         return
 
-    c1, c2 = st.columns([1, 1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     mode = c1.selectbox(
         "Bin mode",
         options=["quantile", "thresholds"],
         index=0 if binning.get("mode", "quantile") == "quantile" else 1,
         help="quantile: cuts derived from your input length distribution. "
-             "thresholds: explicit cuts (set under 'thresholds' in YAML).",
+             "thresholds: explicit cuts (set in 'Length cuts' below).",
         key=f"{stage}_binning_mode",
     )
     binning["mode"] = mode
@@ -312,17 +312,16 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
             value=int(binning.get("num_bins", 6)),
             min_value=2,
             max_value=10,
-            help="6 uses upper-tail-weighted cuts (q25/q50/q75/q90/q95) — "
-                 "extra resolution where O(L²) memory bites hardest. "
+            help="6 uses upper-tail-weighted cuts (q25/q50/q75/q90/q95). "
                  "Other values use evenly-spaced quantiles.",
             key=f"{stage}_binning_num_bins",
         )
     else:
         thresholds_str = ",".join(str(int(t)) for t in (binning.get("thresholds") or []))
         new_str = c2.text_input(
-            "Length cuts (comma-separated)",
+            "Length cuts",
             value=thresholds_str,
-            help="Example: 400,800,1200,1800 -> 5 bins.",
+            help="Comma-separated. Example: 400,800,1200,1800 -> 5 bins.",
             key=f"{stage}_binning_thresholds",
         )
         try:
@@ -330,6 +329,16 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
             binning["num_bins"] = len(binning["thresholds"]) + 1
         except ValueError:
             st.warning("Thresholds must be integers separated by commas.")
+
+    binning["chunks_per_bin"] = c3.number_input(
+        "Chunks per bin",
+        value=int(binning.get("chunks_per_bin", 1)),
+        min_value=1,
+        help="How many parallel chunks each non-empty bin is split into. "
+             "Total parallel jobs ≈ num_bins × chunks_per_bin (capped at "
+             "bin_count for sparse bins).",
+        key=f"{stage}_binning_chunks_per_bin",
+    )
 
     # Preview from the latest estimate (if any). last_estimate stores dict
     # form (asdict of StageEstimate), so bin_plan here is a dict or None.
@@ -340,24 +349,26 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
         rows = []
         total_chunks = 0
         total_runtime = 0
+        cpb = bin_plan.get("chunks_per_bin", 1)
         for b in bin_plan["bins"]:
             n = b["num_seqs"]
-            cs = max(1, b["chunk_size"])
-            n_chunks = (n + cs - 1) // cs if n else 0
+            n_chunks = min(cpb, n) if n else 0
+            cs = b.get("chunk_size") or (((n + n_chunks - 1) // n_chunks) if n_chunks else 0)
             total_chunks += n_chunks
             total_runtime += n_chunks * b["runtime_min"]
             rows.append({
                 "bin": b["bin_idx"],
                 "n": n,
                 "L range": f"{b['len_lo']}-{b['len_hi']}",
-                "chunk_size": cs,
+                "chunks": n_chunks,
+                "seqs/chunk": cs,
                 "mem_mb": b["mem_mb"],
                 "runtime_min": b["runtime_min"],
             })
         st.dataframe(rows, hide_index=True, use_container_width=True)
         st.caption(
-            f"Total chunks: {total_chunks}, "
-            f"total runtime budget: {total_runtime} min "
+            f"Total chunks: {total_chunks} (≈ {bin_plan.get('num_bins', 0)} bins × "
+            f"{cpb} chunks/bin), total runtime budget: {total_runtime} min "
             f"(thresholds: {bin_plan.get('thresholds', [])})"
         )
     else:
