@@ -279,6 +279,7 @@ def main():
             num_bins=args.num_bins,
             thresholds=thresholds,
             recipes=recipes,
+            chunks_per_bin=args.chunks_per_bin,
         )
         chunk_files: list[Path] = []
         chunks_meta: list[tuple[str, list[tuple[Path, int]], str]] = []

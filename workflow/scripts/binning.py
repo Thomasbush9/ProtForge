@@ -49,8 +49,11 @@ DEFAULT_QUANTILE_CUTS: tuple[float, ...] = (0.0, 0.25, 0.50, 0.75, 0.90, 0.95, 1
 
 @dataclass
 class BinRecipe:
-    """Per-bin chunking + resource recipe. One BinRecipe per bin."""
-    chunk_size: int
+    """Per-bin SLURM resource recipe. One BinRecipe per bin.
+
+    chunk_size is no longer stored here — it's derived at packing time from
+    chunks_per_bin and the bin's actual sequence count. Each bin gets exactly
+    `chunks_per_bin` chunks (or fewer if the bin has fewer items than that)."""
     mem_mb: int
     runtime_min: int
 
@@ -121,27 +124,38 @@ def assign_bins(
 def pack_chunks(
     items_per_bin: list[list[tuple[Path, int]]],
     recipes: list[BinRecipe],
+    chunks_per_bin: int,
 ) -> list[ChunkMeta]:
-    """Greedy-pack each bin's items into chunks of size recipe.chunk_size.
+    """Split each non-empty bin into `chunks_per_bin` chunks (or fewer if the
+    bin has fewer items than that). Returns a flat list of ChunkMeta with
+    sequential chunk_ids (0, 1, 2, ...).
 
-    Returns a flat list of ChunkMeta with sequential chunk_ids (0, 1, 2, ...).
-    Empty bins produce no chunks.
-    """
+    Bins are sorted by length before splitting so each chunk is internally
+    contiguous in length — keeps within-chunk variance low for SLURM sizing."""
     if len(items_per_bin) != len(recipes):
         raise ValueError(
             f"Bin count mismatch: {len(items_per_bin)} bins vs {len(recipes)} recipes."
         )
+    if chunks_per_bin < 1:
+        raise ValueError(f"chunks_per_bin must be >= 1, got {chunks_per_bin}")
+
     out: list[ChunkMeta] = []
     cid = 0
     for bin_idx, (bin_items, recipe) in enumerate(zip(items_per_bin, recipes)):
         if not bin_items:
             continue
-        size = max(1, int(recipe.chunk_size))
-        # Sort each bin by length so packing is deterministic and chunk
-        # lengths are roughly contiguous within a bin.
         sorted_items = sorted(bin_items, key=lambda x: x[1])
-        for i in range(0, len(sorted_items), size):
-            group = sorted_items[i : i + size]
+        n = len(sorted_items)
+        # Don't make more chunks than items.
+        n_chunks = min(chunks_per_bin, n)
+        # Distribute n items into n_chunks groups as evenly as possible:
+        # the first `extra` chunks get base+1 items, the rest get base.
+        base, extra = divmod(n, n_chunks)
+        offset = 0
+        for k in range(n_chunks):
+            size = base + (1 if k < extra else 0)
+            group = sorted_items[offset : offset + size]
+            offset += size
             out.append(ChunkMeta(
                 chunk_id=cid,
                 bin_idx=bin_idx,
@@ -154,20 +168,18 @@ def pack_chunks(
 
 
 def parse_recipe_lists(
-    chunk_sizes: list[int],
     mem_mb: list[int],
     runtime_min: list[int],
 ) -> list[BinRecipe]:
-    """Validate three parallel lists and return a list of BinRecipe."""
-    if not (len(chunk_sizes) == len(mem_mb) == len(runtime_min)):
+    """Validate parallel mem/runtime lists and return one BinRecipe per bin."""
+    if len(mem_mb) != len(runtime_min):
         raise ValueError(
             f"Recipe lists must be the same length; got "
-            f"chunk_sizes={len(chunk_sizes)} mem_mb={len(mem_mb)} "
-            f"runtime_min={len(runtime_min)}"
+            f"mem_mb={len(mem_mb)} runtime_min={len(runtime_min)}"
         )
     return [
-        BinRecipe(chunk_size=cs, mem_mb=m, runtime_min=r)
-        for cs, m, r in zip(chunk_sizes, mem_mb, runtime_min)
+        BinRecipe(mem_mb=m, runtime_min=r)
+        for m, r in zip(mem_mb, runtime_min)
     ]
 
 
@@ -178,6 +190,7 @@ def compute_bins(
     num_bins: int,
     thresholds: list[int] | None,
     recipes: list[BinRecipe],
+    chunks_per_bin: int,
 ) -> tuple[list[ChunkMeta], list[int]]:
     """Top-level: compute thresholds, assign items, pack chunks.
 
@@ -204,7 +217,7 @@ def compute_bins(
         )
 
     buckets = assign_bins(items, eff)
-    return pack_chunks(buckets, recipes), eff
+    return pack_chunks(buckets, recipes, chunks_per_bin), eff
 
 
 def write_chunks_tsv(output_dir: Path, chunks: list[ChunkMeta]) -> Path:
@@ -240,11 +253,11 @@ def parse_int_csv(value: str | None) -> list[int]:
 
 
 def add_binning_argparse(parser) -> None:
-    """Attach --bin_* flags to a chunker's argparse.ArgumentParser."""
+    """Attach --bin_* / --chunks_per_bin flags to a chunker's argparse.ArgumentParser."""
     parser.add_argument(
         "--enable_binning", action="store_true",
-        help="Bin sequences by length and pack each bin into chunks "
-             "with per-bin SLURM resources. Writes chunks.tsv.",
+        help="Bin sequences by length and split each bin into N chunks "
+             "with bin-specific SLURM resources. Writes chunks.tsv.",
     )
     parser.add_argument(
         "--bin_mode", choices=["quantile", "thresholds"], default="quantile",
@@ -252,16 +265,17 @@ def add_binning_argparse(parser) -> None:
              "thresholds: explicit cuts passed via --bin_thresholds.",
     )
     parser.add_argument(
-        "--num_bins", type=int, default=5,
-        help="quantile mode only: number of bins.",
+        "--num_bins", type=int, default=6,
+        help="quantile mode only: number of bins (default 6, upper-tail-weighted).",
     )
     parser.add_argument(
         "--bin_thresholds", type=str, default="",
         help="thresholds mode only: comma-separated length cuts (e.g. '400,800,1200,1800').",
     )
     parser.add_argument(
-        "--bin_chunk_sizes", type=str, default="",
-        help="Comma-separated chunk_size per bin (one entry per bin, smallest first).",
+        "--chunks_per_bin", type=int, default=1,
+        help="Number of chunks each non-empty bin is split into. Bins with fewer "
+             "items than this produce one chunk per item.",
     )
     parser.add_argument(
         "--bin_mem_mb", type=str, default="",
@@ -275,7 +289,6 @@ def add_binning_argparse(parser) -> None:
 
 def recipes_from_args(args) -> list[BinRecipe]:
     return parse_recipe_lists(
-        parse_int_csv(args.bin_chunk_sizes),
         parse_int_csv(args.bin_mem_mb),
         parse_int_csv(args.bin_runtime_min),
     )
@@ -335,6 +348,7 @@ def main():
     chunks, eff = compute_bins(
         items, mode=args.bin_mode, num_bins=args.num_bins,
         thresholds=thresholds, recipes=recipes,
+        chunks_per_bin=args.chunks_per_bin,
     )
     print(f"Effective thresholds: {eff}")
     for c in chunks:

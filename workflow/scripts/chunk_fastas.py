@@ -214,6 +214,7 @@ def main():
             num_bins=args.num_bins,
             thresholds=thresholds,
             recipes=recipes,
+            chunks_per_bin=args.chunks_per_bin,
         )
         chunk_dirs = _create_binned_chunks(output_path, chunks)
 
