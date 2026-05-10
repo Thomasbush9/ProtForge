@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Lab notes live in the vault
+
+Experimental logs, design decisions, and calibration findings are in
+`~/Documents/Vault/Notes/Lab/protforge/`, not in this repo. When the user
+opens a session via `cclab protforge`, that directory autoloads.
+
+- `Lab/protforge/agenda.md` — current focus / TODOs
+- `Lab/protforge/log/YYYY-MM-DD-*.md` — per-experiment writeups
+- `Lab/protforge/calibration.md` — durable reference for the resource-calibration workflow
+- `Lab/protforge/decisions.md` — design choices and rationale
+- `Lab/protforge/data.md` — cluster paths, run IDs
+
+The repo holds code, runtime configs, and operational docs only
+(`docs/SNAKEMAKE_GUIDE.md`, `docs/CLUSTER_SETUP.md`, `docs/CONTAINERS.md`).
+Don't add new long-form `*.md` to the repo — write to the vault instead.
+
 ## Project Overview
 
 ProtForge is a protein structure and function prediction pipeline designed for the Kempner cluster. It orchestrates a multi-stage ML pipeline:
