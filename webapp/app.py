@@ -365,7 +365,7 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
                 "mem_mb": b["mem_mb"],
                 "runtime_min": b["runtime_min"],
             })
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
         st.caption(
             f"Total chunks: {total_chunks} (≈ {bin_plan.get('num_bins', 0)} bins × "
             f"{cpb} chunks/bin), total runtime budget: {total_runtime} min "
