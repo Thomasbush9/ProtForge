@@ -1481,6 +1481,32 @@ with tab_config:
         c1, c2 = st.columns(2)
         boltz["recycling_steps"] = c1.number_input("Recycling steps", value=boltz.get("recycling_steps", 10), min_value=1)
         boltz["diffusion_samples"] = c2.number_input("Diffusion samples", value=boltz.get("diffusion_samples", 25), min_value=1)
+
+        _ds_max = int(boltz["diffusion_samples"])
+        _current_save = boltz.get("samples_to_save", 1)
+        _save_all_default = _current_save == "all"
+        c1, c2 = st.columns(2)
+        _save_all = c1.toggle(
+            "Save all diffusion samples",
+            value=_save_all_default,
+            help="Keep every generated sample. Otherwise keep the top-N best by confidence "
+                 "(model_0..model_(N-1)).",
+            key="boltz_save_all",
+        )
+        if _save_all:
+            boltz["samples_to_save"] = "all"
+            c2.number_input("Top N to save", value=_ds_max, min_value=1, max_value=_ds_max,
+                            disabled=True, key="boltz_samples_to_save_disabled")
+        else:
+            _n_default = 1 if _current_save == "all" else int(_current_save)
+            _n_default = min(max(_n_default, 1), _ds_max)
+            boltz["samples_to_save"] = int(c2.number_input(
+                "Top N to save",
+                value=_n_default, min_value=1, max_value=_ds_max,
+                help=f"Save top-N best models (max = diffusion samples = {_ds_max}).",
+                key="boltz_samples_to_save",
+            ))
+
         boltz["delete_msa_after_processing"] = st.toggle(
             "Delete MSA after Boltz", value=boltz.get("delete_msa_after_processing", False),
         )

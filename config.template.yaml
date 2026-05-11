@@ -33,6 +33,8 @@ boltz:
   delete_msa_after_processing: false
   recycling_steps: 10
   diffusion_samples: 25
+  samples_to_save: 1                 # int (1..diffusion_samples) or "all".
+                                     # Top-N keeps model_0..model_(N-1); model_0 = best confidence.
   num_runs: 1                        # Number of independent Boltz runs per sequence
   # max_seq_len: 1500                # Optional: drop sequences longer than this (residues).
                                      # Skipped entries are listed in boltz_chunks/skipped_sequences.tsv.
