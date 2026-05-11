@@ -30,15 +30,21 @@ def find_predictions_dir(boltz_output_dir: str, chunk_id: str) -> Path | None:
 
 
 def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
-                   delete_msa: bool = False, keep_all: bool = False,
+                   delete_msa: bool = False, samples_to_save: "int | str" = 1,
                    subdirectory: str = ""):
     """
     For one chunk's boltz output, copy model files to sequences/{seq_name}/boltz/.
 
     Args:
-        keep_all: If True, copies ALL model files. Otherwise only the highest model.
+        samples_to_save: "all" to copy every model file, or int N (>=1) to copy the
+            top-N best models (model_0..model_(N-1); model_0 is best per Boltz).
         subdirectory: If set, outputs go to boltz/{subdirectory}/ (e.g. "run_0").
     """
+    if samples_to_save != "all":
+        samples_to_save = int(samples_to_save)
+        if samples_to_save < 1:
+            raise ValueError(f"samples_to_save must be >= 1 or 'all', got {samples_to_save}")
+
     predictions_dir = find_predictions_dir(boltz_output_dir, chunk_id)
     if predictions_dir is None:
         print(f"ERROR: No predictions directory found in {boltz_output_dir}")
@@ -59,7 +65,6 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
         seq_id = dir_name.removeprefix("seq_") if dir_name.startswith("seq_") else dir_name
 
         # Find all model files grouped by model number
-        highest_model = -1
         model_files: dict[int, list[Path]] = {}
 
         for f in pred_subdir.iterdir():
@@ -69,10 +74,8 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
             if match:
                 model_num = int(match.group(1))
                 model_files.setdefault(model_num, []).append(f)
-                if model_num > highest_model:
-                    highest_model = model_num
 
-        if highest_model < 0:
+        if not model_files:
             print(f"WARNING: No model files found for {dir_name}")
             skipped += 1
             continue
@@ -103,20 +106,28 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
             if existing.is_file() and model_pattern.search(existing.name):
                 existing.unlink()
 
-        if keep_all:
-            # Copy ALL model files (model_0 through model_N)
-            total_copied = 0
-            for model_num in sorted(model_files.keys()):
-                for f in model_files[model_num]:
-                    shutil.copy2(f, target_dir / f.name)
-                    total_copied += 1
-            print(f"Organized {dir_name}: all {len(model_files)} models "
-                  f"({total_copied} files) -> {target_dir}")
+        # Decide which model indices to keep. Boltz ranks model_0 as best, so
+        # take the lowest-N indices for top-N selection.
+        sorted_indices = sorted(model_files.keys())
+        if samples_to_save == "all":
+            keep_indices = sorted_indices
         else:
-            # Copy only highest model files (legacy behavior)
-            for f in model_files[highest_model]:
+            keep_indices = sorted_indices[:samples_to_save]
+
+        total_copied = 0
+        for idx in keep_indices:
+            for f in model_files[idx]:
                 shutil.copy2(f, target_dir / f.name)
-            print(f"Organized {dir_name}: model {highest_model} -> {target_dir}")
+                total_copied += 1
+
+        if samples_to_save == "all":
+            label = f"all {len(keep_indices)} models"
+        elif len(keep_indices) == 1:
+            label = f"model {keep_indices[0]}"
+        else:
+            label = (f"top {len(keep_indices)} models "
+                     f"(model_{keep_indices[0]}..model_{keep_indices[-1]})")
+        print(f"Organized {dir_name}: {label} ({total_copied} files) -> {target_dir}")
 
         processed += 1
 
@@ -139,15 +150,26 @@ def main():
     parser.add_argument("--sequences_dir", required=True, help="Base sequences directory")
     parser.add_argument("--delete_msa", action="store_true",
                         help="Delete MSA directories after organizing")
-    parser.add_argument("--keep_all", action="store_true",
-                        help="Keep all model files instead of only the highest")
+    parser.add_argument("--samples_to_save", default="1",
+                        help='Number of top models to keep (int >= 1) or "all". '
+                             'Top-N picks model_0..model_(N-1) (model_0 is best per Boltz).')
     parser.add_argument("--subdirectory", default="",
                         help="Subdirectory under boltz/ (e.g. 'run_0' -> boltz/run_0/)")
     args = parser.parse_args()
 
+    samples_to_save: "int | str"
+    if args.samples_to_save == "all":
+        samples_to_save = "all"
+    else:
+        try:
+            samples_to_save = int(args.samples_to_save)
+        except ValueError:
+            parser.error(f"--samples_to_save must be a positive int or 'all', "
+                         f"got {args.samples_to_save!r}")
+
     processed = organize_chunk(
         args.boltz_output_dir, args.chunk_id, args.sequences_dir,
-        args.delete_msa, args.keep_all, args.subdirectory
+        args.delete_msa, samples_to_save, args.subdirectory
     )
     if processed == 0:
         print("ERROR: No predictions were organized", file=sys.stderr)

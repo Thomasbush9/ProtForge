@@ -43,8 +43,8 @@ class TestOrganizeChunk:
         make_boltz_prediction(results, seq_id, model_numbers)
         return boltz_dir
 
-    def test_picks_highest_model(self, tmp_path):
-        """model_0, model_5, model_9 -> copies only model_9 files."""
+    def test_picks_best_model(self, tmp_path):
+        """Default samples_to_save=1 -> copies only model_0 (best confidence per Boltz)."""
         boltz_dir = self._setup_predictions(tmp_path, "protA", [0, 5, 9])
         seq_dir = tmp_path / "sequences"
         (seq_dir / "protA").mkdir(parents=True)
@@ -53,10 +53,46 @@ class TestOrganizeChunk:
 
         boltz_out = seq_dir / "protA" / "boltz"
         output_files = list(boltz_out.iterdir())
-        assert len(output_files) == 2  # .cif + .json for model_9
+        assert len(output_files) == 2  # .cif + .json for model_0
         names = {f.name for f in output_files}
-        assert "protA_model_9.cif" in names
-        assert "protA_confidence_model_9.json" in names
+        assert "protA_model_0.cif" in names
+        assert "protA_confidence_model_0.json" in names
+
+    def test_picks_top_n(self, tmp_path):
+        """samples_to_save=2 -> copies model_0 and model_5 (lowest two indices)."""
+        boltz_dir = self._setup_predictions(tmp_path, "protA", [0, 5, 9])
+        seq_dir = tmp_path / "sequences"
+        (seq_dir / "protA").mkdir(parents=True)
+
+        organize_chunk(str(boltz_dir), "0", str(seq_dir), samples_to_save=2)
+
+        names = {f.name for f in (seq_dir / "protA" / "boltz").iterdir()}
+        assert "protA_model_0.cif" in names
+        assert "protA_model_5.cif" in names
+        assert "protA_model_9.cif" not in names
+
+    def test_keeps_all(self, tmp_path):
+        """samples_to_save='all' -> copies every model file."""
+        boltz_dir = self._setup_predictions(tmp_path, "protA", [0, 5, 9])
+        seq_dir = tmp_path / "sequences"
+        (seq_dir / "protA").mkdir(parents=True)
+
+        organize_chunk(str(boltz_dir), "0", str(seq_dir), samples_to_save="all")
+
+        names = {f.name for f in (seq_dir / "protA" / "boltz").iterdir()}
+        assert {"protA_model_0.cif", "protA_model_5.cif", "protA_model_9.cif"} <= names
+
+    def test_top_n_exceeds_available(self, tmp_path):
+        """samples_to_save larger than model count -> keep what's available."""
+        boltz_dir = self._setup_predictions(tmp_path, "protA", [0, 5])
+        seq_dir = tmp_path / "sequences"
+        (seq_dir / "protA").mkdir(parents=True)
+
+        organize_chunk(str(boltz_dir), "0", str(seq_dir), samples_to_save=10)
+
+        names = {f.name for f in (seq_dir / "protA" / "boltz").iterdir()}
+        assert "protA_model_0.cif" in names
+        assert "protA_model_5.cif" in names
 
     def test_handles_seq_prefix(self, tmp_path):
         """seq_123 dir in predictions -> target is seq_123/boltz/."""
@@ -110,13 +146,13 @@ class TestOrganizeChunk:
         seq_dir = tmp_path / "sequences"
         (seq_dir / "protA").mkdir(parents=True)
 
-        organize_chunk(str(first_boltz_dir), "0", str(seq_dir))
-        assert (seq_dir / "protA" / "boltz" / "protA_model_9.cif").exists()
+        organize_chunk(str(first_boltz_dir), "0", str(seq_dir), samples_to_save="all")
+        boltz_out = seq_dir / "protA" / "boltz"
+        assert (boltz_out / "protA_model_9.cif").exists()
 
         second_boltz_dir = self._setup_predictions(tmp_path / "second", "protA", [0])
         organize_chunk(str(second_boltz_dir), "0", str(seq_dir))
 
-        boltz_out = seq_dir / "protA" / "boltz"
         names = {f.name for f in boltz_out.iterdir()}
         assert "protA_model_0.cif" in names
         assert "protA_confidence_model_0.json" in names

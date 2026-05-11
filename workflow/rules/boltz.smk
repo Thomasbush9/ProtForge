@@ -186,6 +186,7 @@ rule organize_boltz_chunk:
         sequences_dir = SEQUENCES_DIR,
         delete_msa = "--delete_msa" if BOLTZ_CFG.get("delete_msa_after_processing", False) else "",
         subdirectory = lambda wc: f"--subdirectory run_{wc.run_id}" if NUM_RUNS > 1 else "",
+        samples_to_save = BOLTZ_CFG.get("samples_to_save", 1),
     localrule: True
     shell:
         """
@@ -193,6 +194,7 @@ rule organize_boltz_chunk:
             --boltz_output_dir {params.boltz_output_dir} \
             --chunk_id {wildcards.chunk_id} \
             --sequences_dir {params.sequences_dir} \
+            --samples_to_save {params.samples_to_save} \
             {params.delete_msa} {params.subdirectory}
 
         rm -rf {params.boltz_output_dir}
