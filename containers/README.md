@@ -32,11 +32,25 @@ salloc --partition=test --account=<your_account> \
        --nodes=1 --ntasks-per-node=4 --mem-per-cpu=3200M --time=4:00:00
 ```
 
+**Pick install location.** Home dir quota is usually too small for ~15 GB SIF
++ ~7 GB build cache. Set these env vars to a shared lab dir before building:
+
+```bash
+# Example for Sabatini lab on Kempner:
+export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>/ProtForge
+export PROTFORGE_SIF_DIR=$PROTFORGE_ROOT/sifs
+export SINGULARITY_CACHEDIR=$PROTFORGE_ROOT/sing_cache
+export SINGULARITY_TMPDIR=$PROTFORGE_ROOT/sing_tmp
+mkdir -p "$PROTFORGE_SIF_DIR" "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
+
+# Persist by appending the same lines to ~/.bashrc.
+```
+
 Then one of:
 
 ```bash
 # (a) Build locally from the def file (tries --fakeroot)
-bash containers/build.sh                       # writes ~/sifs/protforge-gpu.sif
+bash containers/build.sh                       # writes $PROTFORGE_SIF_DIR/protforge-gpu.sif
 
 # (b) Pull a pre-built image from a registry (e.g. GHCR after we wire CI)
 bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:latest

@@ -42,7 +42,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
 DEF_FILE="${SCRIPT_DIR}/protforge-gpu.def"
 
-OUT="${HOME}/sifs/protforge-gpu.sif"
+# Default output location.
+#   - $PROTFORGE_SIF_DIR (if set) takes precedence — meant for shared lab dirs
+#     where home quota is tight (e.g. /n/holylfs06/.../<lab>/Everyone/<you>/ProtForge/sifs).
+#   - Otherwise falls back to ~/sifs.
+OUT="${PROTFORGE_SIF_DIR:-${HOME}/sifs}/protforge-gpu.sif"
 MODE="from-def"
 DOCKER_URL=""
 DRY_RUN=0
