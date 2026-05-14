@@ -1,0 +1,144 @@
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+# ProtForge GPU container — single image for all GPU stages
+# (MSA / Boltz / ESM-C / ESMFold). PDAnalysis (ES) is excluded; it ships
+# in a separate MPI image.
+#
+# Bake list:
+#   - Tools : boltz, colabfold_search, mmseqs2, esm SDK, transformers
+#   - Weights : esmc_600m (~2.5 GB), facebook/esmfold_v1 (~4 GB)
+#
+# NOT baked (bind-mounted at runtime):
+#   - ColabFold MSA databases (~700 GB)  -> /data/colabfold_db
+#   - Boltz model checkpoint  (~5 GB)    -> /data/boltz_db
+#
+# Layer order matters: each %post block roughly = one Docker layer.
+# Order matches "changes least often -> changes most often" so iterating
+# on the codebase doesn't redownload model weights.
+
+%files
+    # Copied last so codebase edits invalidate only the final layer.
+    # NOTE: paths are relative to the build context (repo root).
+    . /opt/protforge
+
+%post
+    set -eux
+
+    # -----------------------------------------------------------------
+    # Layer 1: system deps (changes ~never)
+    # -----------------------------------------------------------------
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+        git wget curl ca-certificates \
+        build-essential cmake \
+        libgomp1
+    rm -rf /var/lib/apt/lists/*
+    ln -sf /usr/bin/python3 /usr/local/bin/python
+
+    # -----------------------------------------------------------------
+    # Layer 2: mmseqs2 binary (changes when bumping MMseqs2)
+    # -----------------------------------------------------------------
+    cd /opt
+    wget -q https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz
+    tar xzf mmseqs-linux-avx2.tar.gz
+    rm mmseqs-linux-avx2.tar.gz
+    ln -sf /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs
+
+    # -----------------------------------------------------------------
+    # Layer 3: Python tools (changes when bumping any tool version)
+    # -----------------------------------------------------------------
+    pip3 install --no-cache-dir --upgrade pip setuptools wheel
+
+    # PyTorch first (cu124 wheels). All downstream tools pull torch as a dep,
+    # so installing it explicitly here pins the version.
+    pip3 install --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu124
+
+    # Boltz (structure prediction)
+    pip3 install --no-cache-dir boltz
+
+    # ESM-C SDK (used by run_esm.py)
+    pip3 install --no-cache-dir esm
+
+    # ESMFold via HuggingFace transformers (run_esmfold.py uses EsmForProteinFolding)
+    pip3 install --no-cache-dir \
+        "transformers>=4.40" accelerate \
+        biopython numpy scipy
+
+    # ColabFold (provides colabfold_search; we skip the alphafold/jax extras
+    # since we only run the MSA-search side, not structure prediction)
+    pip3 install --no-cache-dir \
+        "colabfold @ git+https://github.com/sokrypton/ColabFold"
+
+    # ProtForge runtime deps (whatever the scripts import)
+    pip3 install --no-cache-dir \
+        pyyaml pandas tqdm
+
+    # -----------------------------------------------------------------
+    # Layer 4: model weights (changes only when bumping a model)
+    #
+    # Bake into /opt/weights so the image works offline. At runtime,
+    # HF_HOME / cache_dir env vars can be overridden to point elsewhere.
+    # -----------------------------------------------------------------
+    mkdir -p /opt/weights/hf /opt/weights/torch
+
+    # ESMFold weights via HF
+    HF_HOME=/opt/weights/hf python3 -c "\
+from transformers import AutoTokenizer, EsmForProteinFolding; \
+AutoTokenizer.from_pretrained('facebook/esmfold_v1'); \
+EsmForProteinFolding.from_pretrained('facebook/esmfold_v1', low_cpu_mem_usage=True)"
+
+    # ESM-C 600M weights via the esm SDK
+    # The SDK caches under HF hub by default; HF_HOME picks it up.
+    HF_HOME=/opt/weights/hf python3 -c "\
+from esm.models.esmc import ESMC; \
+ESMC.from_pretrained('esmc_600m')"
+
+    chmod -R a+rX /opt/weights
+
+%environment
+    # ProtForge cache root: host bind-mount target convention.
+    # Override at runtime with: singularity exec --env PROTFORGE_HOME=/path ...
+    export PROTFORGE_HOME=${PROTFORGE_HOME:-/data/protforge}
+
+    # Default HF cache to the baked location. Override (e.g. to /data/...) when
+    # you want to use external/newer weights.
+    export HF_HOME=${HF_HOME:-/opt/weights/hf}
+    export TORCH_HOME=${TORCH_HOME:-/opt/weights/torch}
+
+    # Bind-mount targets that the rules expect (host paths bound to these):
+    #   /data/colabfold_db   <- ColabFold MSA DBs
+    #   /data/boltz_db       <- Boltz model checkpoint dir
+
+    # Make sure ProtForge code is importable
+    export PYTHONPATH=/opt/protforge${PYTHONPATH:+:$PYTHONPATH}
+
+%runscript
+    # Default: forward args to whatever was requested.
+    # Usage:
+    #   singularity exec --nv protforge-gpu.sif boltz predict ...
+    #   singularity exec --nv protforge-gpu.sif colabfold_search ...
+    exec "$@"
+
+%labels
+    Author thomasbush52@gmail.com
+    Version 0.1.0
+    Description ProtForge GPU container (MSA + Boltz + ESM-C + ESMFold)
+
+%help
+    ProtForge GPU container — bundles all GPU-stage tools and default model
+    weights for the ProtForge pipeline.
+
+    Quickstart (Kempner):
+        singularity exec --nv \
+            -B /n/holylfs06/.../colabfold/databases:/data/colabfold_db \
+            -B /n/holylfs06/.../boltz/boltz_db:/data/boltz_db \
+            -B "$PWD":"$PWD" \
+            protforge-gpu.sif \
+            <stage_command>
+
+    See containers/README.md for full bind-mount setup.
