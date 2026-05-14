@@ -62,7 +62,10 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     pip3 install --no-cache-dir boltz
 
     # ESM-C SDK (used by run_esm.py)
-    pip3 install --no-cache-dir esm
+    # NB: esm SDK's esm/sdk/base_forge_client.py imports httpx unconditionally
+    # even when only the local API is used. pip metadata misses httpx as a dep
+    # in some releases — install explicitly to be safe.
+    pip3 install --no-cache-dir esm httpx
 
     # ESMFold via HuggingFace transformers (run_esmfold.py uses EsmForProteinFolding)
     pip3 install --no-cache-dir \
