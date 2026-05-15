@@ -13,7 +13,7 @@
 #   - Boltz pipeline (needs the boltz_db bind-mounted).
 #
 # Usage:
-#   bash containers/test/smoke.sh                  # uses ~/sifs/protforge-gpu.sif
+#   bash containers/test/smoke.sh                  # default: PROTFORGE_SIF_DIR, PROTFORGE_ROOT/sifs, or ~/sifs
 #   bash containers/test/smoke.sh -i /path/to/sif  # custom path
 #
 # Run on a GPU node (e.g. salloc -p kempner_h100 --gres=gpu:1 -t 30 --mem=32G).
@@ -21,20 +21,30 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SIF="${HOME}/sifs/protforge-gpu.sif"
+SIF=""
 WORK="${SCRIPT_DIR}/_smoke_out"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -i|--image) SIF="$2"; shift 2 ;;
-        -h|--help)  sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)  sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
 
+if [[ -z "$SIF" ]]; then
+    if [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
+        SIF="${PROTFORGE_SIF_DIR%/}/protforge-gpu.sif"
+    elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+        SIF="${PROTFORGE_ROOT%/}/sifs/protforge-gpu.sif"
+    else
+        SIF="${HOME}/sifs/protforge-gpu.sif"
+    fi
+fi
+
 if [[ ! -f "$SIF" ]]; then
     echo "ERROR: image not found at $SIF" >&2
-    echo "Build first: bash containers/build.sh" >&2
+    echo "Build first: export PROTFORGE_ROOT=... && bash containers/build.sh  (or bash containers/build.sh -o ...)" >&2
     exit 1
 fi
 

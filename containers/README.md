@@ -33,26 +33,39 @@ salloc --partition=test --account=<your_account> \
 ```
 
 **Pick install location.** Home dir quota is usually too small for ~15 GB SIF
-+ ~7 GB build cache. Set these env vars to a shared lab dir before building:
++ build cache. `containers/build.sh` does **not** default to `~/sifs` (non-interactive
+`bash containers/build.sh` never reads `~/.bashrc`, so exports there are invisible unless
+you `source ~/.bashrc` first).
+
+**Output SIF path** is chosen in order: `-o` / `--output`, else `PROTFORGE_SIF_DIR/protforge-gpu.sif`,
+else `PROTFORGE_ROOT/sifs/protforge-gpu.sif`. If none apply, the script exits with an error.
+
+When `PROTFORGE_ROOT` is set and `SINGULARITY_CACHEDIR` / `SINGULARITY_TMPDIR` are unset,
+`build.sh` exports them to `$PROTFORGE_ROOT/sing_cache` and `$PROTFORGE_ROOT/sing_tmp`
+and creates those directories.
 
 ```bash
-# Example for Sabatini lab on Kempner:
+# Example for Sabatini lab on Kempner (minimal: only PROTFORGE_ROOT):
 export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>/ProtForge
+mkdir -p "$PROTFORGE_ROOT/sifs"
+
+# Optional explicit overrides (same layout as above):
 export PROTFORGE_SIF_DIR=$PROTFORGE_ROOT/sifs
 export SINGULARITY_CACHEDIR=$PROTFORGE_ROOT/sing_cache
 export SINGULARITY_TMPDIR=$PROTFORGE_ROOT/sing_tmp
 mkdir -p "$PROTFORGE_SIF_DIR" "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 
-# Persist by appending the same lines to ~/.bashrc.
+# To persist for interactive shells, append exports to ~/.bashrc; for one-shot
+# builds and sbatch, export in the same script that invokes build.sh.
 ```
 
 Then one of:
 
 ```bash
 # (a) Build locally from the def file (tries --fakeroot)
-bash containers/build.sh                       # writes $PROTFORGE_SIF_DIR/protforge-gpu.sif
+bash containers/build.sh                       # needs PROTFORGE_ROOT or PROTFORGE_SIF_DIR or -o
 
-# (b) Pull a pre-built image from a registry (e.g. GHCR after we wire CI)
+# (b) Pull a pre-built image from a registry (same output rules as (a); use -o if needed)
 bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:latest
 
 # (c) Custom output / dry run
@@ -73,8 +86,8 @@ to build the image somewhere with Docker + push to GHCR, then
 After a build, on a GPU node (`salloc -p kempner_h100 --gres=gpu:1 -t 30 --mem=32G`):
 
 ```bash
-bash containers/test/smoke.sh                  # uses ~/sifs/protforge-gpu.sif
-bash containers/test/smoke.sh -i /path/to/sif  # custom path
+bash containers/test/smoke.sh                  # image: PROTFORGE_SIF_DIR, else PROTFORGE_ROOT/sifs, else ~/sifs
+bash containers/test/smoke.sh -i /path/to/sif
 ```
 
 Validates: GPU visible, PyTorch+CUDA work, all tools importable, baked
@@ -90,7 +103,7 @@ singularity exec --nv \
     -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db \
     -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db \
     -B "$PWD":"$PWD" \
-    ~/sifs/protforge-gpu.sif \
+    "$PROTFORGE_ROOT/sifs/protforge-gpu.sif" \
     boltz predict ...
 ```
 
