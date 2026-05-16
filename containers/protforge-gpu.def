@@ -89,11 +89,15 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # -----------------------------------------------------------------
     mkdir -p /opt/weights/hf /opt/weights/torch
 
-    # ESMFold weights via HF
+    # ESMFold weights via HF.
+    # use_safetensors=True pins the HF resolver to *.safetensors only. The
+    # facebook/esmfold_v1 repo ships both pytorch_model.bin (8.44 GB) and
+    # model.safetensors (8.44 GB); without this flag transformers will pull
+    # both, doubling download time and image size by ~8.4 GB.
     HF_HOME=/opt/weights/hf python3 -c "\
 from transformers import AutoTokenizer, EsmForProteinFolding; \
 AutoTokenizer.from_pretrained('facebook/esmfold_v1'); \
-EsmForProteinFolding.from_pretrained('facebook/esmfold_v1', low_cpu_mem_usage=True)"
+EsmForProteinFolding.from_pretrained('facebook/esmfold_v1', low_cpu_mem_usage=True, use_safetensors=True)"
 
     # ESM-C 600M weights via the esm SDK
     # The SDK caches under HF hub by default; HF_HOME picks it up.

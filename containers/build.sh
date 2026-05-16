@@ -79,12 +79,23 @@ if [[ -z "$OUT" ]]; then
     fi
 fi
 
+# Pick a base for SINGULARITY_CACHEDIR/TMPDIR defaults:
+#   - PROTFORGE_ROOT if set (canonical case)
+#   - else dirname of PROTFORGE_SIF_DIR (so users who only set SIF_DIR still get
+#     big-FS cache/tmp dirs instead of /tmp, which is too small for fakeroot
+#     builds and often noexec on compute nodes).
+SING_BASE=""
 if [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+    SING_BASE="${PROTFORGE_ROOT%/}"
+elif [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
+    SING_BASE="$(dirname "${PROTFORGE_SIF_DIR%/}")"
+fi
+if [[ -n "$SING_BASE" ]]; then
     if [[ -z "${SINGULARITY_CACHEDIR:-}" ]]; then
-        export SINGULARITY_CACHEDIR="${PROTFORGE_ROOT%/}/sing_cache"
+        export SINGULARITY_CACHEDIR="${SING_BASE}/sing_cache"
     fi
     if [[ -z "${SINGULARITY_TMPDIR:-}" ]]; then
-        export SINGULARITY_TMPDIR="${PROTFORGE_ROOT%/}/sing_tmp"
+        export SINGULARITY_TMPDIR="${SING_BASE}/sing_tmp"
     fi
     mkdir -p "${SINGULARITY_CACHEDIR}" "${SINGULARITY_TMPDIR}"
 fi
@@ -102,9 +113,41 @@ fi
 
 mkdir -p "$(dirname "$OUT")"
 
+# Guard: refuse to build if SINGULARITY_TMPDIR or $OUT's parent lives under
+# REPO_ROOT. The def file uses `%files . /opt/protforge`, which `cp -r`s the
+# build context (REPO_ROOT) into the build's rootfs. If the rootfs lives
+# inside REPO_ROOT, cp recurses into itself and dies with "cannot copy a
+# directory into itself". This is *exactly* the foot-gun that happens when
+# users set PROTFORGE_ROOT to the repo path instead of its parent.
+if [[ "$MODE" == "from-def" ]]; then
+    repo_real="$(cd "$REPO_ROOT" && pwd -P)"
+    for p in "${SINGULARITY_TMPDIR:-}" "$(dirname "$OUT")"; do
+        [[ -z "$p" ]] && continue
+        # Resolve to an absolute path if it exists; otherwise leave as-is.
+        if [[ -d "$p" ]]; then
+            p_real="$(cd "$p" && pwd -P)"
+        else
+            p_real="$p"
+        fi
+        case "$p_real/" in
+            "$repo_real"/*)
+                echo "ERROR: $p resolves inside REPO_ROOT ($repo_real)." >&2
+                echo "  This collides with '%files . /opt/protforge' in the def file" >&2
+                echo "  ('cp: cannot copy a directory into itself'). PROTFORGE_ROOT must" >&2
+                echo "  be the *parent* of the repo, not the repo path itself. See" >&2
+                echo "  containers/README.md for the expected layout." >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
+
 case "$MODE" in
     from-def)
-        CMD=("$SING" build --fakeroot "$OUT" "$DEF_FILE")
+        # --force overwrites an existing SIF at $OUT. Without it, re-running
+        # after a failed/partial build aborts with "image file already exists".
+        # Matches the --force behavior of the pull branch below.
+        CMD=("$SING" build --force --fakeroot "$OUT" "$DEF_FILE")
         ;;
     from-docker)
         if [[ -z "$DOCKER_URL" ]]; then

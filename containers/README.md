@@ -44,9 +44,22 @@ When `PROTFORGE_ROOT` is set and `SINGULARITY_CACHEDIR` / `SINGULARITY_TMPDIR` a
 `build.sh` exports them to `$PROTFORGE_ROOT/sing_cache` and `$PROTFORGE_ROOT/sing_tmp`
 and creates those directories.
 
+**IMPORTANT.** `PROTFORGE_ROOT` is a **workspace** directory that holds `sifs/`,
+`sing_cache/`, `sing_tmp/` *alongside* the repo checkout — it must **not** be
+the repo path itself. If you set `PROTFORGE_ROOT` to the repo, the build's
+`sing_tmp/` lands inside the repo and `%files . /opt/protforge` recurses into
+itself with `cp: cannot copy a directory into itself`. The repo lives as a
+sibling, e.g. `$PROTFORGE_ROOT/ProtForge/`.
+
 ```bash
-# Example for Sabatini lab on Kempner (minimal: only PROTFORGE_ROOT):
-export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>/ProtForge
+# Example for Sabatini lab on Kempner — PROTFORGE_ROOT is the *parent* of the
+# repo, not the repo itself. Layout under it:
+#   $PROTFORGE_ROOT/
+#     ProtForge/         <- the repo (git checkout)
+#     sifs/              <- output SIFs
+#     sing_cache/        <- singularity layer cache
+#     sing_tmp/          <- singularity build staging
+export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>
 mkdir -p "$PROTFORGE_ROOT/sifs"
 
 # Optional explicit overrides (same layout as above):
