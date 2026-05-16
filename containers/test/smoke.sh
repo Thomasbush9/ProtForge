@@ -23,10 +23,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIF=""
 WORK="${SCRIPT_DIR}/_smoke_out"
+LOG_FILE=""
+LOG_DISABLED=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -i|--image) SIF="$2"; shift 2 ;;
+        --log)      LOG_FILE="$2"; shift 2 ;;
+        --no-log)   LOG_DISABLED=1; shift ;;
         -h|--help)  sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -48,16 +52,45 @@ if [[ ! -f "$SIF" ]]; then
     exit 1
 fi
 
+# Auto-log: same pattern as build.sh. Default location is sibling of sifs/
+# under PROTFORGE_ROOT (or wherever the SIF lives). Override with --log,
+# disable with --no-log.
+if (( ! LOG_DISABLED )) && [[ -z "$LOG_FILE" ]]; then
+    if [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+        log_base="${PROTFORGE_ROOT%/}/smoke-logs"
+    else
+        # SIF parent's parent: e.g. .../container/sifs/sif -> .../container/
+        log_base="$(dirname "$(dirname "$SIF")")/smoke-logs"
+    fi
+    mkdir -p "$log_base"
+    LOG_FILE="${log_base}/smoke-$(date +%Y-%m-%dT%H-%M-%S).log"
+fi
+if (( ! LOG_DISABLED )); then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "Logging to  : $LOG_FILE"
+    echo "             (rerun with --no-log to disable, or --log PATH to override)"
+fi
+
 mkdir -p "$WORK"
 
 # Match the production container_cmd flags: --cleanenv (host env stripped),
 # --nv (GPU), TMPDIR=/tmp + node-local scratch at /tmp. Mirrors what
 # Snakefile:container_cmd() emits so the smoke test exercises the same
 # invocation surface as the real rules.
+#
+# HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE: the baked HF cache under
+# /opt/weights/hf is read-only inside the SIF, but HF's from_pretrained
+# tries to acquire a write lock under .locks/ before serving from cache
+# (OSError: Read-only file system). Offline mode skips the lock and reads
+# cached files directly. Override per-call with --env HF_HUB_OFFLINE=0 if
+# you bind-mount a writable HF cache.
 RUNTIME="${PROTFORGE_RUNTIME:-singularity}"
 run_in_container() {
     "$RUNTIME" exec --nv --cleanenv \
         --env TMPDIR=/tmp \
+        --env HF_HUB_OFFLINE=1 \
+        --env TRANSFORMERS_OFFLINE=1 \
         -B "${SCRIPT_DIR}":"${SCRIPT_DIR}" \
         -B "${WORK}":"${WORK}" \
         -B "${SLURM_TMPDIR:-/tmp}":/tmp \
@@ -82,13 +115,29 @@ assert torch.cuda.is_available(), 'CUDA not visible inside container'
 
 echo
 echo "=== [3/6] Tools importable ==="
+# Each check is wrapped so failures print loudly and abort the test.
+# Previously `cmd && echo OK` swallowed failures because bash set -e
+# does not fire on the failing left side of an && chain.
 run_in_container bash -c '
-set -e
-boltz --help >/dev/null 2>&1 && echo "boltz: OK"
-mmseqs version >/dev/null 2>&1 && echo "mmseqs: OK"
-command -v colabfold_search >/dev/null && echo "colabfold_search: OK" || echo "colabfold_search: MISSING"
-python -c "import esm; print(\"esm SDK: OK\")"
-python -c "from transformers import EsmForProteinFolding; print(\"transformers ESMFold: OK\")"
+fail=0
+check() {
+    local name="$1"; shift
+    if out="$("$@" 2>&1)"; then
+        echo "$name: OK"
+    else
+        echo "$name: FAILED" >&2
+        echo "----- output -----" >&2
+        echo "$out" >&2
+        echo "------------------" >&2
+        fail=1
+    fi
+}
+check "boltz"              boltz --help
+check "mmseqs"             mmseqs version
+check "colabfold_search"   bash -c "command -v colabfold_search >/dev/null"
+check "esm SDK"            python -c "import esm"
+check "transformers ESMFold" python -c "from transformers import EsmForProteinFolding"
+exit $fail
 '
 
 echo
@@ -136,3 +185,4 @@ print('env isolation: OK')
 
 echo
 echo "=== ALL SMOKE TESTS PASSED ==="
+[[ -n "$LOG_FILE" ]] && echo "Smoke log saved: $LOG_FILE"
