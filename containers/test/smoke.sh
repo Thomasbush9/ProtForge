@@ -171,7 +171,15 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 
 seq = "MKTIIALSYIFCLVFADYKDDDDKMRGSHHHHHHGSDYDIPTTENLYFQ"
 tok = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
-model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1", low_cpu_mem_usage=True).cuda().eval()
+# use_safetensors=True matches what the def file baked. Without it,
+# transformers' resolver looks for pytorch_model.bin first (which we
+# deliberately didn't bake), returns None, and the offline-mode safetensors
+# fallback crashes with AttributeError on .endswith(None).
+model = EsmForProteinFolding.from_pretrained(
+    "facebook/esmfold_v1",
+    low_cpu_mem_usage=True,
+    use_safetensors=True,
+).cuda().eval()
 with torch.no_grad():
     out = model(**tok([seq], return_tensors="pt", add_special_tokens=False).to("cuda"))
 plddt = out["plddt"].mean().item()
