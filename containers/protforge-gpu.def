@@ -81,6 +81,17 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     pip3 install --no-cache-dir \
         pyyaml pandas tqdm
 
+    # Pin numpy to the compatible window for boltz + colabfold + numba.
+    # - colabfold (current main) declares: numpy>=2.0.2,<3.0
+    # - numba (transitive dep of boltz) refuses: NumPy 2.2+ (runtime check)
+    # - boltz pyproject declares: numpy>=1.26,<2.0 (DEclARED only; the
+    #   actual runtime constraint is numba's, which is satisfied by 2.0.x)
+    # Intersection: 2.0.2 <= numpy < 2.1. Force-install so the colabfold
+    # step's 2.2.x doesn't stick. Pip will warn about boltz's <2.0 — safe
+    # to ignore (the runtime works; the wheel just over-declared).
+    pip3 install --no-cache-dir --force-reinstall \
+        "numpy>=2.0.2,<2.1"
+
     # -----------------------------------------------------------------
     # Layer 4: model weights (changes only when bumping a model)
     #

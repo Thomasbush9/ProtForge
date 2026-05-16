@@ -97,6 +97,11 @@ run_in_container() {
         "$SIF" "$@"
 }
 
+# Failure tracker for steps 3-6 (basic infra failures in 0-2 still fail-fast).
+# Each step that fails appends its number; final banner exits non-zero if
+# non-empty.
+FAILED_STEPS=""
+
 echo "=== [0/6] Runtime + image identity ==="
 "$RUNTIME" --version 2>&1 | head -1
 "$RUNTIME" inspect "$SIF" | head -20
@@ -115,11 +120,11 @@ assert torch.cuda.is_available(), 'CUDA not visible inside container'
 
 echo
 echo "=== [3/6] Tools importable ==="
-# Each check is wrapped so failures print loudly and abort the test.
-# Previously `cmd && echo OK` swallowed failures because bash set -e
-# does not fire on the failing left side of an && chain.
-run_in_container bash -c '
-fail=0
+# Each check prints OK or FAILED + the error output. A failure here is
+# recorded in FAILED_STEPS (above) but does NOT abort — subsequent steps
+# still run so we can see what else works. The final banner exits non-zero
+# if anything failed.
+if ! run_in_container bash -c '
 check() {
     local name="$1"; shift
     if out="$("$@" 2>&1)"; then
@@ -129,20 +134,23 @@ check() {
         echo "----- output -----" >&2
         echo "$out" >&2
         echo "------------------" >&2
-        fail=1
+        return 1
     fi
 }
-check "boltz"              boltz --help
-check "mmseqs"             mmseqs version
-check "colabfold_search"   bash -c "command -v colabfold_search >/dev/null"
-check "esm SDK"            python -c "import esm"
-check "transformers ESMFold" python -c "from transformers import EsmForProteinFolding"
+fail=0
+check "boltz"                boltz --help                                       || fail=$((fail+1))
+check "mmseqs"               mmseqs version                                     || fail=$((fail+1))
+check "colabfold_search"     bash -c "command -v colabfold_search >/dev/null"   || fail=$((fail+1))
+check "esm SDK"              python -c "import esm"                             || fail=$((fail+1))
+check "transformers ESMFold" python -c "from transformers import EsmForProteinFolding" || fail=$((fail+1))
 exit $fail
-'
+'; then
+    FAILED_STEPS="$FAILED_STEPS 3"
+fi
 
 echo
 echo "=== [4/6] Baked weights load ==="
-run_in_container python -c "
+if ! run_in_container python -c "
 import os
 print(f'HF_HOME={os.environ.get(\"HF_HOME\")}')
 from transformers import AutoTokenizer, EsmForProteinFolding
@@ -151,11 +159,13 @@ print('ESMFold tokenizer: OK')
 from esm.models.esmc import ESMC
 m = ESMC.from_pretrained('esmc_600m')
 print('ESM-C 600M: OK')
-"
+"; then
+    FAILED_STEPS="$FAILED_STEPS 4"
+fi
 
 echo
 echo "=== [5/6] End-to-end ESMFold fold ==="
-run_in_container python - <<PYEOF
+if ! run_in_container python - <<PYEOF
 import torch
 from transformers import AutoTokenizer, EsmForProteinFolding
 
@@ -169,20 +179,32 @@ print(f"Mean pLDDT for smoke seq: {plddt:.3f}")
 assert plddt > 0.0, "pLDDT not in valid range"
 print("ESMFold end-to-end: OK")
 PYEOF
+then
+    FAILED_STEPS="$FAILED_STEPS 5"
+fi
 
 echo
 echo "=== [6/6] Host env isolation (--cleanenv regression) ==="
 # Regression guard for audit item H1 (vault container-audit.md). If
 # --cleanenv is silently dropped, a poisoned host PYTHONPATH would land
 # in sys.path inside the container; the assertion below would then fail.
-PYTHONPATH=/host/leaky/smoke run_in_container python -c "
+if ! PYTHONPATH=/host/leaky/smoke run_in_container python -c "
 import sys, os
 leaky = '/host/leaky/smoke'
 assert leaky not in sys.path, f'host PYTHONPATH leaked into container: {sys.path}'
 assert os.environ.get('PYTHONPATH', '').find(leaky) < 0, f'PYTHONPATH env leaked: {os.environ.get(\"PYTHONPATH\")}'
 print('env isolation: OK')
-"
+"; then
+    FAILED_STEPS="$FAILED_STEPS 6"
+fi
 
 echo
-echo "=== ALL SMOKE TESTS PASSED ==="
-[[ -n "$LOG_FILE" ]] && echo "Smoke log saved: $LOG_FILE"
+if [[ -z "$FAILED_STEPS" ]]; then
+    echo "=== ALL SMOKE TESTS PASSED ==="
+    [[ -n "$LOG_FILE" ]] && echo "Smoke log saved: $LOG_FILE"
+    exit 0
+else
+    echo "=== SMOKE TESTS FAILED — steps:$FAILED_STEPS ===" >&2
+    [[ -n "$LOG_FILE" ]] && echo "Smoke log saved: $LOG_FILE" >&2
+    exit 1
+fi
