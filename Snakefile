@@ -141,13 +141,59 @@ if _RT == "auto":
 else:
     CONTAINER_RUNTIME = _RT
 
+def _parse_bind(entry):
+    """Parse one bind_paths entry into a -B flag.
+
+    Accepts (in priority order):
+      - "host:container:ro"  (or :rw)        explicit indirection + mode
+      - "host:container"                     explicit indirection, mode rw
+      - "host"                               host:host bind, mode rw
+
+    Empty entries are ignored.
+    """
+    entry = entry.strip()
+    if not entry:
+        return None
+    parts = entry.split(":")
+    if len(parts) == 3:
+        host, cont, mode = parts
+        return f"-B {host}:{cont}:{mode}"
+    if len(parts) == 2:
+        host, cont = parts
+        return f"-B {host}:{cont}"
+    return f"-B {entry}"
+
+
 def container_cmd(stage):
-    """Return '<runtime> exec --nv -B ... sif' prefix, or '' for legacy mode."""
+    """Return '<runtime> exec --nv --cleanenv -B ... sif' prefix, or '' for legacy.
+
+    Audit hardening (H1, H3, H5 — see vault container-audit.md):
+      - --cleanenv: strip host env to prevent PYTHONPATH/CONDA_PREFIX leaks.
+        Rules that need to forward a host env var into the container must
+        use the SINGULARITYENV_FOO=... (or APPTAINERENV_FOO=...) prefix on
+        the shell line, OR explicitly add --env to the helper output.
+      - bind_paths entries support 'host:container:ro' for read-only mounts
+        (DBs should be :ro).
+      - SLURM_TMPDIR (or /tmp if unset) is bound at /tmp and TMPDIR=/tmp is
+        propagated, so tools that write large temp files (Boltz, Triton,
+        HF) land on node-local scratch instead of the container's tmpfs.
+        The ${{SLURM_TMPDIR:-/tmp}} expansion is shell-expanded at rule
+        runtime (it appears inside the rule's bash shell block).
+    """
     sif = CONTAINERS.get(stage, "")
-    if sif:
-        binds = " ".join(f"-B {p}" for p in BIND_PATHS.split(","))
-        return f"{CONTAINER_RUNTIME} exec --nv {binds} {sif}"
-    return ""
+    if not sif:
+        return ""
+    binds = [_parse_bind(p) for p in BIND_PATHS.split(",")]
+    binds = [b for b in binds if b is not None]
+    # Node-local scratch for tmp (shell-expanded by the rule's bash).
+    binds.append('-B "${SLURM_TMPDIR:-/tmp}":/tmp')
+    flags = [
+        CONTAINER_RUNTIME, "exec",
+        "--nv",
+        "--cleanenv",
+        "--env", "TMPDIR=/tmp",
+    ]
+    return " ".join(flags + binds + [sif])
 
 if RUN_MSA:
     include: "workflow/rules/msa.smk"

@@ -46,6 +46,8 @@ OUT=""
 MODE="from-def"
 DOCKER_URL=""
 DRY_RUN=0
+LOG_FILE=""        # set by --log; else auto-placed next to the SIF
+LOG_DISABLED=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
             MODE="from-docker"; DOCKER_URL="$2"; shift 2 ;;
         --dry-run)
             DRY_RUN=1; shift ;;
+        --log)
+            LOG_FILE="$2"; shift 2 ;;
+        --no-log)
+            LOG_DISABLED=1; shift ;;
         -h|--help)
             sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)
@@ -106,6 +112,30 @@ fi
 # under either runtime without warnings.
 [[ -n "${SINGULARITY_CACHEDIR:-}" && -z "${APPTAINER_CACHEDIR:-}" ]] && export APPTAINER_CACHEDIR="$SINGULARITY_CACHEDIR"
 [[ -n "${SINGULARITY_TMPDIR:-}"   && -z "${APPTAINER_TMPDIR:-}"   ]] && export APPTAINER_TMPDIR="$SINGULARITY_TMPDIR"
+
+# Auto-log the entire run to a timestamped file so users can share it with us
+# on failure. Default location: <SING_BASE>/build-logs/build-<ts>.log if a
+# base is known, else next to the SIF in <dirname OUT>/build-logs/. Override
+# with --log /path; disable with --no-log.
+if (( ! LOG_DISABLED )) && [[ -z "$LOG_FILE" ]]; then
+    log_base=""
+    if [[ -n "$SING_BASE" ]]; then
+        log_base="${SING_BASE}/build-logs"
+    else
+        log_base="$(dirname "$OUT")/build-logs"
+    fi
+    mkdir -p "$log_base"
+    LOG_FILE="${log_base}/build-$(date +%Y-%m-%dT%H-%M-%S).log"
+fi
+if (( ! LOG_DISABLED )); then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    # Tee stdout+stderr from this point on into the log file. `process
+    # substitution + exec` keeps the original tty output intact while
+    # capturing everything (including singularity's own progress bars).
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "Logging to  : $LOG_FILE"
+    echo "             (rerun with --no-log to disable, or --log PATH to override)"
+fi
 
 if ! command -v singularity >/dev/null 2>&1; then
     if command -v apptainer >/dev/null 2>&1; then
@@ -191,3 +221,4 @@ cd "$REPO_ROOT"
 echo
 echo "Done. Image at: $OUT"
 echo "Size: $(du -h "$OUT" | cut -f1)"
+[[ -n "$LOG_FILE" ]] && echo "Build log saved: $LOG_FILE"

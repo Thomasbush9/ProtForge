@@ -1,4 +1,18 @@
-# ProtForge Container Design
+# ProtForge Container Design — SUPERSEDED
+
+> **This document describes the original 4-image per-stage container design,
+> abandoned 2026-05-14 in favor of a single fat SIF that bundles all
+> GPU-stage tools + default model weights. Do NOT follow this doc.**
+>
+> **Current container documentation:**
+> - `docs/CLUSTER_SETUP.md` — install guide (both container and conda paths)
+> - `containers/README.md` — build / pull / env-var setup
+> - `containers/TESTING.md` — cluster validation steps
+>
+> This file is kept for history (rationale of the per-stage approach, CUDA
+> version notes, MPI image notes for ES) but is no longer authoritative.
+
+---
 
 Full containerization reference for team discussion.
 
