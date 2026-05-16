@@ -100,6 +100,13 @@ if [[ -n "$SING_BASE" ]]; then
     mkdir -p "${SINGULARITY_CACHEDIR}" "${SINGULARITY_TMPDIR}"
 fi
 
+# Apptainer (the LF fork) reads both APPTAINER_* and SINGULARITY_* names, but
+# APPTAINER_* is preferred and SINGULARITY_* is marked legacy on recent
+# releases (emits deprecation warnings). Export both so the same script works
+# under either runtime without warnings.
+[[ -n "${SINGULARITY_CACHEDIR:-}" && -z "${APPTAINER_CACHEDIR:-}" ]] && export APPTAINER_CACHEDIR="$SINGULARITY_CACHEDIR"
+[[ -n "${SINGULARITY_TMPDIR:-}"   && -z "${APPTAINER_TMPDIR:-}"   ]] && export APPTAINER_TMPDIR="$SINGULARITY_TMPDIR"
+
 if ! command -v singularity >/dev/null 2>&1; then
     if command -v apptainer >/dev/null 2>&1; then
         SING=apptainer
@@ -110,6 +117,11 @@ if ! command -v singularity >/dev/null 2>&1; then
 else
     SING=singularity
 fi
+
+# Report which runtime + version we'll use, so test logs are self-documenting.
+# (Apptainer's compat symlink at /usr/bin/singularity reports "apptainer
+# version X.Y.Z" — distinguishes from SingularityCE's "singularity-ce ...".)
+echo "Runtime     : $SING ($("$SING" --version 2>&1 | head -1))"
 
 mkdir -p "$(dirname "$OUT")"
 

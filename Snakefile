@@ -127,12 +127,26 @@ def binning_args(stage_cfg: dict, *, stage_name: str = "?") -> str:
 CONTAINERS = config.get("containers", {})
 BIND_PATHS = CONTAINERS.get("bind_paths", "/n/holylfs06,/n/home06")
 
+# Container runtime: "singularity" | "apptainer" | "auto" (default).
+# "auto" picks whichever binary is on PATH, preferring `singularity` (the
+# Kempner-handbook-documented name; on most modern HPCs it's actually
+# Apptainer's compat symlink, so the choice is cosmetic). Override via
+# config: containers.runtime: apptainer
+import shutil as _shutil
+_RT = CONTAINERS.get("runtime", "auto")
+if _RT == "auto":
+    CONTAINER_RUNTIME = "singularity" if _shutil.which("singularity") else (
+        "apptainer" if _shutil.which("apptainer") else "singularity"
+    )
+else:
+    CONTAINER_RUNTIME = _RT
+
 def container_cmd(stage):
-    """Return 'singularity exec --nv -B ... sif' prefix, or '' for legacy mode."""
+    """Return '<runtime> exec --nv -B ... sif' prefix, or '' for legacy mode."""
     sif = CONTAINERS.get(stage, "")
     if sif:
         binds = " ".join(f"-B {p}" for p in BIND_PATHS.split(","))
-        return f"singularity exec --nv {binds} {sif}"
+        return f"{CONTAINER_RUNTIME} exec --nv {binds} {sif}"
     return ""
 
 if RUN_MSA:

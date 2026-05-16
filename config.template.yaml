@@ -135,6 +135,11 @@ es:
 # Set paths to enable containerized execution. Leave empty for legacy mode.
 # Pull with: singularity pull docker://ghcr.io/ORG/protforge-<stage>:latest
 containers:
+  # Container runtime to invoke. "auto" (default) picks singularity if on
+  # PATH, else apptainer. Override to "apptainer" or "singularity" to force.
+  # On Kempner the binary is named `singularity` — whether that's
+  # SingularityCE or Apptainer's compat symlink doesn't affect us.
+  runtime: auto
   colabfold: ""    # e.g., /n/home06/<YOUR_USER>/sifs/protforge-colabfold.sif
   boltz: ""        # e.g., /n/home06/<YOUR_USER>/sifs/protforge-boltz.sif
   esm: ""          # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esm.sif
