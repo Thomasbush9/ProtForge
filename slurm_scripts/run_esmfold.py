@@ -86,6 +86,12 @@ if __name__ == "__main__":
         cache_dir=hub_cache,
         local_files_only=offline,
         low_cpu_mem_usage=True,
+        # In container mode the def file bakes only model.safetensors (not
+        # pytorch_model.bin) to halve image size. Without this flag the
+        # resolver looks for the .bin first, returns None, and either
+        # crashes in load_state_dict or triggers a network-only
+        # auto_conversion lookup that fails under offline mode.
+        use_safetensors=True,
     )
     model = model.to(device)
     if device == "cuda":

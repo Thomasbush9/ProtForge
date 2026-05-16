@@ -170,15 +170,22 @@ import torch
 from transformers import AutoTokenizer, EsmForProteinFolding
 
 seq = "MKTIIALSYIFCLVFADYKDDDDKMRGSHHHHHHGSDYDIPTTENLYFQ"
-tok = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
-# use_safetensors=True matches what the def file baked. Without it,
-# transformers' resolver looks for pytorch_model.bin first (which we
-# deliberately didn't bake), returns None, and the offline-mode safetensors
-# fallback crashes with AttributeError on .endswith(None).
+tok = AutoTokenizer.from_pretrained("facebook/esmfold_v1", local_files_only=True)
+# Three flags work together:
+#   use_safetensors=True : the def file baked only model.safetensors (not
+#       pytorch_model.bin), so direct the resolver to the file that exists.
+#   local_files_only=True : checked BEFORE transformers' auto_conversion
+#       fallback. Without it, missing pytorch_model.bin triggers a HF Hub
+#       lookup for a conversion PR (auto_conversion()), which then crashes
+#       under HF_HUB_OFFLINE. With it, transformers resolves from cache
+#       only and skips the conversion path entirely.
+#   low_cpu_mem_usage=True : initialize on CPU then move to GPU; lower
+#       transient RAM use during load.
 model = EsmForProteinFolding.from_pretrained(
     "facebook/esmfold_v1",
     low_cpu_mem_usage=True,
     use_safetensors=True,
+    local_files_only=True,
 ).cuda().eval()
 with torch.no_grad():
     out = model(**tok([seq], return_tensors="pt", add_special_tokens=False).to("cuda"))
