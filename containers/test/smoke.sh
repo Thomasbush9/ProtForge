@@ -165,27 +165,29 @@ fi
 
 echo
 echo "=== [5/6] End-to-end ESMFold fold ==="
-if ! run_in_container python - <<PYEOF
+# Pass the cached snapshot path directly to from_pretrained instead of the
+# model id. This bypasses transformers' HF-Hub resolution entirely — no
+# auto_conversion lookup, no offline-mode quirks, no use_safetensors guesswork.
+# Whatever weight file (.bin or .safetensors) is in the snapshot dir gets
+# loaded.
+if ! run_in_container python - <<'PYEOF'
+import glob, os, sys
 import torch
 from transformers import AutoTokenizer, EsmForProteinFolding
 
+cache_root = os.environ.get("HF_HOME", "/opt/weights/hf") + "/hub"
+snaps = sorted(glob.glob(f"{cache_root}/models--facebook--esmfold_v1/snapshots/*"))
+if not snaps:
+    print(f"FATAL: no ESMFold snapshot under {cache_root}", file=sys.stderr)
+    sys.exit(1)
+snap = snaps[0]
+print(f"Snapshot dir: {snap}")
+print(f"Contents    : {sorted(os.listdir(snap))}")
+
 seq = "MKTIIALSYIFCLVFADYKDDDDKMRGSHHHHHHGSDYDIPTTENLYFQ"
-tok = AutoTokenizer.from_pretrained("facebook/esmfold_v1", local_files_only=True)
-# Three flags work together:
-#   use_safetensors=True : the def file baked only model.safetensors (not
-#       pytorch_model.bin), so direct the resolver to the file that exists.
-#   local_files_only=True : checked BEFORE transformers' auto_conversion
-#       fallback. Without it, missing pytorch_model.bin triggers a HF Hub
-#       lookup for a conversion PR (auto_conversion()), which then crashes
-#       under HF_HUB_OFFLINE. With it, transformers resolves from cache
-#       only and skips the conversion path entirely.
-#   low_cpu_mem_usage=True : initialize on CPU then move to GPU; lower
-#       transient RAM use during load.
+tok = AutoTokenizer.from_pretrained(snap, local_files_only=True)
 model = EsmForProteinFolding.from_pretrained(
-    "facebook/esmfold_v1",
-    low_cpu_mem_usage=True,
-    use_safetensors=True,
-    local_files_only=True,
+    snap, local_files_only=True, low_cpu_mem_usage=True,
 ).cuda().eval()
 with torch.no_grad():
     out = model(**tok([seq], return_tensors="pt", add_special_tokens=False).to("cuda"))
