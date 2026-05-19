@@ -134,6 +134,12 @@ BIND_PATHS = CONTAINERS.get("bind_paths", "/n/holylfs06,/n/home06")
 # config: containers.runtime: apptainer
 import shutil as _shutil
 _RT = CONTAINERS.get("runtime", "auto")
+_ALLOWED_RUNTIMES = ("auto", "singularity", "apptainer")
+if _RT not in _ALLOWED_RUNTIMES:
+    raise ValueError(
+        f"containers.runtime must be one of {_ALLOWED_RUNTIMES}, got {_RT!r}. "
+        f"This value is interpolated into shell commands — it is not free-form."
+    )
 if _RT == "auto":
     CONTAINER_RUNTIME = "singularity" if _shutil.which("singularity") else (
         "apptainer" if _shutil.which("apptainer") else "singularity"
@@ -141,15 +147,26 @@ if _RT == "auto":
 else:
     CONTAINER_RUNTIME = _RT
 
-def _parse_bind(entry):
-    """Parse one bind_paths entry into a -B flag.
+import shlex as _shlex
 
-    Accepts (in priority order):
+
+def _parse_bind(entry):
+    """Parse one bind_paths entry into a shell-safe -B flag.
+
+    Accepted forms (longest-match first):
       - "host:container:ro"  (or :rw)        explicit indirection + mode
       - "host:container"                     explicit indirection, mode rw
+      - "host:ro"            (or :rw)        host:host bind at given mode
       - "host"                               host:host bind, mode rw
 
-    Empty entries are ignored.
+    Disambiguation: when an entry has two parts, a second part equal to
+    `ro` or `rw` is treated as the mode (host:host:mode); otherwise it's
+    the container-side path. This lets the template default stay readable
+    (`/n/.../db:ro`) without inventing a new separator.
+
+    The full `-B` argument is `shlex.quote`d so paths with spaces or shell
+    metachars can't break the rule's bash line. Empty entries are ignored.
+    Unknown modes are rejected.
     """
     entry = entry.strip()
     if not entry:
@@ -157,30 +174,52 @@ def _parse_bind(entry):
     parts = entry.split(":")
     if len(parts) == 3:
         host, cont, mode = parts
-        return f"-B {host}:{cont}:{mode}"
+        if mode not in ("ro", "rw"):
+            raise ValueError(
+                f"containers.bind_paths: invalid mode {mode!r} in {entry!r} "
+                f"(expected 'ro' or 'rw')"
+            )
+        return f"-B {_shlex.quote(f'{host}:{cont}:{mode}')}"
     if len(parts) == 2:
-        host, cont = parts
-        return f"-B {host}:{cont}"
-    return f"-B {entry}"
+        host, second = parts
+        if second in ("ro", "rw"):
+            return f"-B {_shlex.quote(f'{host}:{host}:{second}')}"
+        return f"-B {_shlex.quote(f'{host}:{second}')}"
+    return f"-B {_shlex.quote(entry)}"
 
 
-def container_cmd(stage):
-    """Return '<runtime> exec --nv --cleanenv -B ... sif' prefix, or '' for legacy.
+def container_cmd(stage, extra_env=""):
+    """Return '<runtime> exec --nv --cleanenv ... <extra_env> -B ... sif',
+    or '' for legacy (non-container) mode.
+
+    Args:
+      stage: stage name used to resolve the SIF (containers.<stage>, else
+        containers.gpu fallback).
+      extra_env: optional `--env KEY=VALUE [--env ...]` string the caller
+        wants injected *between* the runtime flags and the SIF path. The
+        whole string lands BEFORE the SIF so Singularity treats it as a
+        runtime option, not part of the in-container command. Values may
+        contain `$VAR` references — those are resolved by bash at rule
+        runtime, not at Snakemake plan time.
 
     Audit hardening (H1, H3, H5 — see vault container-audit.md):
       - --cleanenv: strip host env to prevent PYTHONPATH/CONDA_PREFIX leaks.
         Rules that need to forward a host env var into the container must
-        use the SINGULARITYENV_FOO=... (or APPTAINERENV_FOO=...) prefix on
-        the shell line, OR explicitly add --env to the helper output.
+        pass it through `extra_env` so it lands before the SIF (Singularity
+        rejects --env after the image).
       - bind_paths entries support 'host:container:ro' for read-only mounts
-        (DBs should be :ro).
+        (DBs should be :ro). See _parse_bind for accepted shorthand.
       - SLURM_TMPDIR (or /tmp if unset) is bound at /tmp and TMPDIR=/tmp is
         propagated, so tools that write large temp files (Boltz, Triton,
         HF) land on node-local scratch instead of the container's tmpfs.
         The ${{SLURM_TMPDIR:-/tmp}} expansion is shell-expanded at rule
         runtime (it appears inside the rule's bash shell block).
     """
-    sif = CONTAINERS.get(stage, "")
+    # Resolve SIF: stage-specific override wins, otherwise fall back to the
+    # shared `containers.gpu` (single-SIF design, matches README + def file).
+    # Per-stage keys remain supported for the day we split the image (e.g.
+    # ES/PDAnalysis ships in its own MPI SIF).
+    sif = CONTAINERS.get(stage, "") or CONTAINERS.get("gpu", "")
     if not sif:
         return ""
     binds = [_parse_bind(p) for p in BIND_PATHS.split(",")]
@@ -193,7 +232,16 @@ def container_cmd(stage):
         "--cleanenv",
         "--env", "TMPDIR=/tmp",
     ]
-    return " ".join(flags + binds + [sif])
+    parts = flags + binds
+    if extra_env:
+        # extra_env is a pre-rendered flag string (e.g. "--env FOO=bar
+        # --env BAZ=$BAZ"). Trust the caller to have quoted any path
+        # components — we just inject it verbatim before the SIF.
+        parts.append(extra_env)
+    # `sif` lands at the end of a rule's bash command line, so quote it
+    # in case the user's path contains spaces or shell metachars.
+    parts.append(_shlex.quote(sif))
+    return " ".join(parts)
 
 if RUN_MSA:
     include: "workflow/rules/msa.smk"

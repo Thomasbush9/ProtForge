@@ -109,20 +109,29 @@ MSA or Boltz (those need the bind-mounted DBs).
 
 ## Runtime usage on Kempner
 
-Manual invocation:
+Manual invocation (same-path read-only DB binds — the template default):
 
 ```bash
 singularity exec --nv \
-    -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db \
-    -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db \
+    -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro \
+    -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro \
+    -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro \
     -B "$PWD":"$PWD" \
     "$PROTFORGE_ROOT/sifs/protforge-gpu.sif" \
     boltz predict ...
 ```
 
 Via Snakemake (already wired): set `containers.gpu` in your config to the SIF
-path and `containers.bind_paths` to include the two `/data/*` mounts. The
-existing `container_cmd()` helper in `Snakefile` dispatches automatically.
+path. The `containers.bind_paths` default in `config.template.yaml` already
+mounts the three shared DBs at the same host paths inside the container,
+read-only, so the existing `msa.mmseq2_db` / `boltz.cache_dir` values work
+unchanged. The `container_cmd()` helper in `Snakefile` dispatches automatically.
+
+If you prefer the canonical `/data/colabfold_db` / `/data/boltz_db` mounts
+documented in the def file's `%environment`, change each `bind_paths` entry
+to `host:/data/<name>:ro` AND update the matching stage config values
+(`msa.mmseq2_db`, `msa.colabfold_db`, `boltz.cache_dir`) to the `/data/...`
+side.
 
 ## Env vars
 

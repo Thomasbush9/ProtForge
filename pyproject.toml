@@ -26,6 +26,19 @@ webapp = [
     "streamlit-autorefresh",
     "PyYAML>=5.0",
 ]
+# Host-side launcher environment (Snakemake + webapp + utils). Mirrors
+# requirements-host.txt — install with `pip install ".[host]"` or via the
+# requirements file. The GPU SIF stays a separate concern.
+host = [
+    "snakemake>=8.10,<9",
+    "snakemake-executor-plugin-slurm>=0.10",
+    "streamlit>=1.30",
+    "streamlit-autorefresh",
+    "PyYAML>=5.0",
+    "pandas>=1.0",
+    "numpy>=1.20",
+    "tqdm>=4.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

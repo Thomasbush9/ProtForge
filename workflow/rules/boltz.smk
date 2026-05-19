@@ -124,7 +124,15 @@ rule run_boltz_predict:
         recycling_steps = BOLTZ_CFG.get("recycling_steps", 10),
         diffusion_samples = BOLTZ_CFG.get("diffusion_samples", 25),
         extra_args = BOLTZ_EXTRA_ARGS,
-        container_cmd = container_cmd("boltz"),
+        # TRITON_CACHE_DIR is set by the rule's bash before container_cmd
+        # is expanded. Forwarding it via extra_env (instead of appending
+        # `--env ...` after the SIF) keeps it on the singularity option
+        # side; Singularity treats anything after the SIF as the in-
+        # container command.
+        container_cmd = container_cmd(
+            "boltz",
+            extra_env="--env TRITON_CACHE_DIR=$TRITON_CACHE_DIR",
+        ),
     resources:
         cpus_per_task = stage_resource("boltz", "cpus_per_task", 8),
         mem_mb        = lambda wc: chunk_resource(
@@ -153,7 +161,6 @@ rule run_boltz_predict:
 
         if [ -n "{params.container_cmd}" ]; then
             {params.container_cmd} \
-                --env TRITON_CACHE_DIR=$TRITON_CACHE_DIR \
                 boltz predict {input.chunk_dir} \
                     --cache {params.cache_dir} --out_dir {params.output_dir} \
                     --devices 1 --accelerator gpu \

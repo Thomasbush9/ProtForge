@@ -48,19 +48,30 @@ esm:
   num_chunks: 1
   array_max_concurrency: 20
   env_path: /n/home06/<YOUR_USER>/envs/esm
-  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # Shared ESM model weights
-  # NOTE: The ESM library has hardcoded model paths in esm/utils/constants/esm3.py.
-  # After installing the esm package, update those paths to match this cache_dir.
-  # See docs/CLUSTER_SETUP.md for details.
+  # cache_dir: leave empty in CONTAINER mode — the SIF ships ESM-C 600M weights
+  # at /opt/weights/hf and the rule auto-enables HF offline. Set to a host
+  # path only in LEGACY (conda env) mode to point at your HF cache.
+  cache_dir: ""
+  # Example for legacy mode (uncomment + adapt):
+  # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
+  # NOTE (legacy mode only): the ESM library has hardcoded model paths in
+  # esm/utils/constants/esm3.py. Update those to match `cache_dir`. See
+  # docs/CLUSTER_SETUP.md.
 
 # ESMFold structure prediction - USER SETUP REQUIRED
-# Populate cache_dir first with: python scripts/download_esmfold.py --cache-dir <cache_dir>
+# In CONTAINER mode the SIF ships facebook/esmfold_v1 weights at
+# /opt/weights/hf — leave cache_dir empty and the rule enables HF offline.
+# In LEGACY (conda env) mode, first populate a host HF cache with:
+#   python scripts/download_esmfold.py --cache-dir <cache_dir>
+# then set cache_dir to that path.
 esmfold:
   input_type: yaml  # "yaml" (post-MSA from sequences/) or "fasta" (raw input.fasta_dir, independent of MSA/Boltz)
   num_chunks: 1
   array_max_concurrency: 10
   env_path: /n/home06/<YOUR_USER>/envs/esmfold
-  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # HF_HOME root; must contain hub/models--facebook--esmfold_v1
+  cache_dir: ""
+  # Example for legacy mode (uncomment + adapt):
+  # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # HF_HOME root; must contain hub/models--facebook--esmfold_v1
   # Optional length cutoff. Sequences longer than this are dropped before
   # chunking and listed in esmfold_chunks/skipped_sequences.tsv.
   # max_seq_len: 2500
@@ -132,20 +143,44 @@ es:
 #       - {mem_mb: 80000, runtime_min: 240}
 #
 # Container images (Singularity .sif files) — OPTIONAL
-# Set paths to enable containerized execution. Leave empty for legacy mode.
-# Pull with: singularity pull docker://ghcr.io/ORG/protforge-<stage>:latest
+# Set `gpu` to the single ProtForge GPU SIF (built from containers/protforge-gpu.def)
+# to run colabfold/boltz/esm/esmfold inside the container. Leave empty for legacy
+# conda-env mode. Per-stage keys override `gpu` when set (used once we split the
+# image, e.g. PDAnalysis ships in its own MPI SIF).
 containers:
   # Container runtime to invoke. "auto" (default) picks singularity if on
   # PATH, else apptainer. Override to "apptainer" or "singularity" to force.
   # On Kempner the binary is named `singularity` — whether that's
   # SingularityCE or Apptainer's compat symlink doesn't affect us.
   runtime: auto
-  colabfold: ""    # e.g., /n/home06/<YOUR_USER>/sifs/protforge-colabfold.sif
-  boltz: ""        # e.g., /n/home06/<YOUR_USER>/sifs/protforge-boltz.sif
-  esm: ""          # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esm.sif
-  esmfold: ""      # e.g., /n/home06/<YOUR_USER>/sifs/protforge-esmfold.sif
-  pdanalysis: ""   # e.g., /n/home06/<YOUR_USER>/sifs/protforge-pdanalysis.sif
-  bind_paths: "/n/holylfs06,/n/home06"
+  # Single SIF for all GPU stages (MSA / Boltz / ESM-C / ESMFold).
+  gpu: ""          # e.g., /n/holylfs06/.../<YOUR_USER>/sifs/protforge-gpu.sif
+  # Per-stage overrides (optional — leave empty to use `gpu` above).
+  colabfold: ""
+  boltz: ""
+  esm: ""
+  esmfold: ""
+  pdanalysis: ""   # ES/PDAnalysis ships in a separate (MPI) image, not built yet.
+  # Comma-separated bind list. Each entry is one of:
+  #   - host                  (host:host, rw — for writable workspace dirs)
+  #   - host:ro      (or :rw) (host:host bind at given mode — shortcut)
+  #   - host:container        (rebind to a different in-container path)
+  #   - host:container:ro|rw  (same with explicit mode)
+  #
+  # Default policy below = bind each shared DB at the SAME path inside the
+  # container, read-only. Stage configs below (msa.mmseq2_db, boltz.cache_dir,
+  # etc.) keep their host paths and work unchanged in container mode. The
+  # writable bind covers the user's home dir; add your lab's holylfs path
+  # too if the repo or output dir lives there.
+  #
+  # The Snakefile additionally auto-binds ${SLURM_TMPDIR:-/tmp} at /tmp for
+  # scratch (Boltz/Triton/HF temp files), no need to list it here.
+  #
+  # Alternate `/data/*` convention (see containers/protforge-gpu.def %environment):
+  # if you prefer the canonical in-container paths, replace each `host:ro`
+  # below with `host:/data/<name>:ro` AND change the matching stage config
+  # values (msa.mmseq2_db, msa.colabfold_db, boltz.cache_dir) to `/data/...`.
+  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro,/n/home06/<YOUR_USER>"
 
 # SLURM settings - UPDATE FOR YOUR ACCOUNT
 slurm:

@@ -97,21 +97,21 @@ run_in_container() {
         "$SIF" "$@"
 }
 
-# Failure tracker for steps 3-6 (basic infra failures in 0-2 still fail-fast).
+# Failure tracker for steps 3-7 (basic infra failures in 0-2 still fail-fast).
 # Each step that fails appends its number; final banner exits non-zero if
 # non-empty.
 FAILED_STEPS=""
 
-echo "=== [0/6] Runtime + image identity ==="
+echo "=== [0/7] Runtime + image identity ==="
 "$RUNTIME" --version 2>&1 | head -1
 "$RUNTIME" inspect "$SIF" | head -20
 
 echo
-echo "=== [1/6] GPU visibility ==="
+echo "=== [1/7] GPU visibility ==="
 run_in_container nvidia-smi
 
 echo
-echo "=== [2/6] PyTorch + CUDA ==="
+echo "=== [2/7] PyTorch + CUDA ==="
 run_in_container python -c "
 import torch
 print(f'torch={torch.__version__}, cuda={torch.cuda.is_available()}, device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')
@@ -119,7 +119,45 @@ assert torch.cuda.is_available(), 'CUDA not visible inside container'
 "
 
 echo
-echo "=== [3/6] Tools importable ==="
+echo "=== [3/7] Image content (build context hygiene) ==="
+# Audit item: .singularityignore is the security boundary for what gets
+# baked into the SIF. Verify nothing sensitive or local-state-only slipped
+# past (e.g. .git, .venv, .sessions, host config.yaml, sub-project .venvs).
+# A failure here means the build context wasn't filtered correctly.
+if ! run_in_container bash -c '
+fail=0
+check_missing() {
+    local path="$1"
+    if [ -e "$path" ]; then
+        echo "image-content: FAILED — found $path (should be filtered by .singularityignore)" >&2
+        return 1
+    fi
+    echo "image-content: $path absent — OK"
+}
+check_missing /opt/protforge/.git              || fail=$((fail+1))
+check_missing /opt/protforge/.venv             || fail=$((fail+1))
+check_missing /opt/protforge/.sessions         || fail=$((fail+1))
+check_missing /opt/protforge/config.yaml       || fail=$((fail+1))
+check_missing /opt/protforge/sifs              || fail=$((fail+1))
+check_missing /opt/protforge/sing_cache        || fail=$((fail+1))
+check_missing /opt/protforge/sing_tmp          || fail=$((fail+1))
+check_missing /opt/protforge/scripts/uniprot_fetch/.venv || fail=$((fail+1))
+# Sanity: runtime scripts the rules call must actually be present.
+for f in slurm_scripts/run_esm.py slurm_scripts/run_esmfold.py Snakefile; do
+    if [ ! -e "/opt/protforge/$f" ]; then
+        echo "image-content: FAILED — missing /opt/protforge/$f (rules will not find it)" >&2
+        fail=$((fail+1))
+    else
+        echo "image-content: /opt/protforge/$f present — OK"
+    fi
+done
+exit $fail
+'; then
+    FAILED_STEPS="$FAILED_STEPS 3"
+fi
+
+echo
+echo "=== [4/7] Tools importable ==="
 # Each check prints OK or FAILED + the error output. A failure here is
 # recorded in FAILED_STEPS (above) but does NOT abort — subsequent steps
 # still run so we can see what else works. The final banner exits non-zero
@@ -145,11 +183,11 @@ check "esm SDK"              python -c "import esm"                             
 check "transformers ESMFold" python -c "from transformers import EsmForProteinFolding" || fail=$((fail+1))
 exit $fail
 '; then
-    FAILED_STEPS="$FAILED_STEPS 3"
+    FAILED_STEPS="$FAILED_STEPS 4"
 fi
 
 echo
-echo "=== [4/6] Baked weights load ==="
+echo "=== [5/7] Baked weights load ==="
 if ! run_in_container python -c "
 import os
 print(f'HF_HOME={os.environ.get(\"HF_HOME\")}')
@@ -160,11 +198,11 @@ from esm.models.esmc import ESMC
 m = ESMC.from_pretrained('esmc_600m')
 print('ESM-C 600M: OK')
 "; then
-    FAILED_STEPS="$FAILED_STEPS 4"
+    FAILED_STEPS="$FAILED_STEPS 5"
 fi
 
 echo
-echo "=== [5/6] End-to-end ESMFold fold ==="
+echo "=== [6/7] End-to-end ESMFold fold ==="
 # Pass the cached snapshot path directly to from_pretrained instead of the
 # model id. This bypasses transformers' HF-Hub resolution entirely — no
 # auto_conversion lookup, no offline-mode quirks, no use_safetensors guesswork.
@@ -197,11 +235,11 @@ assert plddt > 0.0, "pLDDT not in valid range"
 print("ESMFold end-to-end: OK")
 PYEOF
 then
-    FAILED_STEPS="$FAILED_STEPS 5"
+    FAILED_STEPS="$FAILED_STEPS 6"
 fi
 
 echo
-echo "=== [6/6] Host env isolation (--cleanenv regression) ==="
+echo "=== [7/7] Host env isolation (--cleanenv regression) ==="
 # Regression guard for audit item H1 (vault container-audit.md). If
 # --cleanenv is silently dropped, a poisoned host PYTHONPATH would land
 # in sys.path inside the container; the assertion below would then fail.
@@ -212,7 +250,7 @@ assert leaky not in sys.path, f'host PYTHONPATH leaked into container: {sys.path
 assert os.environ.get('PYTHONPATH', '').find(leaky) < 0, f'PYTHONPATH env leaked: {os.environ.get(\"PYTHONPATH\")}'
 print('env isolation: OK')
 "; then
-    FAILED_STEPS="$FAILED_STEPS 6"
+    FAILED_STEPS="$FAILED_STEPS 7"
 fi
 
 echo

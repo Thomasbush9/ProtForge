@@ -13,6 +13,8 @@ look like `short_0`, `short_1`, ..., `long_0`, ... — the run rule's
 `resources:` callable inspects the prefix and applies pool-specific mem/time.
 """
 
+import shlex as _shlex
+
 ESMFOLD_CFG    = config.get("esmfold", {})
 ESMFOLD_CHUNKS = f"{OUTPUT}/esmfold_chunks"
 
@@ -33,6 +35,17 @@ ESMFOLD_ACCOUNT   = SLURM_CFG.get("account", "")
 ESMFOLD_BIN_BY_LENGTH = bool(ESMFOLD_CFG.get("bin_by_length", False))
 ESMFOLD_BINNING_ENABLED = bool((ESMFOLD_CFG.get("binning") or {}).get("enabled", False))
 ESMFOLD_CHUNKS_TSV = f"{ESMFOLD_CHUNKS}/chunks.tsv"
+
+
+# Container-mode env injection: HF_HOME override when the user pinned a host
+# cache, otherwise force HF offline so the SIF's baked /opt/weights/hf wins.
+# Built once at config load; values are shell-quoted because the string is
+# interpolated verbatim into the rule's bash line.
+_ESMFOLD_CONTAINER_ENV = (
+    f"--env HF_HOME={_shlex.quote(ESMFOLD_CFG['cache_dir'])}"
+    if ESMFOLD_CFG.get("cache_dir")
+    else "--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
+)
 
 
 def _build_esmfold_chunker_args() -> str:
@@ -168,7 +181,16 @@ rule run_esmfold_chunk:
         output_dir = SEQUENCES_DIR,
         env_path = ESMFOLD_CFG.get("env_path", ""),
         cache_dir = ESMFOLD_CFG.get("cache_dir", ""),
-        container_cmd = container_cmd("esmfold"),
+        # HF env flags injected via container_cmd's extra_env (pre-SIF
+        # position required by Singularity).
+        container_cmd = container_cmd("esmfold", extra_env=_ESMFOLD_CONTAINER_ENV),
+        # `--cache_dir` is passed to run_esmfold.py only when explicitly set —
+        # an empty string would set local_files_only=False and trigger Hub lookups.
+        cache_dir_arg = (
+            f"--cache_dir {_shlex.quote(ESMFOLD_CFG['cache_dir'])}"
+            if ESMFOLD_CFG.get("cache_dir")
+            else ""
+        ),
         esmfold_chunks_dir = ESMFOLD_CHUNKS,
         runner_extra = ESMFOLD_RUNNER_EXTRA,
     resources:
@@ -188,12 +210,11 @@ rule run_esmfold_chunk:
 
         if [ -n "{params.container_cmd}" ]; then
             {params.container_cmd} \
-                --env HF_HOME={params.cache_dir} \
-                python /opt/protforge/run_esmfold.py \
+                python /opt/protforge/slurm_scripts/run_esmfold.py \
                     --fasta_list {input.fasta_list} \
                     --output_dir {params.output_dir} \
                     --processed_paths_file {params.esmfold_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt \
-                    --cache_dir {params.cache_dir} \
+                    {params.cache_dir_arg} \
                     {params.runner_extra}
         else
             module load python gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true

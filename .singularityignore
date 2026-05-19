@@ -1,0 +1,63 @@
+# Keep local-only state out of the Singularity build context.
+# The def file copies "." into /opt/protforge, so this file is part of the
+# security boundary for what can be baked into the SIF.
+
+# Version control and editor state
+.git
+.git/
+.github/
+.DS_Store
+.vscode/
+.idea/
+
+# Python bytecode, caches, and test state
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.cpython*
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+**/.venv/
+**/venv/
+**/env/
+
+# User/session-specific runtime state
+config.yaml
+.sessions/
+.snakemake/
+**/.snakemake/
+.snakemake_run.json
+snakemake_run.log
+.config_backups/
+**/.config_backups/
+
+# Singularity build artifacts and large local outputs
+*.sif
+*.sqsh
+sifs/
+sing_cache/
+sing_tmp/
+build-logs/
+smoke-logs/
+containers/test/_smoke_out/
+containers/test/e2e_out/
+logs/
+job_logs/
+outputs/
+
+# Local secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*credentials*
+*token*
+id_rsa
+id_rsa.pub

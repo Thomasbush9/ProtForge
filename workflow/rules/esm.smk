@@ -6,6 +6,8 @@ checkpoint chunk_yamls_for_esm -> run_esm_chunk (per chunk) -> esm_complete (agg
 Calls the existing slurm_scripts/run_esm.py directly.
 """
 
+import shlex as _shlex
+
 ESM_CFG      = config.get("esm", {})
 ESM_CHUNKS   = f"{OUTPUT}/esm_chunks"
 
@@ -18,6 +20,19 @@ ESM_ACCOUNT   = SLURM_CFG.get("account", "")
 
 ESM_BINNING_ARGS = binning_args(ESM_CFG, stage_name="esm")
 ESM_CHUNKS_TSV = f"{ESM_CHUNKS}/chunks.tsv"
+
+
+# Container-mode env injection: when the user sets esm.cache_dir, propagate
+# TORCH_HOME + HF_HOME so the in-container ESM SDK looks at the user's host
+# cache. Otherwise force HF offline so the SIF's baked /opt/weights/hf is
+# used. Built once at config load — values are shell-quoted because the
+# string is interpolated verbatim into the rule's bash line.
+_ESM_CONTAINER_ENV = (
+    f"--env TORCH_HOME={_shlex.quote(ESM_CFG['cache_dir'])} "
+    f"--env HF_HOME={_shlex.quote(ESM_CFG['cache_dir'])}"
+    if ESM_CFG.get("cache_dir")
+    else "--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
+)
 
 
 def esm_chunk_input(wildcards):
@@ -80,7 +95,10 @@ rule run_esm_chunk:
         output_dir = SEQUENCES_DIR,
         env_path = ESM_CFG.get("env_path", ""),
         cache_dir = ESM_CFG.get("cache_dir", ""),
-        container_cmd = container_cmd("esm"),
+        # HF/Torch env flags are injected via container_cmd's extra_env so
+        # they land BEFORE the SIF — Singularity treats anything after the
+        # image as the in-container command, not a runtime option.
+        container_cmd = container_cmd("esm", extra_env=_ESM_CONTAINER_ENV),
         esm_chunks_dir = ESM_CHUNKS,
     resources:
         cpus_per_task = stage_resource("esm", "cpus_per_task", 16),
@@ -106,9 +124,7 @@ rule run_esm_chunk:
 
         if [ -n "{params.container_cmd}" ]; then
             {params.container_cmd} \
-                --env TORCH_HOME={params.cache_dir} \
-                --env HF_HOME={params.cache_dir} \
-                python /opt/protforge/run_esm.py \
+                python /opt/protforge/slurm_scripts/run_esm.py \
                     --fasta_list {input.fasta_list} \
                     --output_dir {params.output_dir} \
                     --processed_paths_file {params.esm_chunks_dir}/processed_paths_{wildcards.chunk_id}.txt

@@ -1,0 +1,31 @@
+# Host-side environment for the ProtForge launcher (Snakemake CLI + Streamlit
+# webapp). This is SEPARATE from the GPU SIF — none of these run inside the
+# container. The SIF only ships the per-stage runtime (boltz/colabfold/esm/
+# esmfold + their model weights).
+#
+# Install once on a login node (or a dedicated webapp/Snakemake conda env):
+#
+#   python -m venv ~/envs/protforge-host && source ~/envs/protforge-host/bin/activate
+#   pip install -r requirements-host.txt
+#
+# After install you can:
+#   - submit pipeline runs:  snakemake --profile profiles/slurm/
+#   - launch the webapp:     streamlit run webapp/app.py
+#
+# The `containers.gpu` config key tells the rules to dispatch each stage into
+# the SIF; the host env above only needs to load configs and call sbatch.
+
+# --- Snakemake launcher -----------------------------------------------------
+# Pin to a known-good range; >=8 is required for the slurm executor plugin.
+snakemake>=8.10,<9
+snakemake-executor-plugin-slurm>=0.10
+
+# --- Webapp -----------------------------------------------------------------
+streamlit>=1.30
+streamlit-autorefresh
+pyyaml>=5.0
+
+# --- Data prep / general utilities used by host scripts ---------------------
+pandas>=1.0
+numpy>=1.20
+tqdm>=4.0
