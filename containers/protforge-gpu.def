@@ -178,11 +178,26 @@ snapshot_download(\
     allow_patterns=['pytorch_model.bin', '*.json', '*.txt', '*.model'], \
 )"
 
-    # ESM-C 600M weights via the esm SDK
-    # The SDK caches under HF hub by default; HF_HOME picks it up.
+    # ESM-C 600M weights via huggingface_hub.snapshot_download.
+    #
+    # Why not ESMC.from_pretrained: that call both downloads the snapshot
+    # AND instantiates the 600M-param model in RAM (~2.5 GB weights + model
+    # graph). On memory-constrained build hosts (Kempner login nodes have
+    # tight per-user cgroup limits, typically OOM-killing builds around
+    # this step with exit 137), the instantiation kills the build right
+    # after the download succeeded.
+    #
+    # The SDK's own implementation does
+    #   snapshot_download(repo_id="EvolutionaryScale/esmc-600m-2024-12")
+    # (see esm/utils/constants/esm3.py) and then loads weights from
+    #   <snapshot_dir>/data/weights/esmc_600m_2024_12_v0.pth.
+    # Doing just the snapshot_download here populates the same HF cache
+    # layout the SDK looks up at runtime — when ESMC.from_pretrained is
+    # eventually called from rules, snapshot_download is a cache hit and
+    # the .pth load happens with the GPU already available.
     HF_HOME=/opt/weights/hf python3 -c "\
-from esm.models.esmc import ESMC; \
-ESMC.from_pretrained('esmc_600m')"
+from huggingface_hub import snapshot_download; \
+snapshot_download(repo_id='EvolutionaryScale/esmc-600m-2024-12')"
 
     # Scrub the build-time token so it can't leak into later command
     # echoes or end up baked into anything written to /opt during the
