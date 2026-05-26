@@ -78,6 +78,24 @@ mkdir -p "$PROTFORGE_SIF_DIR" "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 # builds and sbatch, export in the same script that invokes build.sh.
 ```
 
+**HF_TOKEN is strongly recommended.** Kempner's compute/login nodes share
+egress IPs across many users; HF Hub's per-IP anonymous rate limit gets hit
+fast (typically on the ESM-C download, which fetches many small files via
+the esm SDK). Anonymous builds work *sometimes* but fail unpredictably with
+`LocalEntryNotFoundError` or `429`. Grab a read-only token at
+<https://huggingface.co/settings/tokens> and export it before building:
+
+```bash
+export HF_TOKEN=hf_xxx  # in the same shell as build.sh, NOT in ~/.bashrc
+```
+
+`build.sh` stages the token to a mode-600 file under `SINGULARITY_TMPDIR`
+and bind-mounts it at `/run/secrets/hf_token:ro` for the build; `%post`
+reads it with shell-trace suppressed so it never lands in the build log.
+The token is unset before the build context is copied to `/opt/protforge`
+and removed from the host on script exit. The image's runtime
+`%environment` does NOT set `HF_TOKEN`, so it never leaks at runtime.
+
 Then one of:
 
 ```bash
@@ -90,6 +108,9 @@ bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:la
 # (c) Custom output / dry run
 bash containers/build.sh -o /path/to/out.sif
 bash containers/build.sh --dry-run
+
+# (d) Pass an HF token explicitly (overrides $HF_TOKEN env)
+bash containers/build.sh --hf-token hf_xxx
 ```
 
 First build/pull downloads ~10 GB of packages + weights. `singularity build`

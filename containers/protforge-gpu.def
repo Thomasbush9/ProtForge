@@ -119,6 +119,23 @@ From: ubuntu:22.04
     # -----------------------------------------------------------------
     mkdir -p /opt/weights/hf /opt/weights/torch
 
+    # Optional HF_TOKEN: bind-mount a token file at /run/secrets/hf_token
+    # via `build.sh --hf-token` (or by exporting HF_TOKEN before build.sh).
+    # Authenticated downloads get a much higher per-IP rate limit on HF
+    # Hub — Kempner's shared egress IPs hit the anon limit fast.
+    #
+    # Trace is suppressed around the read so the token never lands in the
+    # build log, then re-enabled. The token is unset at the end of this
+    # block so it doesn't appear in any later command echoes either.
+    { set +x; } 2>/dev/null
+    if [ -f /run/secrets/hf_token ]; then
+        export HF_TOKEN="$(cat /run/secrets/hf_token)"
+        echo "[info] HF_TOKEN loaded from /run/secrets/hf_token (authenticated downloads)"
+    else
+        echo "[info] no HF_TOKEN provided; downloading anonymously (rate-limit risk)"
+    fi
+    set -x
+
     # ESMFold weights via huggingface_hub.snapshot_download.
     #
     # Why not from_pretrained: calling
@@ -153,6 +170,14 @@ snapshot_download(\
     HF_HOME=/opt/weights/hf python3 -c "\
 from esm.models.esmc import ESMC; \
 ESMC.from_pretrained('esmc_600m')"
+
+    # Scrub the build-time token so it can't leak into later command
+    # echoes or end up baked into anything written to /opt during the
+    # build. The image's %environment doesn't set HF_TOKEN, so runtime
+    # is unaffected.
+    { set +x; } 2>/dev/null
+    unset HF_TOKEN
+    set -x
 
     chmod -R a+rX /opt/weights
 
