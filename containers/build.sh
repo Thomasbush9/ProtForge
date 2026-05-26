@@ -17,8 +17,9 @@
 #   bash containers/build.sh -o /path/to/out.sif               # custom output path
 #   bash containers/build.sh --from-docker docker://ghcr.io/me/protforge-gpu:latest
 #   bash containers/build.sh --dry-run                         # print command without running
-#   HF_TOKEN=hf_xxx bash containers/build.sh                   # authenticated HF downloads (recommended)
-#   bash containers/build.sh --hf-token hf_xxx                 # same, via flag
+#   bash containers/build.sh                                   # interactive prompt for HF_TOKEN (hidden, not in history)
+#   HF_TOKEN=hf_xxx bash containers/build.sh                   # via env (note: export ends up in shell history)
+#   bash containers/build.sh --hf-token hf_xxx                 # via flag (also history-leaky)
 #
 # Requires:
 #   - singularity (Kempner uses `singularity`, not `apptainer`)
@@ -78,11 +79,35 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Resolve HF token from flag, else env. We pass it into %post via a
-# bind-mounted file (not --build-arg) because the def file's %post runs
-# with `set -x` — a token interpolated into the script would land in the
-# build log. The file is mktemp'd with mode 600 and removed on exit.
+# Resolve HF token. Priority:
+#   1. --hf-token <value>  (flag — careful, ends up in shell history)
+#   2. $HF_TOKEN env       (also history-leaky if exported on the cmdline)
+#   3. Interactive prompt  (only if stdin is a TTY — hidden + not in history)
+#   4. None                (anonymous downloads; HF rate-limits Kempner IPs)
+#
+# We pass the resolved token into %post via a bind-mounted file (not
+# --build-arg) because the def file's %post runs with `set -x` — a token
+# interpolated into the script would land in the build log. The file is
+# mktemp'd with mode 600 and removed on exit.
 HF_TOKEN_RESOLVED="${HF_TOKEN_ARG:-${HF_TOKEN:-}}"
+if [[ -z "$HF_TOKEN_RESOLVED" && -t 0 ]]; then
+    {
+        echo
+        echo "No HF_TOKEN provided via --hf-token or env."
+        echo "Paste a token (read-only is enough) to enable authenticated HF"
+        echo "downloads, or press Enter to build anonymously (rate-limit risk"
+        echo "on Kempner's shared egress IPs)."
+        echo "Token page: https://huggingface.co/settings/tokens"
+    } >&2
+    # -s: don't echo input; -r: don't mangle backslashes; -p: prompt on stderr.
+    # The value goes into a shell variable and is never written to history.
+    read -r -s -p "HF token (input hidden, press Enter to skip): " HF_TOKEN_RESOLVED
+    echo >&2
+    if [[ -z "$HF_TOKEN_RESOLVED" ]]; then
+        echo "[info] no token entered; proceeding anonymously" >&2
+    fi
+fi
+
 HF_TOKEN_FILE=""
 cleanup_hf_token() {
     [[ -n "$HF_TOKEN_FILE" && -f "$HF_TOKEN_FILE" ]] && rm -f "$HF_TOKEN_FILE"

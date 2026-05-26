@@ -83,18 +83,33 @@ egress IPs across many users; HF Hub's per-IP anonymous rate limit gets hit
 fast (typically on the ESM-C download, which fetches many small files via
 the esm SDK). Anonymous builds work *sometimes* but fail unpredictably with
 `LocalEntryNotFoundError` or `429`. Grab a read-only token at
-<https://huggingface.co/settings/tokens> and export it before building:
+<https://huggingface.co/settings/tokens>.
+
+The build script asks for the token interactively (input hidden, not
+written to shell history). Just run:
 
 ```bash
-export HF_TOKEN=hf_xxx  # in the same shell as build.sh, NOT in ~/.bashrc
+bash containers/build.sh
+# When prompted: paste your HF token, press Enter.
 ```
 
-`build.sh` stages the token to a mode-600 file under `SINGULARITY_TMPDIR`
-and bind-mounts it at `/run/secrets/hf_token:ro` for the build; `%post`
-reads it with shell-trace suppressed so it never lands in the build log.
-The token is unset before the build context is copied to `/opt/protforge`
-and removed from the host on script exit. The image's runtime
-`%environment` does NOT set `HF_TOKEN`, so it never leaks at runtime.
+Or, if you're running non-interactively (sbatch job, CI), provide the
+token via env or flag — both end up in shell history if you type them at
+a prompt, so prefer reading from a secret file:
+
+```bash
+HF_TOKEN="$(< ~/.config/protforge/hf_token)" bash containers/build.sh
+# or:
+bash containers/build.sh --hf-token "$(< ~/.config/protforge/hf_token)"
+```
+
+`build.sh` stages the resolved token to a mode-600 file under
+`SINGULARITY_TMPDIR` and bind-mounts it at `/run/secrets/hf_token:ro` for
+the build; `%post` reads it with shell-trace suppressed so it never lands
+in the build log. The token is unset before the build context is copied
+to `/opt/protforge` and removed from the host on script exit. The image's
+runtime `%environment` does NOT set `HF_TOKEN`, so it never leaks at
+runtime either.
 
 Then one of:
 
