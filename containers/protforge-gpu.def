@@ -31,6 +31,19 @@ From: ubuntu:22.04
 # Order matches "changes least often -> changes most often" so iterating
 # on the codebase doesn't redownload model weights.
 
+%setup
+    # Pre-create the bind-mount target for the optional HF_TOKEN secret
+    # file. Singularity does NOT auto-create file mountpoints — if the
+    # destination doesn't exist in the rootfs by the time %post starts,
+    # `singularity build --bind file:dest` fails with
+    #   "destination ... doesn't exist in container".
+    # We always create an empty mode-600 placeholder; %post uses `-s`
+    # (non-empty test) so the build still works with no token (and just
+    # falls through to the anonymous-download path).
+    mkdir -p "${SINGULARITY_ROOTFS}/run/secrets"
+    : > "${SINGULARITY_ROOTFS}/run/secrets/hf_token"
+    chmod 600 "${SINGULARITY_ROOTFS}/run/secrets/hf_token"
+
 %files
     # Copied last so codebase edits invalidate only the final layer.
     # NOTE: paths are relative to the build context (repo root).
@@ -128,7 +141,7 @@ From: ubuntu:22.04
     # build log, then re-enabled. The token is unset at the end of this
     # block so it doesn't appear in any later command echoes either.
     { set +x; } 2>/dev/null
-    if [ -f /run/secrets/hf_token ]; then
+    if [ -s /run/secrets/hf_token ]; then
         export HF_TOKEN="$(cat /run/secrets/hf_token)"
         echo "[info] HF_TOKEN loaded from /run/secrets/hf_token (authenticated downloads)"
     else
