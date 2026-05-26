@@ -2,27 +2,30 @@
 
 This is a handoff for the next agent working on ProtForge containerization. The current goal is Kempner-first Singularity execution: a user should be able to clone the repo, install the small host-side webapp/Snakemake environment, build or pull the GPU SIF, bind the external MSA/Boltz databases, launch Streamlit, and submit predictions with stable in-container paths.
 
-## Status snapshot — 2026-05-19
+## Status snapshot — 2026-05-26
 
-| # | Title                                | Status     | Notes |
-|---|--------------------------------------|------------|-------|
-| 1 | Build context leakage                | **partial**| `.singularityignore` + smoke `[3/7] Image content` assertion. Allowlist `%files` still open. |
-| 2 | Mutable supply chain                 | **open**   | Defer until next rebuild. |
-| 3 | Snakemake container contract drift   | **done**   | `containers.gpu` fallback; per-stage keys remain as overrides. |
-| 4 | In-container script path mismatch    | **done**   | Rules now call `/opt/protforge/slurm_scripts/run_*.py`. Smoke step 3 guards against regression. |
-| 5 | Bind mounts too broad / writable     | **done**   | `_parse_bind` shell-quotes + validates mode; template defaults DBs to `:ro` at their actual host paths (no `/data/*` indirection in the default — see "Path contract" below). |
-| 6 | Baked weights bypass                 | **done**   | Rules only inject `--env HF_HOME=` when `cache_dir` set; otherwise pass `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`. Template `esm.cache_dir` / `esmfold.cache_dir` now default to empty so a fresh container-mode config uses the SIF baked weights. |
-| 7 | Host webapp env spec                 | **done**   | `requirements-host.txt` + `pyproject.toml` `host` extras. |
-| 8 | E2E test                             | **open**   | Stage-1 still on `containers/TESTING.md`, not scripted. |
+| # | Title                                | Status         | Notes |
+|---|--------------------------------------|----------------|-------|
+| 1 | Build context leakage                | **done***      | `.singularityignore` is the gate. Old May-16 SIF leaked `.git`/`sifs/`/`sing_cache/` only because it predates the ignore file (May 19). Smoke `[3/7]` will pass after rebuild. Allowlist `%files` deferred (cost > value for current iteration speed). |
+| 2 | Mutable supply chain                 | **deferred**   | User opted out (2026-05-26): not pinning HF revision, CUDA digest, mmseqs sha for now. Re-open when reproducibility becomes a higher-priority constraint. |
+| 3 | Snakemake container contract drift   | **done**       | `containers.gpu` fallback; per-stage keys remain as overrides. |
+| 4 | In-container script path mismatch    | **done**       | Rules call `/opt/protforge/slurm_scripts/run_*.py`. Smoke step 3 guards against regression. |
+| 5 | Bind mounts too broad / writable     | **done**       | `_parse_bind` shell-quotes + validates mode; template defaults DBs to `:ro` at their actual host paths. |
+| 6 | Baked weights bypass                 | **done**       | Rules inject `--env HF_HOME=` only when `cache_dir` set; otherwise `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`. Template `esm.cache_dir` / `esmfold.cache_dir` default empty. |
+| 7 | Host webapp env spec                 | **done**       | `requirements-host.txt` + `pyproject.toml` `host` extras. |
+| 8 | E2E test                             | **open**       | Stage-1 E2E (input → MSA → Boltz → ESMFold → ESM) agreed as the right target; not scripted yet. |
+
+`*` Pending rebuild verification on cluster.
+
+### 2026-05-26 changes
+
+- **ESMFold weight prefetch fixed.** `.def` now uses `huggingface_hub.snapshot_download(repo_id='facebook/esmfold_v1', allow_patterns=['pytorch_model.bin','*.json','*.txt','*.model'])` instead of `EsmForProteinFolding.from_pretrained(..., use_safetensors=True)`. The previous form left the snapshot dir with only tokenizer/config files (smoke step 6 OSError). Resolves the blocker on the next rebuild.
+- **Base image switched: `nvidia/cuda:12.4.1-runtime-ubuntu22.04` → `ubuntu:22.04`.** Rationale: PyTorch's `cu124` wheels bundle libcudart/libcublas/libcudnn under `torch/lib/`, so the CUDA layer was duplicated weight (~2 GB). The NVIDIA driver libs come from `singularity exec --nv` at runtime; Triton ships its own ptxas. Host `cuda/cudnn` modules remain in the bash/conda fallback (`workflow/rules/*.smk` `else` branches), not in container mode. Smoke step 2 (`torch=…cu124, cuda=True`) is still expected to pass — the test target is unchanged.
 
 ### Newly found in 2026-05-19 review (now addressed)
 
 - **Path contract drift.** First-pass `bind_paths` redirected to `/data/colabfold_db` / `/data/boltz_db` (matching the def file's `%environment` comment), but stage configs (`msa.mmseq2_db`, `boltz.cache_dir`, ...) still passed host paths. Inside the container only `/data/*` would be visible, so the rule would call `colabfold_search` with a path that didn't exist. **Resolved** by switching the template default to "Design A": bind each DB at the SAME path inside the container, read-only. Stage configs work unchanged in container mode. The alternate `/data/*` convention is documented as an opt-in; the def file's existing comments remain valid for users who flip the contract.
 - **Shell-quoting holes.** Initial pass only quoted bind args. **Resolved** by also `shlex.quote`-ing the SIF path in `container_cmd()`, shell-quoting `cache_dir` inside `container_cache_env` / `cache_dir_arg`, and rejecting `containers.runtime` outside `{auto,singularity,apptainer}` (it's interpolated into a bash command line, so cannot be free-form).
-
-### Cluster-side prereq (not in this brief, but blocks smoke)
-
-Smoke step `[6/7] End-to-end ESMFold fold` will keep failing until the def-file HF prefetch actually persists `pytorch_model.bin` or `model.safetensors` into `models--facebook--esmfold_v1/snapshots/`. Current SIF has only the tokenizer files there. Best fixed in the same rebuild as #2 (supply-chain pins).
 
 The remainder of this document is the original brief, kept verbatim for context. Items above supersede the recommendations below where they overlap.
 

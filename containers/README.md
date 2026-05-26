@@ -15,7 +15,13 @@ NOT baked (bind-mount at runtime):
 - ColabFold MSA databases (~700 GB) → mount to `/data/colabfold_db`.
 - Boltz model checkpoint (~5 GB) → mount to `/data/boltz_db`.
 
-Total SIF size: ~15 GB.
+Base image: `ubuntu:22.04`. The CUDA runtime + cuDNN come from the
+`torch+cu124` wheel (which bundles them under `torch/lib/`); the NVIDIA
+driver libs are injected at runtime by `singularity exec --nv` from the host.
+No host `module load cuda/cudnn` is needed in container mode — those only
+apply to the bash/conda fallback path documented in `workflow/rules/*.smk`.
+
+Total SIF size: ~12 GB.
 
 ## Build / fetch on Kempner
 

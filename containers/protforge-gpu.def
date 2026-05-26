@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+From: ubuntu:22.04
 
 # ProtForge GPU container — single image for all GPU stages
 # (MSA / Boltz / ESM-C / ESMFold). PDAnalysis (ES) is excluded; it ships
@@ -12,6 +12,20 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 # NOT baked (bind-mounted at runtime):
 #   - ColabFold MSA databases (~700 GB)  -> /data/colabfold_db
 #   - Boltz model checkpoint  (~5 GB)    -> /data/boltz_db
+#
+# Why ubuntu:22.04 and NOT nvidia/cuda as the base:
+#   - PyTorch's `cu124` wheels ship their own libcudart / libcublas /
+#     libcudnn / libcurand etc. under torch/lib/. Re-installing CUDA at
+#     the base layer is ~2 GB of duplicated libraries that PyTorch ignores.
+#   - The NVIDIA driver libs (libnvidia-*.so, libcuda.so.1) are injected
+#     at runtime by `singularity exec --nv` from the host driver. The
+#     container doesn't need its own driver, and we never compile CUDA
+#     code at runtime (Triton ships its own ptxas).
+#   - Host modules `cuda/...`/`cudnn/...` from the Kempner module system
+#     are unused in container mode — they only matter for the bash/conda
+#     fallback path (see workflow/rules/*.smk `else` branches).
+#   - The non-CUDA base saves ~2 GB of image size and removes the CUDA
+#     version pin from a layer that doesn't actually need it.
 #
 # Layer order matters: each %post block roughly = one Docker layer.
 # Order matches "changes least often -> changes most often" so iterating
@@ -54,6 +68,11 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
     # PyTorch first (cu124 wheels). All downstream tools pull torch as a dep,
     # so installing it explicitly here pins the version.
+    #
+    # The cu124 wheels are self-contained: they bundle libcudart/libcublas/
+    # libcudnn under torch/lib/. That's why this image starts from
+    # ubuntu:22.04 (not nvidia/cuda) — torch carries the CUDA runtime, and
+    # `singularity exec --nv` injects the driver libs from the host.
     pip3 install --no-cache-dir \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu124
@@ -100,15 +119,34 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     # -----------------------------------------------------------------
     mkdir -p /opt/weights/hf /opt/weights/torch
 
-    # ESMFold weights via HF.
-    # use_safetensors=True pins the HF resolver to *.safetensors only. The
-    # facebook/esmfold_v1 repo ships both pytorch_model.bin (8.44 GB) and
-    # model.safetensors (8.44 GB); without this flag transformers will pull
-    # both, doubling download time and image size by ~8.4 GB.
+    # ESMFold weights via huggingface_hub.snapshot_download.
+    #
+    # Why not from_pretrained: calling
+    # `EsmForProteinFolding.from_pretrained('facebook/esmfold_v1',
+    # use_safetensors=True)` at build time leaves the cache snapshot dir with
+    # ONLY tokenizer/config files — no weight file. At runtime that triggers
+    # transformers' auto_conversion path, which tries to hit huggingface.co
+    # and dies under HF_HUB_OFFLINE=1 (smoke step 6 failure). Most likely
+    # cause: facebook/esmfold_v1 doesn't ship model.safetensors and the
+    # use_safetensors=True branch never materialises the .bin into the
+    # snapshot symlink farm.
+    #
+    # snapshot_download is the contract we actually want: pull a fixed set
+    # of files into the HF cache as real symlinks under
+    # models--facebook--esmfold_v1/snapshots/<sha>/, with no Python-object
+    # instantiation involved.
+    #
+    # allow_patterns: pytorch_model.bin (8.44 GB, the only weight artifact
+    # facebook/esmfold_v1 actually publishes) plus config + tokenizer.
+    # Explicitly excluding *.safetensors keeps the image one weight-file
+    # lean even if the upstream repo adds a safetensors mirror later;
+    # EsmForProteinFolding loads .bin fine.
     HF_HOME=/opt/weights/hf python3 -c "\
-from transformers import AutoTokenizer, EsmForProteinFolding; \
-AutoTokenizer.from_pretrained('facebook/esmfold_v1'); \
-EsmForProteinFolding.from_pretrained('facebook/esmfold_v1', low_cpu_mem_usage=True, use_safetensors=True)"
+from huggingface_hub import snapshot_download; \
+snapshot_download(\
+    repo_id='facebook/esmfold_v1', \
+    allow_patterns=['pytorch_model.bin', '*.json', '*.txt', '*.model'], \
+)"
 
     # ESM-C 600M weights via the esm SDK
     # The SDK caches under HF hub by default; HF_HOME picks it up.
@@ -150,6 +188,11 @@ ESMC.from_pretrained('esmc_600m')"
 %help
     ProtForge GPU container — bundles all GPU-stage tools and default model
     weights for the ProtForge pipeline.
+
+    GPU model: ubuntu:22.04 base + torch+cu124 wheels (which ship their own
+    CUDA runtime). At runtime, `singularity exec --nv` injects the host's
+    NVIDIA driver libs. No host `module load cuda/cudnn` is needed in
+    container mode — those modules only apply to the bash/conda fallback.
 
     Quickstart (Kempner):
         singularity exec --nv \
