@@ -217,7 +217,36 @@ set -e
 trap - INT
 
 log_section "Real run finished — exit code ${RC}"
+
+# Centralise every log we produced into ${RUN_DIR}/all_logs/ so there's ONE
+# directory to inspect or ship for debugging. Three sources:
+#   1. Rule {log} outputs  (output/logs/<stage>/*.log)  — colabfold/boltz/esm traces
+#   2. SLURM worker logs   (job_logs/**/*.log)          — snakemake's per-job wrapper
+#   3. e2e driver log      (e2e.log)                    — already in ${RUN_DIR}
+# Copies (not symlinks) so the dir is self-contained and rsyncable.
+ALL_LOGS="${RUN_DIR}/all_logs"
+mkdir -p "$ALL_LOGS"
+log_section "Centralising logs into ${ALL_LOGS}"
+if [[ -d "${OUTPUT_DIR}/logs" ]]; then
+    while IFS= read -r -d '' f; do
+        rel="${f#${OUTPUT_DIR}/logs/}"
+        flat="rule_${rel//\//_}"
+        cp "$f" "${ALL_LOGS}/${flat}"
+    done < <(find "${OUTPUT_DIR}/logs" -type f -name '*.log' -print0 2>/dev/null)
+fi
+if [[ -d "$LOG_DIR" ]]; then
+    while IFS= read -r -d '' f; do
+        rel="${f#${LOG_DIR}/}"
+        flat="slurm_${rel//\//_}"
+        cp "$f" "${ALL_LOGS}/${flat}"
+    done < <(find "$LOG_DIR" -type f -name '*.log' -print0 2>/dev/null)
+fi
+cp "$E2E_LOG" "${ALL_LOGS}/e2e.log"
+echo "Collected $(find "$ALL_LOGS" -maxdepth 1 -type f | wc -l | tr -d ' ') file(s):"
+ls -1 "$ALL_LOGS"
+
 if [[ $RC -eq 0 ]]; then
+    echo ""
     echo "SUCCESS. Outputs at ${OUTPUT_DIR}"
     if [[ -f "${OUTPUT_DIR}/benchmark_summary.txt" ]]; then
         echo ""
@@ -225,10 +254,11 @@ if [[ $RC -eq 0 ]]; then
         cat "${OUTPUT_DIR}/benchmark_summary.txt"
     fi
 else
-    echo "FAILED. Inspect (in this order — rule logs have the actual error):"
-    echo "  ${OUTPUT_DIR}/logs/<stage>/*.log    (rule's own stdout/stderr — colabfold/boltz/esm traces)"
-    echo "  ${LOG_DIR}/*.log                    (SLURM-side worker logs, via --slurm-logdir)"
-    echo "  ${E2E_LOG}                          (this script + snakemake driver)"
+    echo ""
+    echo "FAILED. Everything you need is in ONE place:"
+    echo "  ${ALL_LOGS}/"
+    echo ""
+    echo "Most likely the real error is in a 'rule_msa_*' or 'rule_boltz_*' file there."
 fi
 
 echo ""
