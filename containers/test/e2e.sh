@@ -211,7 +211,12 @@ log_section "Launching real snakemake run"
 # fails. The trap is belt-and-braces in case of SIGINT during a long run.
 trap 'log_section "Interrupted (SIGINT); see ${E2E_LOG} and ${LOG_DIR}"; exit 130' INT
 set +e
-snakemake --profile profiles/slurm/ --configfile "$CONFIG" --slurm-logdir "$LOG_DIR"
+# --restart-times 0: this is a baseline/debug E2E. Retries truncate the
+# rule's {log} on each attempt (`exec > {log}`), so the first-attempt error
+# gets overwritten and we end up debugging a stale-state attempt-3 trace.
+# Disabling retries here gives a clean single-attempt failure. Profile
+# default (`restart-times: 2`) still applies to production runs.
+snakemake --profile profiles/slurm/ --configfile "$CONFIG" --slurm-logdir "$LOG_DIR" --restart-times 0
 RC=$?
 set -e
 trap - INT
