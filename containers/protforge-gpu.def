@@ -1,9 +1,22 @@
 Bootstrap: docker
 From: ubuntu:22.04
 
-# ProtForge GPU container — single image for all GPU stages
-# (MSA / Boltz / ESM-C / ESMFold). PDAnalysis (ES) is excluded; it ships
-# in a separate MPI image.
+# ProtForge GPU container — compute-only artefact for the Snakemake pipeline.
+#
+# Each Snakemake-submitted SLURM stage invokes this SIF on a GPU compute node
+# via `singularity exec --nv ... protforge.sif python <stage_script>`. The
+# orchestrator (Snakemake + Streamlit webapp) runs on the host in a small
+# Python venv (requirements-host.txt) — it is NOT inside the container.
+#
+# Why orchestrator-on-host: Snakemake's slurm executor calls `sbatch` directly,
+# which inside a Singularity container would need a brittle bind list for the
+# Munge socket, /etc/slurm, libslurm, and the slurm binaries. The community
+# pattern (GATK, Snakemake, Nextflow on HPC) is uniformly "orchestrator on
+# host, compute in container." See Lab/protforge/decisions.md for the full
+# rationale and the rejected all-in-one design.
+#
+# Covers MSA / Boltz / ESM-C / ESMFold. PDAnalysis (ES) is excluded; it
+# ships in a separate MPI image.
 #
 # Bake list:
 #   - Tools: boltz, colabfold_search, mmseqs2, esm SDK, transformers
@@ -12,6 +25,7 @@ From: ubuntu:22.04
 #   - ColabFold MSA databases (~700 GB)  -> /data/colabfold_db
 #   - Boltz model checkpoint  (~5 GB)    -> /data/boltz_db
 #   - ESM/ESMFold HF cache              -> /models/hf
+#   - User input/output dirs            -> rule-level binds (see Snakefile)
 #
 # Why ubuntu:22.04 and NOT nvidia/cuda as the base:
 #   - PyTorch's `cu124` wheels ship their own libcudart / libcublas /
@@ -96,6 +110,11 @@ From: ubuntu:22.04
     pip3 install --no-cache-dir \
         pyyaml pandas tqdm
 
+    # NB: Snakemake, streamlit, and the slurm executor plugin are NOT installed
+    # in the SIF — they live on the host (requirements-host.txt) so the
+    # orchestrator can invoke `sbatch` natively. See the top-of-file comment
+    # for why, and Lab/protforge/decisions.md for the design history.
+
     # Pin numpy to the compatible window for boltz + colabfold + numba.
     # - colabfold (current main) declares: numpy>=2.0.2,<3.0
     # - numba (transitive dep of boltz) refuses: NumPy 2.2+ (runtime check)
@@ -112,15 +131,50 @@ From: ubuntu:22.04
     # consistently across clusters.
     mkdir -p /models/hf /models/torch /data/protforge
 
+    # -----------------------------------------------------------------
+    # Build manifest: a self-describing record of what landed in the SIF.
+    # Readable with `singularity exec protforge.sif cat /opt/protforge/container-build-manifest.txt`.
+    # Pair this with `singularity inspect $SIF` for the %labels metadata.
+    # Each version capture uses `|| echo unknown` so a single missing tool
+    # doesn't abort the build (`set -e` is on).
+    # -----------------------------------------------------------------
+    {
+        echo "ProtForge container build manifest"
+        echo "===================================="
+        echo "Build timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        echo "Base image:      ubuntu:22.04"
+        echo ""
+        echo "## Tool versions"
+        echo "mmseqs:        $(mmseqs version 2>&1 | head -1 || echo unknown)"
+        echo "boltz:         $(boltz --help 2>&1 | head -1 || echo unknown)"
+        echo "python:        $(python3 --version 2>&1 || echo unknown)"
+        echo ""
+        echo "## Python packages (pip freeze)"
+        pip3 freeze 2>&1 || echo "(pip freeze failed)"
+    } > /opt/protforge/container-build-manifest.txt
+
 %environment
     # ProtForge cache root: host bind-mount target convention.
     # Override at runtime with: singularity exec --env PROTFORGE_HOME=/path ...
     export PROTFORGE_HOME=${PROTFORGE_HOME:-/data/protforge}
 
+    # Marker so application code / Snakefile rules can branch on container
+    # mode without sniffing for /opt/protforge etc. Always set inside the SIF.
+    export PROTFORGE_CONTAINER=1
+
     # Default model caches are host bind-mount targets. Populate them with
     # scripts/download_models.py before running compute jobs.
     export HF_HOME=${HF_HOME:-/models/hf}
     export TORCH_HOME=${TORCH_HOME:-/models/torch}
+
+    # Force HF offline mode at runtime. The mounted cache is read-only inside
+    # the SIF; offline mode skips network lookups and reads cached files
+    # directly. This also turns "cache misconfigured" into a fail-fast error
+    # instead of a silent re-download from a compute node (which is forbidden
+    # on some Kempner partitions). Override (e.g., for download_models.py
+    # invocations) with `--env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0`.
+    export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+    export TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
 
     # Bind-mount targets that the rules expect (host paths bound to these):
     #   /data/colabfold_db   <- ColabFold MSA DBs
@@ -131,33 +185,47 @@ From: ubuntu:22.04
     export PYTHONPATH=/opt/protforge${PYTHONPATH:+:$PYTHONPATH}
 
 %runscript
-    # Default: forward args to whatever was requested.
-    # Usage:
-    #   singularity exec --nv protforge-gpu.sif boltz predict ...
-    #   singularity exec --nv protforge-gpu.sif colabfold_search ...
+    # Passthrough: forward args to whatever was requested. This is a
+    # compute-only artefact — the webapp + Snakemake live on the host and
+    # invoke per-stage commands via `singularity exec`, which bypasses
+    # %runscript entirely. `singularity run protforge.sif bash` still drops
+    # into a shell for debugging.
+    #
+    # Usage (called by Snakemake, not by hand):
+    #   singularity exec --nv protforge-gpu.sif python /opt/protforge/slurm_scripts/run_esm.py ...
     exec "$@"
 
 %labels
     Author thomasbush52@gmail.com
-    Version 0.1.0
-    Description ProtForge GPU container (MSA + Boltz + ESM-C + ESMFold)
+    Version 0.2.0
+    Description ProtForge GPU compute container (MSA + Boltz + ESM-C + ESMFold)
+    Role compute
 
 %help
-    ProtForge GPU container — bundles all GPU-stage tools for the ProtForge
-    pipeline. Model weights and databases are bind-mounted at runtime.
+    ProtForge GPU container — compute-only artefact for the ProtForge
+    Snakemake pipeline. Model weights and databases are bind-mounted at
+    runtime; the SIF supplies the Python tools (boltz, colabfold_search,
+    mmseqs, esm SDK, transformers).
+
+    The orchestrator (Streamlit webapp + Snakemake + slurm executor plugin)
+    runs on the host in a small Python venv — NOT inside this SIF. See
+    requirements-host.txt and webapp/connect.sh. Rationale:
+    Lab/protforge/decisions.md (sbatch / Munge can't be cleanly bound into
+    Singularity; community pattern is orchestrator-on-host).
 
     GPU model: ubuntu:22.04 base + torch+cu124 wheels (which ship their own
     CUDA runtime). At runtime, `singularity exec --nv` injects the host's
     NVIDIA driver libs. No host `module load cuda/cudnn` is needed in
-    container mode — those modules only apply to the bash/conda fallback.
+    container mode — those modules only apply to the bash/conda fallback path.
 
-    Quickstart (Kempner):
+    Quickstart (invoked by Snakemake, not by hand):
         singularity exec --nv \
-            -B /n/holylfs06/.../colabfold/databases:/data/colabfold_db \
-            -B /n/holylfs06/.../boltz/boltz_db:/data/boltz_db \
+            -B /n/holylfs06/.../colabfold/databases:/data/colabfold_db:ro \
+            -B /n/holylfs06/.../boltz/boltz_db:/data/boltz_db:ro \
             -B /n/holylfs06/.../protforge/models/hf:/models/hf:ro \
             -B "$PWD":"$PWD" \
             protforge-gpu.sif \
-            <stage_command>
+            python /opt/protforge/slurm_scripts/run_esm.py ...
 
-    See containers/README.md for full bind-mount setup.
+    Build manifest (what got baked in this image):
+        singularity exec protforge.sif cat /opt/protforge/container-build-manifest.txt

@@ -6,6 +6,18 @@ Run on a node with internet access before submitting containerized jobs:
 
 The resulting cache should be bind-mounted read-only into the SIF at
 `/models/hf` and used as `HF_HOME` by ESM-C and ESMFold rules.
+
+Revision pinning
+----------------
+By default, both repos resolve to whatever `main` points at right now. The
+resolved commit SHA is logged so you can copy it into a pinned config:
+
+    python scripts/download_models.py \
+        --esmfold-revision <sha> --esmc-revision <sha>
+
+Pinning is the supply-chain control: it guarantees the next user (or the
+next rebuild) gets bit-for-bit identical weights, instead of whatever
+upstream pushed to HEAD in the meantime.
 """
 
 from __future__ import annotations
@@ -34,22 +46,50 @@ def _load_token(token_file: Path | None) -> None:
         os.environ["HF_TOKEN"] = token
 
 
-def _download_esmfold() -> None:
+def _resolve_revision(repo_id: str, revision: str) -> str:
+    """Resolve a branch name (e.g. 'main') to its current commit SHA.
+
+    Returning the SHA — rather than the branch — locks the snapshot in time:
+    even if HEAD moves between this call and snapshot_download, we download
+    what we resolved. The SHA is also printed so the user can pin it later.
+    """
+    if revision != "main" and len(revision) >= 7:
+        # Already looks like a SHA (or a tag the user explicitly chose).
+        # Don't second-guess them — pass through and let HF handle it.
+        return revision
+
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    info = api.repo_info(repo_id=repo_id, revision=revision)
+    resolved = info.sha
+    print(f"Resolved {repo_id}@{revision} -> {resolved}", flush=True)
+    return resolved
+
+
+def _download_esmfold(revision: str) -> str:
+    """Download ESMFold weights at the resolved revision. Returns the SHA."""
     from huggingface_hub import snapshot_download
 
+    sha = _resolve_revision(ESMFOLD_REPO, revision)
     # ESMFold publishes pytorch_model.bin rather than safetensors. Pulling the
     # snapshot directly avoids constructing the model on the download node.
     snapshot_download(
         repo_id=ESMFOLD_REPO,
+        revision=sha,
         allow_patterns=["pytorch_model.bin", "*.json", "*.txt", "*.model"],
     )
+    return sha
 
 
-def _download_esmc() -> None:
+def _download_esmc(revision: str) -> str:
+    """Download ESM-C weights at the resolved revision. Returns the SHA."""
     from huggingface_hub import snapshot_download
 
+    sha = _resolve_revision(ESMC_REPO, revision)
     # The ESM SDK's ESMC.from_pretrained("esmc_600m") resolves this snapshot.
-    snapshot_download(repo_id=ESMC_REPO)
+    snapshot_download(repo_id=ESMC_REPO, revision=sha)
+    return sha
 
 
 def main() -> None:
@@ -77,6 +117,24 @@ def main() -> None:
         default=["all"],
         help="Models to download. Default: all.",
     )
+    parser.add_argument(
+        "--esmfold-revision",
+        default="main",
+        help=(
+            f"Pin {ESMFOLD_REPO} to this revision (branch, tag, or commit SHA). "
+            "Default 'main' resolves to the current HEAD SHA and logs it. "
+            "Pass a SHA to lock the download."
+        ),
+    )
+    parser.add_argument(
+        "--esmc-revision",
+        default="main",
+        help=(
+            f"Pin {ESMC_REPO} to this revision (branch, tag, or commit SHA). "
+            "Default 'main' resolves to the current HEAD SHA and logs it. "
+            "Pass a SHA to lock the download."
+        ),
+    )
     args = parser.parse_args()
 
     if args.cache_dir is None:
@@ -88,6 +146,12 @@ def main() -> None:
     cache_dir = args.cache_dir.expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["HF_HOME"] = str(cache_dir)
+    # Belt-and-suspenders: this script needs network access. If the user
+    # invoked us inside the SIF (where HF_HUB_OFFLINE defaults to 1), the
+    # snapshot_download below would fail with "offline mode". Clear the flag
+    # for this process.
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    os.environ.pop("TRANSFORMERS_OFFLINE", None)
     _load_token(args.token_file)
 
     selected = set(args.models)
@@ -95,16 +159,21 @@ def main() -> None:
         selected = {"esmfold", "esmc"}
 
     print(f"HF_HOME={cache_dir}", flush=True)
+    resolved: dict[str, str] = {}
     if "esmfold" in selected:
-        print(f"Downloading {ESMFOLD_REPO}...", flush=True)
-        _download_esmfold()
+        print(f"Downloading {ESMFOLD_REPO}@{args.esmfold_revision}...", flush=True)
+        resolved[ESMFOLD_REPO] = _download_esmfold(args.esmfold_revision)
     if "esmc" in selected:
-        print(f"Downloading {ESMC_REPO}...", flush=True)
-        _download_esmc()
+        print(f"Downloading {ESMC_REPO}@{args.esmc_revision}...", flush=True)
+        resolved[ESMC_REPO] = _download_esmc(args.esmc_revision)
 
     hub_dir = cache_dir / "hub"
     total = sum(p.stat().st_size for p in hub_dir.rglob("*") if p.is_file()) if hub_dir.exists() else 0
     print(f"Model cache ready: {hub_dir} ({total / 1e9:.2f} GB)", flush=True)
+    if resolved:
+        print("Resolved revisions (pin these to lock the cache contents):", flush=True)
+        for repo, sha in resolved.items():
+            print(f"  {repo} @ {sha}", flush=True)
 
 
 if __name__ == "__main__":
