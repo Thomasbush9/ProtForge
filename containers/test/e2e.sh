@@ -114,7 +114,7 @@ echo "Output:   ${OUTPUT_DIR}"
 echo "SIF:      ${SIF}"
 echo "Config:   ${CONFIG}"
 echo "Log:      ${E2E_LOG}"
-echo "Launch:   $([[ $LAUNCH == 1 ]] && echo yes || echo no (dry-run only))"
+echo "Launch:   $([[ $LAUNCH == 1 ]] && echo 'yes' || echo 'no (dry-run only)')"
 
 # Bind paths — host:host throughout so config paths work unchanged inside the
 # container. No /n/home06 by design (per 2026-05-28 decision).
