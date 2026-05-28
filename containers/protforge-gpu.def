@@ -94,7 +94,14 @@ From: ubuntu:22.04
         --index-url https://download.pytorch.org/whl/cu124
 
     # Boltz (structure prediction)
-    pip3 install --no-cache-dir boltz
+    # cuequivariance-torch: NVIDIA accelerated triangle-mult kernel that
+    # boltz/model/layers/triangular_mult.py imports at runtime. Boltz 2.2.1's
+    # pyproject under-declares it (optional in metadata, required at runtime
+    # via in-function import). Without it, predict_step crashes inside the
+    # pairformer trunk with ModuleNotFoundError. Discovered 2026-05-28 in
+    # stage-1 E2E (Boltz chunk_0 / chunk_1). Will be pinned by PR-2's
+    # requirements-container.lock once that lands.
+    pip3 install --no-cache-dir boltz cuequivariance-torch
 
     # ESM-C SDK (used by run_esm.py)
     # NB: esm SDK's esm/sdk/base_forge_client.py imports httpx unconditionally
