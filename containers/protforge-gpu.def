@@ -65,10 +65,16 @@ From: ubuntu:22.04
     # -----------------------------------------------------------------
     # Layer 2: mmseqs2 binary (changes when bumping MMseqs2)
     # -----------------------------------------------------------------
+    # GPU build is mandatory — colabfold_search is invoked with `--gpu 1`
+    # in workflow/rules/msa.smk; the AVX2 (CPU-only) variant aborts at the
+    # prefilter with "MMseqs2 was compiled without CUDA support". The GPU
+    # tarball is a strict functional superset (falls back to AVX2 paths
+    # when --gpu 0). Discovered in stage-1 E2E baseline 2026-05-28;
+    # tracked as audit H0.
     cd /opt
-    wget -q https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz
-    tar xzf mmseqs-linux-avx2.tar.gz
-    rm mmseqs-linux-avx2.tar.gz
+    wget -q https://mmseqs.com/latest/mmseqs-linux-gpu.tar.gz
+    tar xzf mmseqs-linux-gpu.tar.gz
+    rm mmseqs-linux-gpu.tar.gz
     ln -sf /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs
 
     # -----------------------------------------------------------------
