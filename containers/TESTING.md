@@ -10,6 +10,7 @@ Workspace layout assumed throughout:
 $TBUSH/container/
 ├── ProtForge/        <- repo (REPO_ROOT)
 ├── sifs/             <- built SIFs
+├── models/hf/        <- mounted ESM-C + ESMFold HF cache
 ├── sing_cache/       <- singularity layer cache
 └── sing_tmp/         <- build staging (created on demand)
 ```
@@ -30,7 +31,8 @@ Before testing anything, confirm the SIF exists and is non-trivially sized.
 
 ```bash
 ls -lh "$SIF"
-# Expect ~10-15 GB. If missing, find anywhere it might have landed:
+# Expect multi-GB, but smaller than the old fat image with baked weights.
+# If missing, find anywhere it might have landed:
 find "$TBUSH" -name 'protforge-gpu.sif' -exec ls -lh {} \;
 ```
 
@@ -53,11 +55,18 @@ singularity inspect "$SIF"
 
 ---
 
-## Step 1 — Smoke test (no DB bind-mounts)
+## Step 1 — Smoke test (model bind only, no DB bind-mounts)
 
-Five-step automated check: GPU visible → PyTorch+CUDA → tools importable →
-baked weights load → ESMFold folds a 49 aa peptide end-to-end. Runs entirely
-on baked content, so it doesn't exercise MSA / Boltz / bind-mounts.
+Automated check: GPU visible → PyTorch+CUDA → tools importable → mounted
+weights load → ESMFold folds a 49 aa peptide end-to-end. It exercises the
+model-cache bind, but not MSA / Boltz DB binds.
+
+Populate the model cache once before running:
+
+```bash
+cd "$PROTFORGE_ROOT/ProtForge"
+python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+```
 
 Get a GPU node first:
 
@@ -73,16 +82,16 @@ bash containers/test/smoke.sh
 ```
 
 Pass criterion: prints `=== ALL SMOKE TESTS PASSED ===` at the end.
-Each step prints a `=== [N/5] ... ===` header, so failures are localized.
+Each step prints a `=== [N/7] ... ===` header, so failures are localized.
 
 Typical runtime: ~3-5 min. ESMFold step dominates (~2 min on H100).
 
-**If it fails**, paste the failing `=== [N/5] ===` block. Common causes:
+**If it fails**, paste the failing `=== [N/7] ===` block. Common causes:
 - step 1 (`nvidia-smi`): not on a GPU node, or `--nv` not honored.
 - step 2 (`torch.cuda`): CUDA driver/runtime mismatch.
-- step 3 (tools): missing pip install in `%post` (e.g., the httpx case from 2026-05-14).
-- step 4 (weights): HF cache missing — `HF_HOME` not pointing at `/opt/weights/hf`.
-- step 5 (ESMFold end-to-end): OOM, bad CUDA, or the model failed to load.
+- step 4 (tools): missing pip install in `%post` (e.g., the httpx case from 2026-05-14).
+- step 5 (weights): mounted HF cache missing or not bound to `/models/hf`.
+- step 6 (ESMFold end-to-end): OOM, bad CUDA, or the model failed to load.
 
 ---
 
@@ -101,6 +110,7 @@ production jobs will use, minus the webapp layer.
 |---|---|---|
 | `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases` | `/data/colabfold_db` | ro |
 | `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db` | `/data/boltz_db` | ro |
+| `$PROTFORGE_ROOT/models/hf` | `/models/hf` | ro |
 | `$PWD` (working dir) | `$PWD` | rw |
 
 ### Test sequence
@@ -153,21 +163,18 @@ boltz:
 esm:
   num_chunks: 1
   array_max_concurrency: 1
-  cache_dir: /opt/weights/hf
+  cache_dir: /models/hf
 
 esmfold:
   input_type: yaml
   num_chunks: 1
   array_max_concurrency: 1
-  cache_dir: /opt/weights/hf
+  cache_dir: /models/hf
 
 containers:
   runtime: auto
-  colabfold: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
-  boltz:     /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
-  esm:       /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
-  esmfold:   /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db,/n/holylfs06,/n/home06"
+  gpu: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
+  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db:ro,/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/models/hf:/models/hf:ro,/n/holylfs06,/n/home06"
 
 slurm:
   log_dir: containers/test/e2e_out/job_logs
@@ -177,10 +184,9 @@ slurm:
 ```
 
 Notes:
-- All 4 GPU `containers.*` fields point at the same SIF — see audit item H4
-  (schema mismatch); collapsing to `containers.gpu:` is pending.
-- `containers.bind_paths` now uses `host:container` indirection for the DBs
-  (the comma-separated parser already supports this).
+- `containers.gpu` points all GPU stages at the same SIF.
+- `containers.bind_paths` uses `host:container:mode` indirection for DBs and
+  model caches.
 - Tiny `recycling_steps` / `diffusion_samples` are for test speed; restore
   production values for real runs.
 

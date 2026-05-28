@@ -217,7 +217,7 @@ ESMFold (`facebook/esmfold_v1` via HuggingFace) predicts structures from sequenc
 
 ```bash
 conda activate /n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold
-python scripts/download_esmfold.py \
+python scripts/download_models.py --models esmfold \
     --cache-dir /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
 ```
 

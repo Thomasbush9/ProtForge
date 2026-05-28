@@ -1598,7 +1598,7 @@ with tab_config:
             ),
             key="esmfold_cache_dir",
             help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
-                 "scripts/download_esmfold.py on a login node.",
+                 "scripts/download_models.py on a login node.",
         )
 
         _esmfold_use_cutoff = st.toggle(

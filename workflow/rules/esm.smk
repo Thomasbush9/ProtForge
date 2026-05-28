@@ -23,13 +23,14 @@ ESM_CHUNKS_TSV = f"{ESM_CHUNKS}/chunks.tsv"
 
 
 # Container-mode env injection: when the user sets esm.cache_dir, propagate
-# TORCH_HOME + HF_HOME so the in-container ESM SDK looks at the user's host
-# cache. Otherwise force HF offline so the SIF's baked /opt/weights/hf is
-# used. Built once at config load — values are shell-quoted because the
-# string is interpolated verbatim into the rule's bash line.
+# TORCH_HOME + HF_HOME so the in-container ESM SDK reads the mounted host
+# cache. Otherwise force offline mode and use the SIF's default /models/*
+# mount points. Built once at config load — values are shell-quoted because
+# the string is interpolated verbatim into the rule's bash line.
 _ESM_CONTAINER_ENV = (
     f"--env TORCH_HOME={_shlex.quote(ESM_CFG['cache_dir'])} "
-    f"--env HF_HOME={_shlex.quote(ESM_CFG['cache_dir'])}"
+    f"--env HF_HOME={_shlex.quote(ESM_CFG['cache_dir'])} "
+    f"--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
     if ESM_CFG.get("cache_dir")
     else "--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
 )

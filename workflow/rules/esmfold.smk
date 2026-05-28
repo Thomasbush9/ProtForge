@@ -38,11 +38,12 @@ ESMFOLD_CHUNKS_TSV = f"{ESMFOLD_CHUNKS}/chunks.tsv"
 
 
 # Container-mode env injection: HF_HOME override when the user pinned a host
-# cache, otherwise force HF offline so the SIF's baked /opt/weights/hf wins.
-# Built once at config load; values are shell-quoted because the string is
-# interpolated verbatim into the rule's bash line.
+# cache, otherwise force offline mode and use the SIF's default /models/hf
+# mount point. Built once at config load; values are shell-quoted because the
+# string is interpolated verbatim into the rule's bash line.
 _ESMFOLD_CONTAINER_ENV = (
-    f"--env HF_HOME={_shlex.quote(ESMFOLD_CFG['cache_dir'])}"
+    f"--env HF_HOME={_shlex.quote(ESMFOLD_CFG['cache_dir'])} "
+    f"--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
     if ESMFOLD_CFG.get("cache_dir")
     else "--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1"
 )

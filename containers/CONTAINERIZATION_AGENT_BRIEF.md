@@ -11,7 +11,7 @@ This is a handoff for the next agent working on ProtForge containerization. The 
 | 3 | Snakemake container contract drift   | **done**       | `containers.gpu` fallback; per-stage keys remain as overrides. |
 | 4 | In-container script path mismatch    | **done**       | Rules call `/opt/protforge/slurm_scripts/run_*.py`. Smoke step 3 guards against regression. |
 | 5 | Bind mounts too broad / writable     | **done**       | `_parse_bind` shell-quotes + validates mode; template defaults DBs to `:ro` at their actual host paths. |
-| 6 | Baked weights bypass                 | **done**       | Rules inject `--env HF_HOME=` only when `cache_dir` set; otherwise `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`. Template `esm.cache_dir` / `esmfold.cache_dir` default empty. |
+| 6 | Mounted model cache                  | **done**       | ESM-C/ESMFold weights live in a host HF cache bound to `/models/hf:ro`; template `esm.cache_dir` / `esmfold.cache_dir` default to `/models/hf`. |
 | 7 | Host webapp env spec                 | **done**       | `requirements-host.txt` + `pyproject.toml` `host` extras. |
 | 8 | E2E test                             | **open**       | Stage-1 E2E (input → MSA → Boltz → ESMFold → ESM) agreed as the right target; not scripted yet. |
 
@@ -21,7 +21,8 @@ This is a handoff for the next agent working on ProtForge containerization. The 
 
 - **ESMFold weight prefetch fixed.** `.def` now uses `huggingface_hub.snapshot_download(repo_id='facebook/esmfold_v1', allow_patterns=['pytorch_model.bin','*.json','*.txt','*.model'])` instead of `EsmForProteinFolding.from_pretrained(..., use_safetensors=True)`. The previous form left the snapshot dir with only tokenizer/config files (smoke step 6 OSError). Resolves the blocker on the next rebuild.
 - **Base image switched: `nvidia/cuda:12.4.1-runtime-ubuntu22.04` → `ubuntu:22.04`.** Rationale: PyTorch's `cu124` wheels bundle libcudart/libcublas/libcudnn under `torch/lib/`, so the CUDA layer was duplicated weight (~2 GB). The NVIDIA driver libs come from `singularity exec --nv` at runtime; Triton ships its own ptxas. Host `cuda/cudnn` modules remain in the bash/conda fallback (`workflow/rules/*.smk` `else` branches), not in container mode. Smoke step 2 (`torch=…cu124, cuda=True`) is still expected to pass — the test target is unchanged.
-- **HF_TOKEN passthrough for builds.** First rebuild on Kempner hit HF Hub's per-IP anonymous rate limit on the ESM-C prefetch (`LocalEntryNotFoundError` from `EvolutionaryScale/esmc-600m-2024-12`). `build.sh` now accepts `--hf-token` or reads `$HF_TOKEN`; the token is staged to a mode-600 mktemp file under `SINGULARITY_TMPDIR` and bind-mounted at `/run/secrets/hf_token:ro`. `%post` reads it with `set +x` so it doesn't appear in the build log, then `unset HF_TOKEN`s before the rest of the build runs. The runtime `%environment` does not set HF_TOKEN, so it never reaches the image surface.
+- **HF_TOKEN moved out of builds.** HF auth is now only relevant to `scripts/download_models.py --token-file ...`; `containers/build.sh` no longer accepts or stages HF tokens because model weights are not downloaded in `%post`.
+- **2026-05-27 model-mount update.** The GPU SIF no longer bakes ESM-C or ESMFold weights. `scripts/download_models.py` populates a host HF cache, and container runs bind it to `/models/hf:ro`; `esm.cache_dir` and `esmfold.cache_dir` now default to `/models/hf`.
 
 ### Newly found in 2026-05-19 review (now addressed)
 
@@ -36,7 +37,7 @@ The remainder of this document is the original brief, kept verbatim for context.
 ## Current Architecture
 
 - `containers/protforge-gpu.def` builds one GPU SIF for MSA, Boltz, ESM-C, and ESMFold.
-- Model weights for ESM-C and ESMFold are baked under `/opt/weights/hf`.
+- Model weights for ESM-C and ESMFold are mounted at `/models/hf`.
 - Large databases are intentionally not baked: ColabFold/MMseqs should bind to `/data/colabfold_db`, and Boltz checkpoint/cache should bind to `/data/boltz_db`.
 - `Snakefile:container_cmd()` emits `singularity exec --nv --cleanenv ...`.
 - The Streamlit app remains host-side and launches host `snakemake`; the SIF is only used by Snakemake stage rules.
@@ -106,13 +107,13 @@ Recommended action:
 
 ### 6. Baked Weights Can Be Accidentally Bypassed
 
-Problem: `%environment` defaults `HF_HOME=/opt/weights/hf`, but some rules pass `--env HF_HOME={params.cache_dir}` or `TORCH_HOME={params.cache_dir}`. If the config still contains old host cache paths, or blank values, the baked weights may not be used.
+Problem: container runs need a mounted HF cache for ESM-C and ESMFold. If the cache is missing or not bound to `/models/hf`, offline model loading fails.
 
 Recommended action:
 
-- In container mode, default ESM/ESMFold cache config to `/opt/weights/hf`.
-- Only pass `HF_HOME`/`TORCH_HOME` from the rule when the user explicitly chooses an override.
-- For baked-cache runs, pass `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` where model loading supports it.
+- In container mode, default ESM/ESMFold cache config to `/models/hf`.
+- Bind the host HF cache to `/models/hf:ro`.
+- Pass `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` where model loading supports it.
 - Put writable per-user caches under `PROTFORGE_HOME` or another explicit bind, not inside the SIF.
 
 ### 7. Host Webapp Environment Is Not Specified
@@ -127,7 +128,7 @@ Recommended action:
 
 ### 8. Testing Does Not Cover The Real Runtime Path Yet
 
-Problem: `containers/test/smoke.sh` validates GPU visibility, imports, baked weights, and ESMFold, but it does not exercise MSA, Boltz, DB bind mounts, Snakemake, or the webapp.
+Problem: `containers/test/smoke.sh` validates GPU visibility, imports, mounted weights, and ESMFold, but it does not exercise MSA, Boltz, DB bind mounts, Snakemake, or the webapp.
 
 Recommended action:
 

@@ -5,7 +5,7 @@ Snakemake DAG.
 
 | Path | What you get | When to pick |
 |---|---|---|
-| **A. Container (single SIF)** | One ~15 GB `.sif` with all GPU-stage tools + default model weights baked in. Bind-mount the big DBs at runtime. | Reproducible, shareable, no env churn. **Currently in late beta — works but `containers/TESTING.md` Step 2 hasn't been validated end-to-end yet.** |
+| **A. Container (single SIF)** | One `.sif` with all GPU-stage tools. Bind-mount the big DBs and ESM/ESMFold model cache at runtime. | Reproducible, shareable, no env churn. **Currently in late beta — works but `containers/TESTING.md` Step 2 hasn't been validated end-to-end yet.** |
 | **B. Conda / `module load`** | Shared conda envs + downloaded weights + Kempner `module load` for CUDA. The legacy path. | What's known to work today. Fall back here if path A breaks. |
 
 You can mix-and-match per stage (`containers.boltz: /path/to.sif`, leave
@@ -50,17 +50,19 @@ Detailed instructions in `containers/README.md`. Summary:
 salloc -p test --account=<your_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
 
 # Workspace layout: $PROTFORGE_ROOT is the *parent* of the repo, with
-# sifs/, sing_cache/, sing_tmp/ as siblings:
+# sifs/, model cache, and Singularity cache/tmp dirs as siblings:
 #   $PROTFORGE_ROOT/
 #   ├── ProtForge/        <- repo (cloned in step 0)
 #   ├── sifs/             <- output SIFs land here
+#   ├── models/hf/        <- ESM-C + ESMFold HF cache
 #   ├── sing_cache/       <- singularity layer cache
 #   └── sing_tmp/         <- build staging
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
-mkdir -p "$PROTFORGE_ROOT/sifs"
+mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf"
 
 cd "$PROTFORGE_ROOT/ProtForge"
 bash containers/build.sh                  # writes $PROTFORGE_ROOT/sifs/protforge-gpu.sif
+python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
 ```
 
 The script prints `Runtime : ...` and `Done. Image at: ...` on success.
@@ -79,20 +81,14 @@ End-to-end test recipe in `containers/TESTING.md`.
 
 ### A.3 Tell `config.yaml` to use the SIF
 
-Under `containers:` in `config.yaml`, set all four GPU-stage fields to the
-same SIF (schema collapse to a single `containers.gpu` is a pending
-refactor — see `~/Documents/Vault/Notes/Lab/protforge/container-audit.md`
-item H4):
+Under `containers:` in `config.yaml`, set `containers.gpu` to the SIF:
 
 ```yaml
 containers:
   runtime: auto             # auto | singularity | apptainer
-  colabfold: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
-  boltz:     /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
-  esm:       /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
-  esmfold:   /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
+  gpu: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
   pdanalysis: ""            # no MPI image yet; ES stage stays on conda
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db:ro,/n/holylfs06,/n/home06"
+  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db:ro,/n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf:/models/hf:ro,/n/holylfs06,/n/home06"
 ```
 
 The `host:container:ro` syntax binds the shared DBs read-only at
@@ -109,6 +105,10 @@ msa:
   colabfold_db: /data/colabfold_db
 boltz:
   cache_dir:    /data/boltz_db
+esm:
+  cache_dir:    /models/hf
+esmfold:
+  cache_dir:    /models/hf
 ```
 
 ---
@@ -133,7 +133,7 @@ ESM hardcoded paths, generates `config.yaml`.
 | MSA | `colabfold_search`, `mmseqs2`, MSA DBs | All shared on Kempner — see "Shared resources" table below. No install needed. |
 | Boltz | `boltz` CLI, Boltz weights | Shared conda env + `boltz_db` on Kempner. No install. |
 | ESM | `esm` SDK, `esmc_600m` weights | `setup.sh` creates the env at `{shared_base}/envs/esm` and downloads weights. Then patch `esm/utils/constants/esm3.py` to point at the shared cache (see Troubleshooting). |
-| ESMFold | `transformers>=4.40`, `facebook/esmfold_v1` weights | `bash scripts/download_esmfold.py --cache-dir <cache>` populates the HF cache. Create env yourself: `conda create -p {shared_base}/envs/esmfold python=3.12 && pip install transformers accelerate torch`. |
+| ESMFold | `transformers>=4.40`, `facebook/esmfold_v1` weights | `python scripts/download_models.py --cache-dir <cache>` populates the HF cache. Create env yourself: `conda create -p {shared_base}/envs/esmfold python=3.12 && pip install transformers accelerate torch`. |
 | ES | `PDAnalysis`, `MDAnalysis` | `setup.sh` clones PDAnalysis + creates env at `{shared_base}/envs/es-analysis`. |
 
 ### B.3 `config.yaml` for path B
@@ -175,9 +175,9 @@ each stage you care about, the pipeline will run.
 | ESMFold | `transformers≥4.40`, PyTorch + CUDA | `facebook/esmfold_v1` (~8 GB) | — |
 | ES | PDAnalysis, MDAnalysis, MPI | — | — |
 
-Container path: tools + weights are baked into the SIF; DBs are
-bind-mounted. Conda path: install tools into per-stage envs, download
-weights to a shared cache, DBs are read directly from the shared paths.
+Container path: tools are baked into the SIF; DBs and model caches are
+bind-mounted. Conda path: install tools into per-stage envs, download weights
+to a shared cache, DBs are read directly from the shared paths.
 
 ---
 

@@ -3,7 +3,7 @@
 Input paths can be .yaml (Boltz-style) or .fasta/.a3m — load_seq_ handles both.
 Saves per-sequence {output_dir}/{stem}/esmfold/{structure.pdb,plddt.npy}.
 
-Requires HF cache populated by scripts/download_esmfold.py before first run.
+Requires HF cache populated by scripts/download_models.py before first run.
 Pass --cache_dir to force offline load (recommended on compute nodes without internet).
 """
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     parser.add_argument("--processed_paths_file", type=str, required=True,
                         help="Path to the processed_paths.txt file")
     parser.add_argument("--cache_dir", type=str, default=None,
-                        help="HF cache root (same path used by download_esmfold.py). "
+                        help="HF cache root (same path used by download_models.py). "
                              "Enables offline load from compute nodes.")
     parser.add_argument("--chunk_size", type=int, default=None,
                         help="Folding-trunk chunk size. Enable for long sequences or on OOM.")

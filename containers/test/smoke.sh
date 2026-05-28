@@ -5,7 +5,7 @@
 #   1. Container launches and sees the GPU (`nvidia-smi` works).
 #   2. PyTorch sees CUDA.
 #   3. Baked tools are importable (boltz CLI, mmseqs CLI, esm SDK, transformers).
-#   4. Baked model weights load (ESM-C 600M, ESMFold via HF).
+#   4. Mounted model weights load (ESM-C 600M, ESMFold via HF).
 #   5. ESMFold can fold a short sequence end-to-end on GPU.
 #
 # Does NOT test:
@@ -15,6 +15,7 @@
 # Usage:
 #   bash containers/test/smoke.sh                  # default: PROTFORGE_SIF_DIR, PROTFORGE_ROOT/sifs, or ~/sifs
 #   bash containers/test/smoke.sh -i /path/to/sif  # custom path
+#   bash containers/test/smoke.sh -m /path/to/hf   # custom host HF cache
 #
 # Run on a GPU node (e.g. salloc -p kempner_h100 --gres=gpu:1 -t 30 --mem=32G).
 
@@ -22,6 +23,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIF=""
+MODEL_CACHE=""
 WORK="${SCRIPT_DIR}/_smoke_out"
 LOG_FILE=""
 LOG_DISABLED=0
@@ -29,6 +31,7 @@ LOG_DISABLED=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -i|--image) SIF="$2"; shift 2 ;;
+        -m|--model-cache) MODEL_CACHE="$2"; shift 2 ;;
         --log)      LOG_FILE="$2"; shift 2 ;;
         --no-log)   LOG_DISABLED=1; shift ;;
         -h|--help)  sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -49,6 +52,23 @@ fi
 if [[ ! -f "$SIF" ]]; then
     echo "ERROR: image not found at $SIF" >&2
     echo "Build first: export PROTFORGE_ROOT=... && bash containers/build.sh  (or bash containers/build.sh -o ...)" >&2
+    exit 1
+fi
+
+if [[ -z "$MODEL_CACHE" ]]; then
+    if [[ -n "${PROTFORGE_MODEL_CACHE:-}" ]]; then
+        MODEL_CACHE="${PROTFORGE_MODEL_CACHE%/}"
+    elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+        MODEL_CACHE="${PROTFORGE_ROOT%/}/models/hf"
+    else
+        MODEL_CACHE="$(dirname "$(dirname "$SIF")")/models/hf"
+    fi
+fi
+
+if [[ ! -d "$MODEL_CACHE/hub" ]]; then
+    echo "ERROR: model cache not found at $MODEL_CACHE/hub" >&2
+    echo "Populate it first:" >&2
+    echo "  python scripts/download_models.py --cache-dir \"$MODEL_CACHE\"" >&2
     exit 1
 fi
 
@@ -79,20 +99,20 @@ mkdir -p "$WORK"
 # Snakefile:container_cmd() emits so the smoke test exercises the same
 # invocation surface as the real rules.
 #
-# HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE: the baked HF cache under
-# /opt/weights/hf is read-only inside the SIF, but HF's from_pretrained
-# tries to acquire a write lock under .locks/ before serving from cache
-# (OSError: Read-only file system). Offline mode skips the lock and reads
-# cached files directly. Override per-call with --env HF_HUB_OFFLINE=0 if
-# you bind-mount a writable HF cache.
+# HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE: the mounted HF cache is read-only
+# inside the SIF. Offline mode skips network lookups and reads cached files
+# directly.
 RUNTIME="${PROTFORGE_RUNTIME:-singularity}"
 run_in_container() {
     "$RUNTIME" exec --nv --cleanenv \
         --env TMPDIR=/tmp \
+        --env HF_HOME=/models/hf \
+        --env TORCH_HOME=/models/hf \
         --env HF_HUB_OFFLINE=1 \
         --env TRANSFORMERS_OFFLINE=1 \
         -B "${SCRIPT_DIR}":"${SCRIPT_DIR}" \
         -B "${WORK}":"${WORK}" \
+        -B "${MODEL_CACHE}":/models/hf:ro \
         -B "${SLURM_TMPDIR:-/tmp}":/tmp \
         "$SIF" "$@"
 }
@@ -187,7 +207,7 @@ exit $fail
 fi
 
 echo
-echo "=== [5/7] Baked weights load ==="
+echo "=== [5/7] Mounted weights load ==="
 if ! run_in_container python -c "
 import os
 print(f'HF_HOME={os.environ.get(\"HF_HOME\")}')
@@ -213,7 +233,7 @@ import glob, os, sys
 import torch
 from transformers import AutoTokenizer, EsmForProteinFolding
 
-cache_root = os.environ.get("HF_HOME", "/opt/weights/hf") + "/hub"
+cache_root = os.environ.get("HF_HOME", "/models/hf") + "/hub"
 snaps = sorted(glob.glob(f"{cache_root}/models--facebook--esmfold_v1/snapshots/*"))
 if not snaps:
     print(f"FATAL: no ESMFold snapshot under {cache_root}", file=sys.stderr)

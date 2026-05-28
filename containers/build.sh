@@ -17,21 +17,17 @@
 #   bash containers/build.sh -o /path/to/out.sif               # custom output path
 #   bash containers/build.sh --from-docker docker://ghcr.io/me/protforge-gpu:latest
 #   bash containers/build.sh --dry-run                         # print command without running
-#   bash containers/build.sh                                   # interactive prompt for HF_TOKEN (hidden, not in history)
-#   HF_TOKEN=hf_xxx bash containers/build.sh                   # via env (note: export ends up in shell history)
-#   bash containers/build.sh --hf-token hf_xxx                 # via flag (also history-leaky)
 #
 # Requires:
 #   - singularity (Kempner uses `singularity`, not `apptainer`)
 #   - For --from-def: --fakeroot support (try it; fall back to --from-docker if not)
-#   - Network access for the first build/pull (~10 GB of weights + deps)
-#   - An HF token is recommended on shared cluster IPs (Kempner login/compute
-#     nodes hit HF Hub's per-IP anonymous rate limit fast on ESM-C download).
-#     Get one at https://huggingface.co/settings/tokens (read-only is enough).
+#   - Network access for the first build/pull (packages + source installs).
+#     Model weights are downloaded separately to mounted storage with
+#     scripts/download_models.py.
 #
 # Notes on iteration speed (--from-def mode):
 #   `singularity build` doesn't cache %post layers. Every rebuild re-runs the
-#   full %post, including the ~7 GB model download. Two ways to mitigate:
+#   full %post. Two ways to mitigate:
 #
 #   1. Sandbox dev loop (RECOMMENDED for iteration):
 #        singularity build --sandbox /tmp/pfsandbox containers/protforge-gpu.def
@@ -54,7 +50,6 @@ DOCKER_URL=""
 DRY_RUN=0
 LOG_FILE=""        # set by --log; else auto-placed next to the SIF
 LOG_DISABLED=0
-HF_TOKEN_ARG=""    # set by --hf-token; else falls back to $HF_TOKEN env
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,49 +65,12 @@ while [[ $# -gt 0 ]]; do
             LOG_FILE="$2"; shift 2 ;;
         --no-log)
             LOG_DISABLED=1; shift ;;
-        --hf-token)
-            HF_TOKEN_ARG="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)
             echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
-
-# Resolve HF token. Priority:
-#   1. --hf-token <value>  (flag — careful, ends up in shell history)
-#   2. $HF_TOKEN env       (also history-leaky if exported on the cmdline)
-#   3. Interactive prompt  (only if stdin is a TTY — hidden + not in history)
-#   4. None                (anonymous downloads; HF rate-limits Kempner IPs)
-#
-# We pass the resolved token into %post via a bind-mounted file (not
-# --build-arg) because the def file's %post runs with `set -x` — a token
-# interpolated into the script would land in the build log. The file is
-# mktemp'd with mode 600 and removed on exit.
-HF_TOKEN_RESOLVED="${HF_TOKEN_ARG:-${HF_TOKEN:-}}"
-if [[ -z "$HF_TOKEN_RESOLVED" && -t 0 ]]; then
-    {
-        echo
-        echo "No HF_TOKEN provided via --hf-token or env."
-        echo "Paste a token (read-only is enough) to enable authenticated HF"
-        echo "downloads, or press Enter to build anonymously (rate-limit risk"
-        echo "on Kempner's shared egress IPs)."
-        echo "Token page: https://huggingface.co/settings/tokens"
-    } >&2
-    # -s: don't echo input; -r: don't mangle backslashes; -p: prompt on stderr.
-    # The value goes into a shell variable and is never written to history.
-    read -r -s -p "HF token (input hidden, press Enter to skip): " HF_TOKEN_RESOLVED
-    echo >&2
-    if [[ -z "$HF_TOKEN_RESOLVED" ]]; then
-        echo "[info] no token entered; proceeding anonymously" >&2
-    fi
-fi
-
-HF_TOKEN_FILE=""
-cleanup_hf_token() {
-    [[ -n "$HF_TOKEN_FILE" && -f "$HF_TOKEN_FILE" ]] && rm -f "$HF_TOKEN_FILE"
-}
-trap cleanup_hf_token EXIT
 
 if [[ -z "$OUT" ]]; then
     if [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
@@ -230,26 +188,10 @@ fi
 
 case "$MODE" in
     from-def)
-        BUILD_BIND_ARGS=()
-        if [[ -n "$HF_TOKEN_RESOLVED" ]]; then
-            # Stage the token under SINGULARITY_TMPDIR (same FS as the
-            # build's rootfs) with mode 600. Bind it to /run/secrets/hf_token
-            # in the build env; %post reads from there with `set +x` to
-            # keep the value out of the build log.
-            stage_dir="${SINGULARITY_TMPDIR:-/tmp}"
-            mkdir -p "$stage_dir"
-            HF_TOKEN_FILE="$(mktemp "${stage_dir%/}/hf_token.XXXXXX")"
-            chmod 600 "$HF_TOKEN_FILE"
-            printf '%s' "$HF_TOKEN_RESOLVED" > "$HF_TOKEN_FILE"
-            BUILD_BIND_ARGS+=(--bind "${HF_TOKEN_FILE}:/run/secrets/hf_token:ro")
-            echo "HF auth     : token staged at $HF_TOKEN_FILE (bound :ro into build)"
-        else
-            echo "HF auth     : none (anonymous downloads — rate-limit risk on shared cluster IPs)"
-        fi
         # --force overwrites an existing SIF at $OUT. Without it, re-running
         # after a failed/partial build aborts with "image file already exists".
         # Matches the --force behavior of the pull branch below.
-        CMD=("$SING" build --force --fakeroot "${BUILD_BIND_ARGS[@]}" "$OUT" "$DEF_FILE")
+        CMD=("$SING" build --force --fakeroot "$OUT" "$DEF_FILE")
         ;;
     from-docker)
         if [[ -z "$DOCKER_URL" ]]; then

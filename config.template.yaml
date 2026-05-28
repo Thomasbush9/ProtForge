@@ -48,28 +48,27 @@ esm:
   num_chunks: 1
   array_max_concurrency: 20
   env_path: /n/home06/<YOUR_USER>/envs/esm
-  # cache_dir: leave empty in CONTAINER mode — the SIF ships ESM-C 600M weights
-  # at /opt/weights/hf and the rule auto-enables HF offline. Set to a host
-  # path only in LEGACY (conda env) mode to point at your HF cache.
-  cache_dir: ""
-  # Example for legacy mode (uncomment + adapt):
+  # Container mode: bind your host HF cache to /models/hf (see
+  # containers.bind_paths) and keep this path. Populate the host cache with:
+  #   python scripts/download_models.py --cache-dir <PROTFORGE_ROOT>/models/hf
+  cache_dir: /models/hf
+  # Legacy mode example (uncomment + adapt):
   # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
   # NOTE (legacy mode only): the ESM library has hardcoded model paths in
   # esm/utils/constants/esm3.py. Update those to match `cache_dir`. See
   # docs/CLUSTER_SETUP.md.
 
 # ESMFold structure prediction - USER SETUP REQUIRED
-# In CONTAINER mode the SIF ships facebook/esmfold_v1 weights at
-# /opt/weights/hf — leave cache_dir empty and the rule enables HF offline.
-# In LEGACY (conda env) mode, first populate a host HF cache with:
-#   python scripts/download_esmfold.py --cache-dir <cache_dir>
-# then set cache_dir to that path.
+# In CONTAINER mode, bind your host HF cache to /models/hf and keep
+# cache_dir set to that mounted path. In LEGACY (conda env) mode, first
+# populate a host HF cache with scripts/download_models.py or
+# scripts/download_esmfold.py, then set cache_dir to that host path.
 esmfold:
   input_type: yaml  # "yaml" (post-MSA from sequences/) or "fasta" (raw input.fasta_dir, independent of MSA/Boltz)
   num_chunks: 1
   array_max_concurrency: 10
   env_path: /n/home06/<YOUR_USER>/envs/esmfold
-  cache_dir: ""
+  cache_dir: /models/hf
   # Example for legacy mode (uncomment + adapt):
   # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # HF_HOME root; must contain hub/models--facebook--esmfold_v1
   # Optional length cutoff. Sequences longer than this are dropped before
@@ -170,8 +169,9 @@ containers:
   # Default policy below = bind each shared DB at the SAME path inside the
   # container, read-only. Stage configs below (msa.mmseq2_db, boltz.cache_dir,
   # etc.) keep their host paths and work unchanged in container mode. The
-  # writable bind covers the user's home dir; add your lab's holylfs path
-  # too if the repo or output dir lives there.
+  # model cache bind maps the user's HF cache to /models/hf read-only. The
+  # writable bind covers the user's home dir; add your lab's holylfs path too
+  # if the repo or output dir lives there.
   #
   # The Snakefile additionally auto-binds ${SLURM_TMPDIR:-/tmp} at /tmp for
   # scratch (Boltz/Triton/HF temp files), no need to list it here.
@@ -180,7 +180,7 @@ containers:
   # if you prefer the canonical in-container paths, replace each `host:ro`
   # below with `host:/data/<name>:ro` AND change the matching stage config
   # values (msa.mmseq2_db, msa.colabfold_db, boltz.cache_dir) to `/data/...`.
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro,/n/home06/<YOUR_USER>"
+  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro,/n/home06/<YOUR_USER>/protforge/models/hf:/models/hf:ro,/n/home06/<YOUR_USER>"
 
 # SLURM settings - UPDATE FOR YOUR ACCOUNT
 slurm:

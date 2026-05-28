@@ -6,12 +6,12 @@ From: ubuntu:22.04
 # in a separate MPI image.
 #
 # Bake list:
-#   - Tools : boltz, colabfold_search, mmseqs2, esm SDK, transformers
-#   - Weights : esmc_600m (~2.5 GB), facebook/esmfold_v1 (~4 GB)
+#   - Tools: boltz, colabfold_search, mmseqs2, esm SDK, transformers
 #
 # NOT baked (bind-mounted at runtime):
 #   - ColabFold MSA databases (~700 GB)  -> /data/colabfold_db
 #   - Boltz model checkpoint  (~5 GB)    -> /data/boltz_db
+#   - ESM/ESMFold HF cache              -> /models/hf
 #
 # Why ubuntu:22.04 and NOT nvidia/cuda as the base:
 #   - PyTorch's `cu124` wheels ship their own libcudart / libcublas /
@@ -27,23 +27,6 @@ From: ubuntu:22.04
 #   - The non-CUDA base saves ~2 GB of image size and removes the CUDA
 #     version pin from a layer that doesn't actually need it.
 #
-# Layer order matters: each %post block roughly = one Docker layer.
-# Order matches "changes least often -> changes most often" so iterating
-# on the codebase doesn't redownload model weights.
-
-%setup
-    # Pre-create the bind-mount target for the optional HF_TOKEN secret
-    # file. Singularity does NOT auto-create file mountpoints — if the
-    # destination doesn't exist in the rootfs by the time %post starts,
-    # `singularity build --bind file:dest` fails with
-    #   "destination ... doesn't exist in container".
-    # We always create an empty mode-600 placeholder; %post uses `-s`
-    # (non-empty test) so the build still works with no token (and just
-    # falls through to the anonymous-download path).
-    mkdir -p "${SINGULARITY_ROOTFS}/run/secrets"
-    : > "${SINGULARITY_ROOTFS}/run/secrets/hf_token"
-    chmod 600 "${SINGULARITY_ROOTFS}/run/secrets/hf_token"
-
 %files
     # Copied last so codebase edits invalidate only the final layer.
     # NOTE: paths are relative to the build context (repo root).
@@ -124,104 +107,25 @@ From: ubuntu:22.04
     pip3 install --no-cache-dir --force-reinstall \
         "numpy>=2.0.2,<2.1"
 
-    # -----------------------------------------------------------------
-    # Layer 4: model weights (changes only when bumping a model)
-    #
-    # Bake into /opt/weights so the image works offline. At runtime,
-    # HF_HOME / cache_dir env vars can be overridden to point elsewhere.
-    # -----------------------------------------------------------------
-    mkdir -p /opt/weights/hf /opt/weights/torch
-
-    # Optional HF_TOKEN: bind-mount a token file at /run/secrets/hf_token
-    # via `build.sh --hf-token` (or by exporting HF_TOKEN before build.sh).
-    # Authenticated downloads get a much higher per-IP rate limit on HF
-    # Hub — Kempner's shared egress IPs hit the anon limit fast.
-    #
-    # Trace is suppressed around the read so the token never lands in the
-    # build log, then re-enabled. The token is unset at the end of this
-    # block so it doesn't appear in any later command echoes either.
-    { set +x; } 2>/dev/null
-    if [ -s /run/secrets/hf_token ]; then
-        export HF_TOKEN="$(cat /run/secrets/hf_token)"
-        echo "[info] HF_TOKEN loaded from /run/secrets/hf_token (authenticated downloads)"
-    else
-        echo "[info] no HF_TOKEN provided; downloading anonymously (rate-limit risk)"
-    fi
-    set -x
-
-    # ESMFold weights via huggingface_hub.snapshot_download.
-    #
-    # Why not from_pretrained: calling
-    # `EsmForProteinFolding.from_pretrained('facebook/esmfold_v1',
-    # use_safetensors=True)` at build time leaves the cache snapshot dir with
-    # ONLY tokenizer/config files — no weight file. At runtime that triggers
-    # transformers' auto_conversion path, which tries to hit huggingface.co
-    # and dies under HF_HUB_OFFLINE=1 (smoke step 6 failure). Most likely
-    # cause: facebook/esmfold_v1 doesn't ship model.safetensors and the
-    # use_safetensors=True branch never materialises the .bin into the
-    # snapshot symlink farm.
-    #
-    # snapshot_download is the contract we actually want: pull a fixed set
-    # of files into the HF cache as real symlinks under
-    # models--facebook--esmfold_v1/snapshots/<sha>/, with no Python-object
-    # instantiation involved.
-    #
-    # allow_patterns: pytorch_model.bin (8.44 GB, the only weight artifact
-    # facebook/esmfold_v1 actually publishes) plus config + tokenizer.
-    # Explicitly excluding *.safetensors keeps the image one weight-file
-    # lean even if the upstream repo adds a safetensors mirror later;
-    # EsmForProteinFolding loads .bin fine.
-    HF_HOME=/opt/weights/hf python3 -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download(\
-    repo_id='facebook/esmfold_v1', \
-    allow_patterns=['pytorch_model.bin', '*.json', '*.txt', '*.model'], \
-)"
-
-    # ESM-C 600M weights via huggingface_hub.snapshot_download.
-    #
-    # Why not ESMC.from_pretrained: that call both downloads the snapshot
-    # AND instantiates the 600M-param model in RAM (~2.5 GB weights + model
-    # graph). On memory-constrained build hosts (Kempner login nodes have
-    # tight per-user cgroup limits, typically OOM-killing builds around
-    # this step with exit 137), the instantiation kills the build right
-    # after the download succeeded.
-    #
-    # The SDK's own implementation does
-    #   snapshot_download(repo_id="EvolutionaryScale/esmc-600m-2024-12")
-    # (see esm/utils/constants/esm3.py) and then loads weights from
-    #   <snapshot_dir>/data/weights/esmc_600m_2024_12_v0.pth.
-    # Doing just the snapshot_download here populates the same HF cache
-    # layout the SDK looks up at runtime — when ESMC.from_pretrained is
-    # eventually called from rules, snapshot_download is a cache hit and
-    # the .pth load happens with the GPU already available.
-    HF_HOME=/opt/weights/hf python3 -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download(repo_id='EvolutionaryScale/esmc-600m-2024-12')"
-
-    # Scrub the build-time token so it can't leak into later command
-    # echoes or end up baked into anything written to /opt during the
-    # build. The image's %environment doesn't set HF_TOKEN, so runtime
-    # is unaffected.
-    { set +x; } 2>/dev/null
-    unset HF_TOKEN
-    set -x
-
-    chmod -R a+rX /opt/weights
+    # Model weights are intentionally not baked into the image. Create the
+    # standard mount points so `singularity exec -B host:/models/hf:ro` works
+    # consistently across clusters.
+    mkdir -p /models/hf /models/torch /data/protforge
 
 %environment
     # ProtForge cache root: host bind-mount target convention.
     # Override at runtime with: singularity exec --env PROTFORGE_HOME=/path ...
     export PROTFORGE_HOME=${PROTFORGE_HOME:-/data/protforge}
 
-    # Default HF cache to the baked location. Override (e.g. to /data/...) when
-    # you want to use external/newer weights.
-    export HF_HOME=${HF_HOME:-/opt/weights/hf}
-    export TORCH_HOME=${TORCH_HOME:-/opt/weights/torch}
+    # Default model caches are host bind-mount targets. Populate them with
+    # scripts/download_models.py before running compute jobs.
+    export HF_HOME=${HF_HOME:-/models/hf}
+    export TORCH_HOME=${TORCH_HOME:-/models/torch}
 
     # Bind-mount targets that the rules expect (host paths bound to these):
     #   /data/colabfold_db   <- ColabFold MSA DBs
     #   /data/boltz_db       <- Boltz model checkpoint dir
+    #   /models/hf           <- ESM-C / ESMFold HF cache
 
     # Make sure ProtForge code is importable
     export PYTHONPATH=/opt/protforge${PYTHONPATH:+:$PYTHONPATH}
@@ -239,8 +143,8 @@ snapshot_download(repo_id='EvolutionaryScale/esmc-600m-2024-12')"
     Description ProtForge GPU container (MSA + Boltz + ESM-C + ESMFold)
 
 %help
-    ProtForge GPU container — bundles all GPU-stage tools and default model
-    weights for the ProtForge pipeline.
+    ProtForge GPU container — bundles all GPU-stage tools for the ProtForge
+    pipeline. Model weights and databases are bind-mounted at runtime.
 
     GPU model: ubuntu:22.04 base + torch+cu124 wheels (which ship their own
     CUDA runtime). At runtime, `singularity exec --nv` injects the host's
@@ -251,6 +155,7 @@ snapshot_download(repo_id='EvolutionaryScale/esmc-600m-2024-12')"
         singularity exec --nv \
             -B /n/holylfs06/.../colabfold/databases:/data/colabfold_db \
             -B /n/holylfs06/.../boltz/boltz_db:/data/boltz_db \
+            -B /n/holylfs06/.../protforge/models/hf:/models/hf:ro \
             -B "$PWD":"$PWD" \
             protforge-gpu.sif \
             <stage_command>

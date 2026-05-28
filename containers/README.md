@@ -1,6 +1,7 @@
 # ProtForge container
 
-Single Singularity image bundling all GPU-stage tools and default model weights.
+Single Singularity image bundling all GPU-stage tools. Large databases and
+model weights are mounted from cluster storage at runtime.
 
 **Scope (this image):** MSA (colabfold_search + mmseqs2), Boltz, ESM-C, ESMFold.
 **Out of scope:** ES/PDAnalysis (separate MPI image, not yet built).
@@ -9,11 +10,11 @@ Single Singularity image bundling all GPU-stage tools and default model weights.
 
 Baked into the SIF:
 - Tools: `boltz`, `colabfold_search`, `mmseqs`, `esm` SDK, HF `transformers`.
-- Weights: `esmc_600m` (~2.5 GB), `facebook/esmfold_v1` (~4 GB), under `/opt/weights/hf`.
 
 NOT baked (bind-mount at runtime):
 - ColabFold MSA databases (~700 GB) → mount to `/data/colabfold_db`.
 - Boltz model checkpoint (~5 GB) → mount to `/data/boltz_db`.
+- ESM-C / ESMFold HF cache → mount to `/models/hf`.
 
 Base image: `ubuntu:22.04`. The CUDA runtime + cuDNN come from the
 `torch+cu124` wheel (which bundles them under `torch/lib/`); the NVIDIA
@@ -21,7 +22,8 @@ driver libs are injected at runtime by `singularity exec --nv` from the host.
 No host `module load cuda/cudnn` is needed in container mode — those only
 apply to the bash/conda fallback path documented in `workflow/rules/*.smk`.
 
-Total SIF size: ~12 GB.
+Total SIF size is dominated by Python/PyTorch tooling; model weights live
+outside the image.
 
 ## Build / fetch on Kempner
 
@@ -65,8 +67,9 @@ sibling, e.g. `$PROTFORGE_ROOT/ProtForge/`.
 #     sifs/              <- output SIFs
 #     sing_cache/        <- singularity layer cache
 #     sing_tmp/          <- singularity build staging
+#     models/hf/         <- ESM-C + ESMFold HF cache
 export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>
-mkdir -p "$PROTFORGE_ROOT/sifs"
+mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf"
 
 # Optional explicit overrides (same layout as above):
 export PROTFORGE_SIF_DIR=$PROTFORGE_ROOT/sifs
@@ -77,39 +80,6 @@ mkdir -p "$PROTFORGE_SIF_DIR" "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 # To persist for interactive shells, append exports to ~/.bashrc; for one-shot
 # builds and sbatch, export in the same script that invokes build.sh.
 ```
-
-**HF_TOKEN is strongly recommended.** Kempner's compute/login nodes share
-egress IPs across many users; HF Hub's per-IP anonymous rate limit gets hit
-fast (typically on the ESM-C download, which fetches many small files via
-the esm SDK). Anonymous builds work *sometimes* but fail unpredictably with
-`LocalEntryNotFoundError` or `429`. Grab a read-only token at
-<https://huggingface.co/settings/tokens>.
-
-The build script asks for the token interactively (input hidden, not
-written to shell history). Just run:
-
-```bash
-bash containers/build.sh
-# When prompted: paste your HF token, press Enter.
-```
-
-Or, if you're running non-interactively (sbatch job, CI), provide the
-token via env or flag — both end up in shell history if you type them at
-a prompt, so prefer reading from a secret file:
-
-```bash
-HF_TOKEN="$(< ~/.config/protforge/hf_token)" bash containers/build.sh
-# or:
-bash containers/build.sh --hf-token "$(< ~/.config/protforge/hf_token)"
-```
-
-`build.sh` stages the resolved token to a mode-600 file under
-`SINGULARITY_TMPDIR` and bind-mounts it at `/run/secrets/hf_token:ro` for
-the build; `%post` reads it with shell-trace suppressed so it never lands
-in the build log. The token is unset before the build context is copied
-to `/opt/protforge` and removed from the host on script exit. The image's
-runtime `%environment` does NOT set `HF_TOKEN`, so it never leaks at
-runtime either.
 
 Then one of:
 
@@ -123,18 +93,36 @@ bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:la
 # (c) Custom output / dry run
 bash containers/build.sh -o /path/to/out.sif
 bash containers/build.sh --dry-run
-
-# (d) Pass an HF token explicitly (overrides $HF_TOKEN env)
-bash containers/build.sh --hf-token hf_xxx
 ```
 
-First build/pull downloads ~10 GB of packages + weights. `singularity build`
-doesn't cache `%post` layers, so re-runs redownload everything; see `build.sh`
-for the sandbox-iteration workflow if you're iterating on the def file.
+First build/pull downloads packages and source installs only. Model weights
+are populated separately into mounted storage.
 
 If `--fakeroot` fails ("fakeroot not allowed" or similar), the fall-back is
 to build the image somewhere with Docker + push to GHCR, then
 `--from-docker` it on Kempner.
+
+## Download model weights
+
+Run once on a node with internet access:
+
+```bash
+cd "$PROTFORGE_ROOT/ProtForge"
+python -m venv "$PROTFORGE_ROOT/host-env"
+source "$PROTFORGE_ROOT/host-env/bin/activate"
+pip install -r requirements-host.txt
+
+python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+```
+
+If shared cluster egress hits Hugging Face rate limits, use a read-only token
+from <https://huggingface.co/settings/tokens>:
+
+```bash
+python scripts/download_models.py \
+    --cache-dir "$PROTFORGE_ROOT/models/hf" \
+    --token-file ~/.config/protforge/hf_token
+```
 
 ## Smoke test
 
@@ -145,8 +133,8 @@ bash containers/test/smoke.sh                  # image: PROTFORGE_SIF_DIR, else 
 bash containers/test/smoke.sh -i /path/to/sif
 ```
 
-Validates: GPU visible, PyTorch+CUDA work, all tools importable, baked
-weights load, ESMFold folds a short sequence end-to-end. Does not test
+Validates: GPU visible, PyTorch+CUDA work, all tools importable, mounted
+model weights load, ESMFold folds a short sequence end-to-end. Does not test
 MSA or Boltz (those need the bind-mounted DBs).
 
 ## Runtime usage on Kempner
@@ -158,6 +146,7 @@ singularity exec --nv \
     -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro \
     -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro \
     -B /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro \
+    -B "$PROTFORGE_ROOT/models/hf:/models/hf:ro" \
     -B "$PWD":"$PWD" \
     "$PROTFORGE_ROOT/sifs/protforge-gpu.sif" \
     boltz predict ...
@@ -165,9 +154,9 @@ singularity exec --nv \
 
 Via Snakemake (already wired): set `containers.gpu` in your config to the SIF
 path. The `containers.bind_paths` default in `config.template.yaml` already
-mounts the three shared DBs at the same host paths inside the container,
-read-only, so the existing `msa.mmseq2_db` / `boltz.cache_dir` values work
-unchanged. The `container_cmd()` helper in `Snakefile` dispatches automatically.
+mounts the shared DBs read-only and maps the user HF cache to `/models/hf`,
+so `esm.cache_dir: /models/hf` and `esmfold.cache_dir: /models/hf` work
+offline. The `container_cmd()` helper in `Snakefile` dispatches automatically.
 
 If you prefer the canonical `/data/colabfold_db` / `/data/boltz_db` mounts
 documented in the def file's `%environment`, change each `bind_paths` entry
@@ -180,9 +169,10 @@ side.
 - `PROTFORGE_HOME` (default `/data/protforge`): host bind-mount convention for
   per-user cache (esm/esmfold overrides, output staging). Override with
   `--env PROTFORGE_HOME=/your/path` if mounted elsewhere.
-- `HF_HOME` (default `/opt/weights/hf`): points at baked weights. Override to
-  use a host-side HF cache (e.g. for trying newer model versions).
-- `TORCH_HOME` (default `/opt/weights/torch`): same idea for torch hub.
+- `HF_HOME` (default `/models/hf`): host-mounted Hugging Face cache populated
+  by `scripts/download_models.py`.
+- `TORCH_HOME` (default `/models/torch`): torch hub cache mount point; the
+  ESM rules currently point it at `esm.cache_dir` when that is configured.
 
 ## Not yet covered (deferred)
 

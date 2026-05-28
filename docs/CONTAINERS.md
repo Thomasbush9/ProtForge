@@ -1,8 +1,8 @@
 # ProtForge Container Design — SUPERSEDED
 
 > **This document describes the original 4-image per-stage container design,
-> abandoned 2026-05-14 in favor of a single fat SIF that bundles all
-> GPU-stage tools + default model weights. Do NOT follow this doc.**
+> abandoned 2026-05-14 in favor of the current single-SIF GPU-stage design.
+> Do NOT follow this doc.**
 >
 > **Current container documentation:**
 > - `docs/CLUSTER_SETUP.md` — install guide (both container and conda paths)
