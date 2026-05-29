@@ -28,7 +28,7 @@ From: ubuntu:22.04
 #   - User input/output dirs            -> rule-level binds (see Snakefile)
 #
 # Why ubuntu:22.04 and NOT nvidia/cuda as the base:
-#   - PyTorch's `cu124` wheels ship their own libcudart / libcublas /
+#   - PyTorch's `cu126` wheels ship their own libcudart / libcublas /
 #     libcudnn / libcurand etc. under torch/lib/. Re-installing CUDA at
 #     the base layer is ~2 GB of duplicated libraries that PyTorch ignores.
 #   - The NVIDIA driver libs (libnvidia-*.so, libcuda.so.1) are injected
@@ -82,16 +82,16 @@ From: ubuntu:22.04
     # -----------------------------------------------------------------
     pip3 install --no-cache-dir --upgrade pip setuptools wheel
 
-    # PyTorch first (cu124 wheels). All downstream tools pull torch as a dep,
+    # PyTorch first (cu126 wheels). All downstream tools pull torch as a dep,
     # so installing it explicitly here pins the version.
     #
-    # The cu124 wheels are self-contained: they bundle libcudart/libcublas/
+    # The cu126 wheels are self-contained: they bundle libcudart/libcublas/
     # libcudnn under torch/lib/. That's why this image starts from
     # ubuntu:22.04 (not nvidia/cuda) — torch carries the CUDA runtime, and
     # `singularity exec --nv` injects the driver libs from the host.
     pip3 install --no-cache-dir \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu124
+        --index-url https://download.pytorch.org/whl/cu126
 
     # Boltz (structure prediction)
     # cuequivariance-{torch,ops-torch-cu12}: NVIDIA accelerated triangle-mult
@@ -101,7 +101,7 @@ From: ubuntu:22.04
     # torch in turn loads cuequivariance-ops-torch-cu12 — the CUDA-version-
     # specific wheel that ships the actual kernels. The "ops" wheel is NOT an
     # automatic dep because the version tag pins to the CUDA major (cu12 here,
-    # matching our torch+cu124). Missing either one crashes predict_step
+    # matching our torch+cu126). Missing either one crashes predict_step
     # inside the pairformer trunk. Discovered 2026-05-28 in stage-1 E2E
     # (Boltz chunk_0 / chunk_1, two iterations). Will be pinned by PR-2's
     # requirements-container.lock once that lands.
@@ -233,7 +233,7 @@ From: ubuntu:22.04
     Lab/protforge/decisions.md (sbatch / Munge can't be cleanly bound into
     Singularity; community pattern is orchestrator-on-host).
 
-    GPU model: ubuntu:22.04 base + torch+cu124 wheels (which ship their own
+    GPU model: ubuntu:22.04 base + torch+cu126 wheels (which ship their own
     CUDA runtime). At runtime, `singularity exec --nv` injects the host's
     NVIDIA driver libs. No host `module load cuda/cudnn` is needed in
     container mode — those modules only apply to the bash/conda fallback path.
