@@ -1,0 +1,37 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+
+# Singularity Image for Boltz 
+#
+%files 
+# Sections where you can specify which files from host you want to copy in the Image.
+# For bigger files (e.g., models weights) you can: 
+# --bind host_path:image_path 
+
+%post 
+#Download section -> Ubuntu uses apt package manager 
+
+
+%environment
+# It defines environment variables that will be set at runtime -> not available at build time 
+# if you need envs available at build time define them in the 'post' section 
+
+
+
+
+
+
+%runscript
+
+
+%test
+# it runs at the end of the build process -> useful to test the container (imports and etc. )
+
+
+%labels
+
+
+
+
+%help
