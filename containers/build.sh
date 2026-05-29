@@ -48,43 +48,60 @@ OUT=""
 MODE="from-def"
 DOCKER_URL=""
 DRY_RUN=0
-LOG_FILE=""        # set by --log; else auto-placed next to the SIF
+LOG_FILE="" # set by --log; else auto-placed next to the SIF
 LOG_DISABLED=0
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o|--output)
-            OUT="$2"; shift 2 ;;
-        --from-def)
-            MODE="from-def"; shift ;;
-        --from-docker)
-            MODE="from-docker"; DOCKER_URL="$2"; shift 2 ;;
-        --dry-run)
-            DRY_RUN=1; shift ;;
-        --log)
-            LOG_FILE="$2"; shift 2 ;;
-        --no-log)
-            LOG_DISABLED=1; shift ;;
-        -h|--help)
-            sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
-        *)
-            echo "Unknown arg: $1" >&2; exit 2 ;;
-    esac
+  case "$1" in
+  -o | --output)
+    OUT="$2"
+    shift 2
+    ;;
+  --from-def)
+    MODE="from-def"
+    shift
+    ;;
+  --from-docker)
+    MODE="from-docker"
+    DOCKER_URL="$2"
+    shift 2
+    ;;
+  --dry-run)
+    DRY_RUN=1
+    shift
+    ;;
+  --log)
+    LOG_FILE="$2"
+    shift 2
+    ;;
+  --no-log)
+    LOG_DISABLED=1
+    shift
+    ;;
+  -h | --help)
+    sed -n '2,30p' "${BASH_SOURCE[0]}"
+    exit 0
+    ;;
+  *)
+    echo "Unknown arg: $1" >&2
+    exit 2
+    ;;
+  esac
 done
 
 if [[ -z "$OUT" ]]; then
-    if [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
-        OUT="${PROTFORGE_SIF_DIR%/}/protforge-gpu.sif"
-    elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
-        OUT="${PROTFORGE_ROOT%/}/sifs/protforge-gpu.sif"
-    else
-        echo "ERROR: no output path for the SIF. Set one of:" >&2
-        echo "  - pass -o/--output /path/to/protforge-gpu.sif" >&2
-        echo "  - export PROTFORGE_SIF_DIR (writes \$PROTFORGE_SIF_DIR/protforge-gpu.sif)" >&2
-        echo "  - export PROTFORGE_ROOT (writes \$PROTFORGE_ROOT/sifs/protforge-gpu.sif)" >&2
-        echo "Non-interactive bash does not load ~/.bashrc; export in the job script or use -o." >&2
-        exit 1
-    fi
+  if [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
+    OUT="${PROTFORGE_SIF_DIR%/}/protforge-gpu.sif"
+  elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+    OUT="${PROTFORGE_ROOT%/}/sifs/protforge-gpu.sif"
+  else
+    echo "ERROR: no output path for the SIF. Set one of:" >&2
+    echo "  - pass -o/--output /path/to/protforge-gpu.sif" >&2
+    echo "  - export PROTFORGE_SIF_DIR (writes \$PROTFORGE_SIF_DIR/protforge-gpu.sif)" >&2
+    echo "  - export PROTFORGE_ROOT (writes \$PROTFORGE_ROOT/sifs/protforge-gpu.sif)" >&2
+    echo "Non-interactive bash does not load ~/.bashrc; export in the job script or use -o." >&2
+    exit 1
+  fi
 fi
 
 # Pick a base for SINGULARITY_CACHEDIR/TMPDIR defaults:
@@ -94,18 +111,18 @@ fi
 #     builds and often noexec on compute nodes).
 SING_BASE=""
 if [[ -n "${PROTFORGE_ROOT:-}" ]]; then
-    SING_BASE="${PROTFORGE_ROOT%/}"
+  SING_BASE="${PROTFORGE_ROOT%/}"
 elif [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
-    SING_BASE="$(dirname "${PROTFORGE_SIF_DIR%/}")"
+  SING_BASE="$(dirname "${PROTFORGE_SIF_DIR%/}")"
 fi
 if [[ -n "$SING_BASE" ]]; then
-    if [[ -z "${SINGULARITY_CACHEDIR:-}" ]]; then
-        export SINGULARITY_CACHEDIR="${SING_BASE}/sing_cache"
-    fi
-    if [[ -z "${SINGULARITY_TMPDIR:-}" ]]; then
-        export SINGULARITY_TMPDIR="${SING_BASE}/sing_tmp"
-    fi
-    mkdir -p "${SINGULARITY_CACHEDIR}" "${SINGULARITY_TMPDIR}"
+  if [[ -z "${SINGULARITY_CACHEDIR:-}" ]]; then
+    export SINGULARITY_CACHEDIR="${SING_BASE}/sing_cache"
+  fi
+  if [[ -z "${SINGULARITY_TMPDIR:-}" ]]; then
+    export SINGULARITY_TMPDIR="${SING_BASE}/sing_tmp"
+  fi
+  mkdir -p "${SINGULARITY_CACHEDIR}" "${SINGULARITY_TMPDIR}"
 fi
 
 # Apptainer (the LF fork) reads both APPTAINER_* and SINGULARITY_* names, but
@@ -113,41 +130,41 @@ fi
 # releases (emits deprecation warnings). Export both so the same script works
 # under either runtime without warnings.
 [[ -n "${SINGULARITY_CACHEDIR:-}" && -z "${APPTAINER_CACHEDIR:-}" ]] && export APPTAINER_CACHEDIR="$SINGULARITY_CACHEDIR"
-[[ -n "${SINGULARITY_TMPDIR:-}"   && -z "${APPTAINER_TMPDIR:-}"   ]] && export APPTAINER_TMPDIR="$SINGULARITY_TMPDIR"
+[[ -n "${SINGULARITY_TMPDIR:-}" && -z "${APPTAINER_TMPDIR:-}" ]] && export APPTAINER_TMPDIR="$SINGULARITY_TMPDIR"
 
 # Auto-log the entire run to a timestamped file so users can share it with us
 # on failure. Default location: <SING_BASE>/build-logs/build-<ts>.log if a
 # base is known, else next to the SIF in <dirname OUT>/build-logs/. Override
 # with --log /path; disable with --no-log.
-if (( ! LOG_DISABLED )) && [[ -z "$LOG_FILE" ]]; then
-    log_base=""
-    if [[ -n "$SING_BASE" ]]; then
-        log_base="${SING_BASE}/build-logs"
-    else
-        log_base="$(dirname "$OUT")/build-logs"
-    fi
-    mkdir -p "$log_base"
-    LOG_FILE="${log_base}/build-$(date +%Y-%m-%dT%H-%M-%S).log"
+if ((!LOG_DISABLED)) && [[ -z "$LOG_FILE" ]]; then
+  log_base=""
+  if [[ -n "$SING_BASE" ]]; then
+    log_base="${SING_BASE}/build-logs"
+  else
+    log_base="$(dirname "$OUT")/build-logs"
+  fi
+  mkdir -p "$log_base"
+  LOG_FILE="${log_base}/build-$(date +%Y-%m-%dT%H-%M-%S).log"
 fi
-if (( ! LOG_DISABLED )); then
-    mkdir -p "$(dirname "$LOG_FILE")"
-    # Tee stdout+stderr from this point on into the log file. `process
-    # substitution + exec` keeps the original tty output intact while
-    # capturing everything (including singularity's own progress bars).
-    exec > >(tee -a "$LOG_FILE") 2>&1
-    echo "Logging to  : $LOG_FILE"
-    echo "             (rerun with --no-log to disable, or --log PATH to override)"
+if ((!LOG_DISABLED)); then
+  mkdir -p "$(dirname "$LOG_FILE")"
+  # Tee stdout+stderr from this point on into the log file. `process
+  # substitution + exec` keeps the original tty output intact while
+  # capturing everything (including singularity's own progress bars).
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  echo "Logging to  : $LOG_FILE"
+  echo "             (rerun with --no-log to disable, or --log PATH to override)"
 fi
 
 if ! command -v singularity >/dev/null 2>&1; then
-    if command -v apptainer >/dev/null 2>&1; then
-        SING=apptainer
-    else
-        echo "ERROR: neither singularity nor apptainer is on PATH" >&2
-        exit 1
-    fi
+  if command -v apptainer >/dev/null 2>&1; then
+    SING=apptainer
+  else
+    echo "ERROR: neither singularity nor apptainer is on PATH" >&2
+    exit 1
+  fi
 else
-    SING=singularity
+  SING=singularity
 fi
 
 # Report which runtime + version we'll use, so test logs are self-documenting.
@@ -164,56 +181,56 @@ mkdir -p "$(dirname "$OUT")"
 # directory into itself". This is *exactly* the foot-gun that happens when
 # users set PROTFORGE_ROOT to the repo path instead of its parent.
 if [[ "$MODE" == "from-def" ]]; then
-    repo_real="$(cd "$REPO_ROOT" && pwd -P)"
-    for p in "${SINGULARITY_TMPDIR:-}" "$(dirname "$OUT")"; do
-        [[ -z "$p" ]] && continue
-        # Resolve to an absolute path if it exists; otherwise leave as-is.
-        if [[ -d "$p" ]]; then
-            p_real="$(cd "$p" && pwd -P)"
-        else
-            p_real="$p"
-        fi
-        case "$p_real/" in
-            "$repo_real"/*)
-                echo "ERROR: $p resolves inside REPO_ROOT ($repo_real)." >&2
-                echo "  This collides with '%files . /opt/protforge' in the def file" >&2
-                echo "  ('cp: cannot copy a directory into itself'). PROTFORGE_ROOT must" >&2
-                echo "  be the *parent* of the repo, not the repo path itself. See" >&2
-                echo "  containers/README.md for the expected layout." >&2
-                exit 1
-                ;;
-        esac
-    done
+  repo_real="$(cd "$REPO_ROOT" && pwd -P)"
+  for p in "${SINGULARITY_TMPDIR:-}" "$(dirname "$OUT")"; do
+    [[ -z "$p" ]] && continue
+    # Resolve to an absolute path if it exists; otherwise leave as-is.
+    if [[ -d "$p" ]]; then
+      p_real="$(cd "$p" && pwd -P)"
+    else
+      p_real="$p"
+    fi
+    case "$p_real/" in
+    "$repo_real"/*)
+      echo "ERROR: $p resolves inside REPO_ROOT ($repo_real)." >&2
+      echo "  This collides with '%files . /opt/protforge' in the def file" >&2
+      echo "  ('cp: cannot copy a directory into itself'). PROTFORGE_ROOT must" >&2
+      echo "  be the *parent* of the repo, not the repo path itself. See" >&2
+      echo "  containers/README.md for the expected layout." >&2
+      exit 1
+      ;;
+    esac
+  done
 fi
 
 case "$MODE" in
-    from-def)
-        # --force overwrites an existing SIF at $OUT. Without it, re-running
-        # after a failed/partial build aborts with "image file already exists".
-        # Matches the --force behavior of the pull branch below.
-        CMD=("$SING" build --force --fakeroot "$OUT" "$DEF_FILE")
-        ;;
-    from-docker)
-        if [[ -z "$DOCKER_URL" ]]; then
-            echo "ERROR: --from-docker requires a docker:// URL" >&2
-            exit 2
-        fi
-        # `singularity pull` writes to its own filename; force --name to OUT.
-        CMD=("$SING" pull --force --name "$OUT" "$DOCKER_URL")
-        ;;
+from-def)
+  # --force overwrites an existing SIF at $OUT. Without it, re-running
+  # after a failed/partial build aborts with "image file already exists".
+  # Matches the --force behavior of the pull branch below.
+  CMD=("$SING" build --force --fakeroot "$OUT" "$DEF_FILE")
+  ;;
+from-docker)
+  if [[ -z "$DOCKER_URL" ]]; then
+    echo "ERROR: --from-docker requires a docker:// URL" >&2
+    exit 2
+  fi
+  # `singularity pull` writes to its own filename; force --name to OUT.
+  CMD=("$SING" pull --force --name "$OUT" "$DOCKER_URL")
+  ;;
 esac
 
 echo "Mode        : $MODE"
 echo "Build context: $REPO_ROOT"
-[[ "$MODE" == "from-def" ]]    && echo "Def file    : $DEF_FILE"
+[[ "$MODE" == "from-def" ]] && echo "Def file    : $DEF_FILE"
 [[ "$MODE" == "from-docker" ]] && echo "Docker URL  : $DOCKER_URL"
 echo "Output SIF  : $OUT"
 [[ -n "${SINGULARITY_CACHEDIR:-}" ]] && echo "SINGULARITY_CACHEDIR: $SINGULARITY_CACHEDIR"
-[[ -n "${SINGULARITY_TMPDIR:-}" ]]   && echo "SINGULARITY_TMPDIR  : $SINGULARITY_TMPDIR"
+[[ -n "${SINGULARITY_TMPDIR:-}" ]] && echo "SINGULARITY_TMPDIR  : $SINGULARITY_TMPDIR"
 echo "Command     : ${CMD[*]}"
 
-if (( DRY_RUN )); then
-    exit 0
+if ((DRY_RUN)); then
+  exit 0
 fi
 
 # Run build from repo root so %files paths resolve correctly.

@@ -29,13 +29,13 @@ From: python:3.12-slim
 
 %runscript
 # they are commands that are run when the container is invoked 
-    exec boltz "@"
+    exec boltz "$@"
 
 
 %test
 # it runs at the end of the build process -> useful to test the container (imports and etc. )
     echo "Testing Import Boltz"
-    python -c "import boltz; import torch; print(torch.__version__); print("Boltz imported")"
+    python -c "import boltz; import torch; print(torch.__version__); print('Boltz imported')"
 
 
 
