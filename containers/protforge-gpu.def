@@ -94,14 +94,21 @@ From: ubuntu:22.04
         --index-url https://download.pytorch.org/whl/cu124
 
     # Boltz (structure prediction)
-    # cuequivariance-torch: NVIDIA accelerated triangle-mult kernel that
-    # boltz/model/layers/triangular_mult.py imports at runtime. Boltz 2.2.1's
-    # pyproject under-declares it (optional in metadata, required at runtime
-    # via in-function import). Without it, predict_step crashes inside the
-    # pairformer trunk with ModuleNotFoundError. Discovered 2026-05-28 in
-    # stage-1 E2E (Boltz chunk_0 / chunk_1). Will be pinned by PR-2's
+    # cuequivariance-{torch,ops-torch-cu12}: NVIDIA accelerated triangle-mult
+    # kernel that boltz/model/layers/triangular_mult.py imports at runtime.
+    # Boltz 2.2.1's pyproject under-declares cuequivariance-torch (optional in
+    # metadata, required at runtime via in-function import). cuequivariance-
+    # torch in turn loads cuequivariance-ops-torch-cu12 — the CUDA-version-
+    # specific wheel that ships the actual kernels. The "ops" wheel is NOT an
+    # automatic dep because the version tag pins to the CUDA major (cu12 here,
+    # matching our torch+cu124). Missing either one crashes predict_step
+    # inside the pairformer trunk. Discovered 2026-05-28 in stage-1 E2E
+    # (Boltz chunk_0 / chunk_1, two iterations). Will be pinned by PR-2's
     # requirements-container.lock once that lands.
-    pip3 install --no-cache-dir boltz cuequivariance-torch
+    pip3 install --no-cache-dir \
+        boltz \
+        cuequivariance-torch \
+        cuequivariance-ops-torch-cu12
 
     # ESM-C SDK (used by run_esm.py)
     # NB: esm SDK's esm/sdk/base_forge_client.py imports httpx unconditionally
