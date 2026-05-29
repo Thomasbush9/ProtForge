@@ -18,7 +18,10 @@ From: python:3.12-slim
 
     # install boltz: 
     pip install --no-cache-dir --upgrade pip 
-    pip install --no-cache-dir "boltz[cuda]" -U 
+    # we install first torch with a specific version for the cuda version we are using
+    pip install --no-cache-dir torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu128
+    pip install --no-cache-dir "boltz[cuda]" 
 
 
 %environment
