@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # define .yaml dir, msa dir, output dir
-INPUT_YAML=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original
+INPUT_YAML=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original/original.yaml
 INPUT_MSA=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original/msa
 OUTPUT_DIR=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests
 
