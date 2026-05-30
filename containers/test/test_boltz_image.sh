@@ -14,12 +14,12 @@
 set -euo pipefail
 
 # define .yaml dir, msa dir, output dir
-INPUT_YAML="${1}"
-INPUT_MSA="${2}"
-OUTPUT_DIR="${3}"
+INPUT_YAML=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original
+INPUT_MSA=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original/msa
+OUTPUT_DIR=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests
 
 #give path to image
-BOLTZ_IMAGE="${4}"
+BOLTZ_IMAGE=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/boltz.sif
 #define cache path for boltz weights:
 CACHE_PATH=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
 
@@ -32,3 +32,5 @@ singularity exec --nv \
   -B $OUTPUT_DIR:$OUTPUT_DIR \
   -B $CACHE_PATH:/weights \
   $BOLTZ_IMAGE boltz predict $INPUT_YAML --cache /weights --out_dir $OUTPUT_DIR
+
+echo "Run completed."
