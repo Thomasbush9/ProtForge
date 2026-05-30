@@ -31,6 +31,6 @@ singularity exec --nv \
   -B $INPUT_MSA:$INPUT_MSA \
   -B $OUTPUT_DIR:$OUTPUT_DIR \
   -B $CACHE_PATH:/weights \
-  $BOLTZ_IMAGE boltz predict $INPUT_YAML --cache /weights --out_dir $OUTPUT_DIR
+  $BOLTZ_IMAGE boltz predict $INPUT_YAML --cache /weights --out_dir $OUTPUT_DIR --devices 1 --accelerator gpu --override
 
 echo "Run completed."
