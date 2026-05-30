@@ -26,7 +26,7 @@ CACHE_PATH=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
 echo "Running singularity Image at ${BOLTZ_IMAGE}"
 
 # run the image:
-singularity exec --nv \
+singularity --debug exec --nv \
   -B $INPUT_YAML:$INPUT_YAML \
   -B $INPUT_MSA:$INPUT_MSA \
   -B $OUTPUT_DIR:$OUTPUT_DIR \
