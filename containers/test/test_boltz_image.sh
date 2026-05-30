@@ -25,6 +25,7 @@ CACHE_PATH=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
 
 echo "Running singularity Image at ${BOLTZ_IMAGE}"
 
+#TODO: add mix precision for torch on the h100
 # run the image:
 singularity --debug exec --nv \
   -B $INPUT_YAML:$INPUT_YAML \
