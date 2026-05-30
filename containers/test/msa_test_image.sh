@@ -24,8 +24,8 @@ MSA_DB=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/out
 
 echo "Running singularity image at ${MSA_IMAGE}..."
 
-singularity exec -nv \
+singularity exec --nv \
   -B $INPUT_FASTA:$INPUT_FASTA \
   -B $OUTPUT_DIR:$OUTPUT_DIR \
-  -B $MSA_IMAGE:$MSA_IMAGE \
+  -B $MSA_DB:$MSA_DB \
   $MSA_IMAGE colabfold_search "$INPUT_FASTA" "$MSA_DB" "$OUTPUT_DIR" --gpu 1 --thread "$THREADS"
