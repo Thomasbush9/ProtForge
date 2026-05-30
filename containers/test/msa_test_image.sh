@@ -20,8 +20,7 @@ OUTPUT_DIR=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images
 #image MSA
 MSA_IMAGE=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/msa.sif
 
-MSA_DB=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests
-
+MSA_DB=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 echo "Running singularity image at ${MSA_IMAGE}..."
 
 singularity exec --nv \
