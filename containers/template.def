@@ -23,6 +23,7 @@ From: ubuntu:22.04
 
 
 %runscript
+# they are commands that are run when the container is invoked 
 
 
 %test

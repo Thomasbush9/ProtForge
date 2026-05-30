@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: python:3.12-slim
+
+# Singularity Image for Boltz 
+#
+%files 
+# Sections where you can specify which files from host you want to copy in the Image.
+# For bigger files (e.g., models weights) you can: 
+# --bind host_path:image_path 
+
+%post 
+#Download section -> Ubuntu uses apt package manager 
+    apt-get update 
+    apt-get install -y --no-install-recommends \
+    git build-essential 
+
+# now install esmfold 2 
+    pip install --no-cache-dir --upgrade pip 
+
+    pip install --no-cache-dir torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu128
+    # warning: currently we install torch with cuda 12.8 as Kempner cluster does not have cuda13 driver
+    pip install esm@git+https://github.com/Biohub/esm.git@c94ed8d
+
+%environment
+# It defines environment variables that will be set at runtime -> not available at build time 
+# if you need envs available at build time define them in the 'post' section 
+
+
+%runscript
+# they are commands that are run when the container is invoked 
+
+
+%test
+# it runs at the end of the build process -> useful to test the container (imports and etc. )
+    echo "Testing torch version:"
+    python -c "import torch; print(torch.__version__)"
+
+    echo "Testing imports:"
+
+    python -c "from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print('ESMFold2Model Imported')"
+
+    echo "Tests passed."
+
+
+
+%labels
+
+
+
+
+%help
