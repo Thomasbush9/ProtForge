@@ -2,7 +2,6 @@
 
 # Download ESM models to the cache directory
 
-set -euo pipefail
 
 CACHE_DIR="${1:-./esm_models_cache}"
 
@@ -13,8 +12,6 @@ REPO="biohub/ESMFold2-Fast"
 mkdir -p $CACHE_DIR
 export HF_HOME=$CACHE_DIR
 echo "HF_HOME=$HF_HOME"
-unset HF_HUB_OFFLINE=1
-echo "HF_HUB_OFFLINE=$HF_HUB_OFFLINE"
 
 
 read -p "Do you want to provide a Hugging Face token? [y/N]: " REPLY
@@ -36,7 +33,7 @@ python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='$REPO')
 print('[OK] ESM model downloaded')
-print(f'Cache populated: '$CACHE_DIR')
+print(f'Cache populated: $CACHE_DIR')
 "
 
 echo "Download complete."
