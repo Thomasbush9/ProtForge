@@ -13,13 +13,28 @@
 
 set -euo pipefail
 
-IMAGE_PATH="${1}"
-CACHE_DIR="${2}"
+IMAGE_PATH="${1:?usage: $0 IMAGE.sif HF_HOME_CACHE_DIR}"
+CACHE_DIR="${2:?usage: $0 IMAGE.sif HF_HOME_CACHE_DIR}"
+CONTAINER_CACHE="/models/hf"
 
-echo "Launchin test for ESMFOLD2..."
+SNAPSHOT_DIR="$CACHE_DIR/hub/models--biohub--ESMFold2-Fast/snapshots"
+if [[ ! -d "$SNAPSHOT_DIR" ]] || [[ -z "$(ls -A "$SNAPSHOT_DIR" 2>/dev/null)" ]]; then
+  echo "ERROR: ESMFold2 cache missing or empty: $SNAPSHOT_DIR" >&2
+  echo "Run containers/download_scripts/esm_models.sh with HF_HOME=$CACHE_DIR first." >&2
+  exit 1
+fi
 
-singularity exec --nv \
-  -B $CACHE_DIR:$CACHE_DIR \
-  $IMAGE_PATH python /opt/run_esmfold2.py --cache $CACHE_DIR
+echo "Launching ESMFold2 test..."
+echo "  image:  $IMAGE_PATH"
+echo "  cache:  $CACHE_DIR -> $CONTAINER_CACHE (ro)"
+
+singularity exec --nv --cleanenv \
+  --env HF_HOME="$CONTAINER_CACHE" \
+  --env HF_HUB_OFFLINE=1 \
+  --env TRANSFORMERS_OFFLINE=1 \
+  --env SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+  -B "$CACHE_DIR:$CONTAINER_CACHE:ro" \
+  "$IMAGE_PATH" \
+  python /opt/run_esmfold2.py --cache "$CONTAINER_CACHE"
 
 echo "Run completed."
