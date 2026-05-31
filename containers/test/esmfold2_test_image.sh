@@ -17,12 +17,18 @@ IMAGE_PATH="${1:?usage: $0 IMAGE.sif HF_HOME_CACHE_DIR}"
 CACHE_DIR="${2:?usage: $0 IMAGE.sif HF_HOME_CACHE_DIR}"
 CONTAINER_CACHE="/models/hf"
 
-SNAPSHOT_DIR="$CACHE_DIR/hub/models--biohub--ESMFold2-Fast/snapshots"
-if [[ ! -d "$SNAPSHOT_DIR" ]] || [[ -z "$(ls -A "$SNAPSHOT_DIR" 2>/dev/null)" ]]; then
-  echo "ERROR: ESMFold2 cache missing or empty: $SNAPSHOT_DIR" >&2
-  echo "Run containers/download_scripts/esm_models.sh with HF_HOME=$CACHE_DIR first." >&2
-  exit 1
-fi
+require_snapshot() {
+  local repo="$1"
+  local snapshot_dir="$CACHE_DIR/hub/models--${repo//\//--}/snapshots"
+  if [[ ! -d "$snapshot_dir" ]] || [[ -z "$(ls -A "$snapshot_dir" 2>/dev/null)" ]]; then
+    echo "ERROR: cache missing or empty: $snapshot_dir" >&2
+    echo "Run: bash containers/download_scripts/esm_models.sh $CACHE_DIR" >&2
+    exit 1
+  fi
+}
+
+require_snapshot "biohub/ESMFold2-Fast"
+require_snapshot "biohub/ESMC-6B"
 
 echo "Launching ESMFold2 test..."
 echo "  image:  $IMAGE_PATH"
