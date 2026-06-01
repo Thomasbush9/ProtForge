@@ -24,24 +24,30 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     # build backends for --no-build-isolation (transformer_engine, git deps)
     pip install --no-cache-dir packaging setuptools wheel
 
-    # Pin torch 2.8 so flash-attn wheel tag (cu12torch2.8) matches; cu128 index alone may resolve 2.7.x
+    # CUDA 12.8 only (Kempner: no CUDA 13 driver). Pin torch first.
+    # xformers/flash-attn use --no-deps; esm uses -c constraints.txt (not --no-build-isolation).
+    TORCH_CU128_INDEX="https://download.pytorch.org/whl/cu128"
     pip install --no-cache-dir torch==2.8.0 torchvision \
-        --index-url https://download.pytorch.org/whl/cu128
-    # install transformer Engine; PyTorch ext compiles from source against torch + nvcc/cuDNN
+        --index-url "${TORCH_CU128_INDEX}"
+
+    pip install --no-cache-dir psutil ninja
+
+    # Prebuilt FA2 wheel — must match pinned torch 2.8 + cxx11 ABI (--no-deps: never touch torch)
+    python3 -c "import torch; print('torch for flash-attn:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
+    pip install --no-cache-dir --no-deps \
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+
     export NVTE_FRAMEWORK=pytorch
     export MAX_JOBS=4
     pip install --no-cache-dir --no-build-isolation "transformer_engine[pytorch]"
-    pip install --no-cache-dir --no-build-isolation xformers
 
-    # Prebuilt FA2 wheel (no nvcc compile — avoids OOM on build nodes). Must match torch + ABI.
-    pip install --no-cache-dir psutil ninja
-    python3 -c "import torch; print('torch for flash-attn wheel:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
-    pip install --no-cache-dir \
-        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+    # xformers from PyTorch cu128 index only; --no-deps prevents torch 2.12+cu130 upgrade
+    pip install --no-cache-dir --no-deps xformers --index-url "${TORCH_CU128_INDEX}"
 
-    # esm pins Biohub transformers fork (esmfold2); do not install PyPI transformers separately
-    # warning: torch cu128 matches Kempner (no cuda 13 driver yet)
-    pip install --no-cache-dir "esm@git+https://github.com/Biohub/esm.git@c94ed8d"
+    # esm: let pip install pyproject deps (incl. Biohub transformers); constrain torch so it stays 2.8.0+cu128
+    printf '%s\n' 'torch==2.8.0' > /tmp/pip-constraints.txt
+    pip install --no-cache-dir -c /tmp/pip-constraints.txt \
+        "esm@git+https://github.com/Biohub/esm.git@c94ed8d"
 
 %environment
     export HF_HOME=${HF_HOME:-/models/hf}
@@ -56,15 +62,21 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
 
 %test
-# it runs at the end of the build process -> useful to test the container (imports and etc. )
-    echo "Testing torch version:"
-    python -c "import torch; print(torch.__version__, 'cuda', torch.version.cuda)"
-
-    echo "Testing imports:"
-
-    python -c "import flash_attn; from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print('flash_attn', flash_attn.__version__); print('ESMFold2Model Imported')"
-
-
+    set -e
+    echo "Testing torch + flash-attn + esmfold2 imports..."
+    python3 -c "
+import torch
+v = torch.__version__
+assert '+cu128' in v, f'torch must stay cu128, got {v}'
+assert '+cu130' not in v, f'refusing cu130 torch: {v}'
+print('torch', v, 'cuda', torch.version.cuda)
+import flash_attn
+import xformers
+from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+print('flash_attn', flash_attn.__version__)
+print('xformers', xformers.__version__)
+print('ESMFold2Model ok')
+"
     echo "Tests passed."
 
 
