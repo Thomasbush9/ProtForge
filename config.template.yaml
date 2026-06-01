@@ -6,8 +6,7 @@ pipeline:
   msa: true
   boltz: true
   esm: true
-  esmfold: false  # facebook/esmfold_v1 structure prediction (alternative to Boltz)
-  es: false  # Requires additional setup - see docs/CLUSTER_SETUP.md
+  esmfold: false  # ESMFold2 structure prediction (alternative to Boltz)
 
 # Input data
 input:
@@ -94,19 +93,6 @@ esmfold:
   chunk_size_threshold: 1200
   chunk_size: 64
 
-# ES analysis (optional) - USER SETUP REQUIRED
-# Computes deformation metrics per sequence, averaging across Boltz runs.
-# Set exactly ONE reference option: ref_dir, ref_path, or ref_seq.
-es:
-  pdanalysis_dir: /n/home06/<YOUR_USER>/PDAnalysis  # PDAnalysis repo (containing main.py)
-  ref_dir: ""                              # Multi-run ref dir (has run_N/ subdirs)
-  ref_path: /path/to/wildtype_structure.cif  # OR: single reference CIF file
-  ref_seq: ""                              # OR: sequence name from this pipeline's output
-  method: [strain]                         # Deformation methods (strain, shear, all, etc.)
-  min_plddt: 70                            # pLDDT cutoff for residue filtering
-  lddt_cutoffs: [0.125, 0.25, 0.5, 1]     # LDDT distance thresholds
-  env_path: /n/home06/<YOUR_USER>/envs/es-analysis
-
 # ---------------------------------------------------------------------------
 # Bin-aware chunking (per stage) — OPTIONAL
 # ---------------------------------------------------------------------------
@@ -159,7 +145,6 @@ containers:
   boltz: ""
   esm: ""
   esmfold: ""
-  pdanalysis: ""   # ES/PDAnalysis ships in a separate (MPI) image, not built yet.
   # Comma-separated bind list. Each entry is one of:
   #   - host                  (host:host, rw — for writable workspace dirs)
   #   - host:ro      (or :rw) (host:host bind at given mode — shortcut)
@@ -202,4 +187,3 @@ slurm:
   #   boltz:   {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
   #   esm:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 16, gpus: 1}
   #   esmfold: {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
-  #   es:      {mem_mb: 16000, runtime: 120, cpus_per_task: 8,  gpus: 0}

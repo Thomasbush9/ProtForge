@@ -26,7 +26,7 @@ DEFAULT_SCALING_PATH = HERE / "scaling_models.yaml"
 CALIBRATED_SCALING_PATH = HERE / "scaling_models.calibrated.yaml"
 
 GPU_USING_STAGES = {"msa", "boltz", "esm", "esmfold"}
-ALL_STAGES = ["msa", "boltz", "esm", "esmfold", "es"]
+ALL_STAGES = ["msa", "boltz", "esm", "esmfold"]
 
 
 # --- Data containers -------------------------------------------------------
@@ -329,8 +329,8 @@ def estimate_stage(
     requested = None if (gpu_preference in (None, "auto", "")) else gpu_preference
 
     # Pick GPU based on a *first-pass* mem estimate using the largest GPU's
-    # coefficients (so we don't loop). For ES (cpu-only), skip this and use 'cpu'.
-    if stage == "es":
+    # coefficients (so we don't loop).
+    if stage not in GPU_USING_STAGES:
         gpu_type = "cpu"
         gpu_notes: list[str] = []
         coeffs_per_gpu = stage_models["per_gpu"]["cpu"]
@@ -429,15 +429,6 @@ def estimate_stage(
             * time_safety
         )
         num_chunks = math.ceil(stats.count / chunk_size)
-    elif stage == "es":
-        coeffs_t = coeffs_per_gpu["runtime_sec"]
-        runtime_sec = (
-            coeffs_t.get("base", 0)
-            + coeffs_t.get("per_struct", 0) * stats.count
-            + coeffs_t.get("per_residue", 0) * stats.total_residues
-        ) * time_safety
-        chunk_size = stats.count  # monolithic
-        num_chunks = 1
     else:
         raise ValueError(f"Unknown stage: {stage}")
 
@@ -738,7 +729,6 @@ def apply_estimate_to_config(
         "boltz": "max_files_per_job",
         "esm": "num_chunks",
         "esmfold": "num_chunks",
-        "es": None,
     }
 
     for stage, est in estimates.items():

@@ -8,9 +8,8 @@
 #   - Boltz: O(L^2) attention activations and runtime; H100 baseline
 #   - ESM/ESMFold: docs/SNAKEMAKE_GUIDE.md notes "5-30s per seq on H100"
 #   - MSA: ColabFold/MMseq2 is mostly DB-bound; constant per seq + small per-residue
-#   - ES: PDAnalysis is CPU-bound, scales with structures and residues
 #
-# After running slurm_scripts/calibrate.sh on the cluster, real numbers from
+# After running a calibration pass on the cluster, real numbers from
 # benchmarks/*.tsv will be fit into webapp/scaling_models.calibrated.yaml,
 # which the estimator prefers when present.
 
@@ -117,7 +116,7 @@ esmfold:
   # The estimator switches between two coefficient sets at `chunk_threshold`:
   #   - L < chunk_threshold : runtime_sec_per_seq        (fast path, no OOM risk)
   #   - L >= chunk_threshold: runtime_sec_per_seq_chunked (chunked trunk, ~1.5×)
-  # `slurm_scripts/run_esmfold.py:--chunk_size_threshold` enables this in the rule.
+  # The esmfold rule's --chunk_size_threshold enables this at runtime.
   default_gpu: h100
   cpus: 8
   gpus: 1
@@ -140,13 +139,3 @@ esmfold:
   max_chunk_size: 200
   min_chunk_size: 1
 
-es:
-  # PDAnalysis: CPU-bound — does NOT use GPU. Current config wastes one.
-  default_gpu: null
-  cpus: 8
-  gpus: 0
-  monolithic: true              # single SLURM job for all sequences
-  per_gpu:
-    cpu:
-      mem_mb: {base: 8000, per_struct: 4, per_residue: 0.2}
-      runtime_sec: {base: 120, per_struct: 5, per_residue: 0.05}

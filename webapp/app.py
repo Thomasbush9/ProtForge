@@ -53,7 +53,7 @@ USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
 # Per-stage auto-refresh intervals (seconds)
-REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ESMFold": 60, "ES": 10}
+REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ESMFold": 60}
 
 # Map Snakemake rule names to pipeline stages
 RULE_TO_STAGE = {
@@ -71,8 +71,6 @@ RULE_TO_STAGE = {
     "run_esmfold_chunk": "ESMFold",
     "chunk_yamls_for_esmfold": "ESMFold",
     "esmfold_complete": "ESMFold",
-    "collect_es_paths": "ES",
-    "run_es_all": "ES",
 }
 
 # ---------------------------------------------------------------------------
@@ -230,7 +228,6 @@ _SLURM_DEFAULTS: dict[str, tuple[int, int, int]] = {
     "boltz":   ( 16000,  60, 8),
     "esm":     ( 32000,  60, 16),
     "esmfold": ( 32000, 120, 8),
-    "es":      ( 16000, 120, 8),
 }
 
 
@@ -412,7 +409,7 @@ def render_estimate_panel(scan_result: dict, cfg: dict, session: Session,
         st.info(
             f"Found {stats.count} valid {stats.file_type.upper()} file(s), "
             "but no pipeline stages are enabled. Toggle MSA / Boltz / ESM / "
-            "ESMFold / ES above to see resource estimates."
+            "ESMFold above to see resource estimates."
         )
         return
 
@@ -675,11 +672,6 @@ def get_stage_progress(cfg: dict) -> dict:
     if pipeline.get("esmfold"):
         done = count_files(seq_dir, "*/esmfold/structure.pdb")
         progress["ESMFold"] = (done, total)
-
-    if pipeline.get("es"):
-        es_dir = output_dir / "es"
-        done = count_files(es_dir, "*.csv")
-        progress["ES"] = (done, total)
 
     return progress
 
@@ -1375,12 +1367,12 @@ with tab_config:
 
     with st.expander("Pipeline Stages", expanded=True):
         pipeline = cfg.get("pipeline", {})
-        cols = st.columns(5)
+        cols = st.columns(4)
         pipeline["msa"] = cols[0].toggle("MSA", value=pipeline.get("msa", True))
         pipeline["boltz"] = cols[1].toggle("Boltz", value=pipeline.get("boltz", True))
         pipeline["esm"] = cols[2].toggle("ESM", value=pipeline.get("esm", True))
         pipeline["esmfold"] = cols[3].toggle("ESMFold", value=pipeline.get("esmfold", False))
-        pipeline["es"] = cols[4].toggle("ES", value=pipeline.get("es", False))
+        pipeline.pop("es", None)
         cfg["pipeline"] = pipeline
 
     with st.expander("Input / Output", expanded=True):
@@ -1700,33 +1692,6 @@ with tab_config:
 
         cfg["esmfold"] = esmfold
 
-    with st.expander("ES Settings"):
-        es = cfg.get("es", {})
-        render_slurm_resources(cfg, "es")
-        es["pdanalysis_dir"] = st.text_input("PDAnalysis directory", value=es.get("pdanalysis_dir", ""))
-
-        st.markdown("**Reference structure** (set exactly one)")
-        es["ref_dir"] = st.text_input("Reference dir (multi-run)", value=es.get("ref_dir", ""))
-        es["ref_path"] = st.text_input("Reference CIF file", value=es.get("ref_path", ""))
-        es["ref_seq"] = st.text_input("Reference sequence name", value=es.get("ref_seq", ""))
-
-        c1, c2 = st.columns(2)
-        es["min_plddt"] = c1.number_input("Min pLDDT", value=es.get("min_plddt", 70), min_value=0, max_value=100)
-        method_str = ", ".join(es.get("method", ["strain"])) if isinstance(es.get("method"), list) else str(es.get("method", "strain"))
-        method_input = c2.text_input("Methods (comma-separated)", value=method_str)
-        es["method"] = [m.strip() for m in method_input.split(",") if m.strip()]
-
-        cutoffs = es.get("lddt_cutoffs", [0.125, 0.25, 0.5, 1])
-        cutoffs_str = ", ".join(str(c) for c in cutoffs)
-        cutoffs_input = st.text_input("LDDT cutoffs (comma-separated)", value=cutoffs_str)
-        try:
-            es["lddt_cutoffs"] = [float(x.strip()) for x in cutoffs_input.split(",") if x.strip()]
-        except ValueError:
-            st.error("Invalid cutoff values")
-
-        es["env_path"] = st.text_input("ES env path", value=es.get("env_path", ""))
-        cfg["es"] = es
-
     with st.expander("SLURM Settings"):
         slurm = cfg.get("slurm", {})
         slurm["log_dir"] = st.text_input("Log directory", value=slurm.get("log_dir", ""))
@@ -1736,7 +1701,7 @@ with tab_config:
         slurm["email"] = st.text_input("Email", value=slurm.get("email", ""))
 
         st.markdown("**Per-stage partition overrides** (leave empty for default)")
-        for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
+        for stage in ["msa", "boltz", "esm", "esmfold"]:
             override = slurm.get(stage, {})
             val = st.text_input(f"{stage} partition", value=override.get("partition", ""), key=f"slurm_{stage}")
             if val:
@@ -1755,7 +1720,7 @@ with tab_config:
         resources = slurm.get("resources", {})
         if resources:
             st.markdown("**Per-stage resource overrides** (set by Apply estimates)")
-            for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
+            for stage in ["msa", "boltz", "esm", "esmfold"]:
                 r = resources.get(stage)
                 if not r:
                     continue
@@ -1789,7 +1754,7 @@ with tab_run:
     pipeline = cfg.get("pipeline", {})
 
     st.subheader("Pipeline Summary")
-    stages = ["msa", "boltz", "esm", "esmfold", "es"]
+    stages = ["msa", "boltz", "esm", "esmfold"]
     active = [s.upper() for s in stages if pipeline.get(s, False)]
     if active:
         st.info(f"Active stages: {' → '.join(active)}")
@@ -1899,7 +1864,7 @@ with tab_monitor:
     if not progress:
         st.info("No stages enabled or output directory not set.")
     else:
-        sentinels = {"MSA": ".msa_complete", "Boltz": ".boltz_complete", "ESM": ".esm_complete", "ESMFold": ".esmfold_complete", "ES": "es/.done"}
+        sentinels = {"MSA": ".msa_complete", "Boltz": ".boltz_complete", "ESM": ".esm_complete", "ESMFold": ".esmfold_complete"}
 
         for stage, (done, total) in progress.items():
             sentinel = Path(output_dir) / sentinels[stage] if output_dir else None

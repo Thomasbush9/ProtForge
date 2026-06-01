@@ -1,8 +1,8 @@
 """
 ProtForge Snakemake Workflow
 ============================
-Orchestrates the 4-stage protein prediction pipeline:
-  MSA -> Boltz -> ESM -> ES
+Orchestrates the protein prediction pipeline:
+  MSA -> Boltz -> ESM / ESMFold
 
 Usage:
   snakemake --profile profiles/slurm/           # Full pipeline via SLURM
@@ -30,7 +30,6 @@ RUN_MSA     = config["pipeline"].get("msa", True)
 RUN_BOLTZ   = config["pipeline"].get("boltz", True)
 RUN_ESM     = config["pipeline"].get("esm", True)
 RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
-RUN_ES      = config["pipeline"].get("es", True)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
 SEQUENCES_DIR = f"{OUTPUT}/sequences"
@@ -215,10 +214,9 @@ def container_cmd(stage, extra_env=""):
         The ${{SLURM_TMPDIR:-/tmp}} expansion is shell-expanded at rule
         runtime (it appears inside the rule's bash shell block).
     """
-    # Resolve SIF: stage-specific override wins, otherwise fall back to the
-    # shared `containers.gpu` (single-SIF design, matches README + def file).
-    # Per-stage keys remain supported for the day we split the image (e.g.
-    # ES/PDAnalysis ships in its own MPI SIF).
+    # Resolve SIF: per-stage image (containers.<stage>, e.g. containers.boltz)
+    # is the primary path. `containers.gpu` remains as an optional shared
+    # fallback for users who bundle several stages into one image.
     sif = CONTAINERS.get(stage, "") or CONTAINERS.get("gpu", "")
     if not sif:
         return ""
@@ -251,8 +249,6 @@ if RUN_ESM:
     include: "workflow/rules/esm.smk"
 if RUN_ESMFOLD:
     include: "workflow/rules/esmfold.smk"
-if RUN_ES:
-    include: "workflow/rules/es.smk"
 
 
 def get_targets():
@@ -266,8 +262,6 @@ def get_targets():
         targets.append(f"{OUTPUT}/.esm_complete")
     if RUN_ESMFOLD:
         targets.append(f"{OUTPUT}/.esmfold_complete")
-    if RUN_ES:
-        targets.append(f"{OUTPUT}/es/.done")
     return targets
 
 
@@ -311,7 +305,7 @@ def _write_benchmark_summary(status):
             lines.append("-" * 50)
             lines.append(f"{'Stage':<15} {'Total (s)':>12} {'# Rules':>10} {'Avg (s)':>10}")
             total_rule_time = 0
-            for stage in ["msa", "boltz", "esm", "esmfold", "es"]:
+            for stage in ["msa", "boltz", "esm", "esmfold"]:
                 if stage not in stage_times:
                     continue
                 times = stage_times[stage]
