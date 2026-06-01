@@ -34,8 +34,9 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     # Prebuilt FA2 wheel — must match pinned torch 2.8 + cxx11 ABI (--no-deps: never touch torch)
     python3 -c "import torch; print('torch for flash-attn:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
+    # xformers 0.0.32.post2 requires flash-attn<=2.8.2 (2.8.3 wheel breaks fmha import)
     pip install --no-cache-dir --no-deps \
-        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.2/flash_attn-2.8.2+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
 
     export NVTE_FRAMEWORK=pytorch
     export MAX_JOBS=4
@@ -75,7 +76,9 @@ import xformers
 assert xformers.__version__.startswith('0.0.32'), f'xformers 0.0.32.x required for torch 2.8, got {xformers.__version__}'
 import xformers.ops.fmha  # fails if C++ ext missing
 from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-print('flash_attn', flash_attn.__version__)
+v_fa = flash_attn.__version__
+assert v_fa.startswith('2.8.2'), f'flash-attn must be <=2.8.2 for xformers 0.0.32, got {v_fa}'
+print('flash_attn', v_fa)
 print('xformers', xformers.__version__)
 print('ESMFold2Model ok')
 "
