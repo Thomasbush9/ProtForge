@@ -24,14 +24,20 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     # build backends for --no-build-isolation (transformer_engine, git deps)
     pip install --no-cache-dir packaging setuptools wheel
 
-    pip install --no-cache-dir torch torchvision \
+    # Pin torch 2.8 so flash-attn wheel tag (cu12torch2.8) matches; cu128 index alone may resolve 2.7.x
+    pip install --no-cache-dir torch==2.8.0 torchvision \
         --index-url https://download.pytorch.org/whl/cu128
     # install transformer Engine; PyTorch ext compiles from source against torch + nvcc/cuDNN
     export NVTE_FRAMEWORK=pytorch
     export MAX_JOBS=4
     pip install --no-cache-dir --no-build-isolation "transformer_engine[pytorch]"
     pip install --no-cache-dir --no-build-isolation xformers
-    pip install --no-cache-dir --no-build-isolation flash-attn
+
+    # Prebuilt FA2 wheel (no nvcc compile — avoids OOM on build nodes). Must match torch + ABI.
+    pip install --no-cache-dir psutil ninja
+    python3 -c "import torch; print('torch for flash-attn wheel:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
+    pip install --no-cache-dir \
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
 
     # esm pins Biohub transformers fork (esmfold2); do not install PyPI transformers separately
     # warning: torch cu128 matches Kempner (no cuda 13 driver yet)
@@ -56,7 +62,7 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     echo "Testing imports:"
 
-    python -c "from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print('ESMFold2Model Imported')"
+    python -c "import flash_attn; from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print('flash_attn', flash_attn.__version__); print('ESMFold2Model Imported')"
 
 
     echo "Tests passed."
