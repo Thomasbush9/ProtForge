@@ -24,29 +24,26 @@ From: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     # build backends for --no-build-isolation (transformer_engine, git deps)
     pip install --no-cache-dir packaging setuptools wheel
 
-    # CUDA 12.8 only (Kempner: no CUDA 13 driver). Pin torch first.
-    # xformers/flash-attn use --no-deps; esm uses -c constraints.txt (not --no-build-isolation).
+    # CUDA 12.8 only (Kempner: no CUDA 13 driver). Aligned stack: torch 2.9.1 + xformers 0.0.33.post2 + FA 2.8.3.
     TORCH_CU128_INDEX="https://download.pytorch.org/whl/cu128"
-    pip install --no-cache-dir torch==2.8.0 torchvision \
+    pip install --no-cache-dir torch==2.9.1 torchvision \
         --index-url "${TORCH_CU128_INDEX}"
 
     pip install --no-cache-dir psutil ninja
-
-    # Prebuilt FA2 wheel — must match pinned torch 2.8 + cxx11 ABI (--no-deps: never touch torch)
-    python3 -c "import torch; print('torch for flash-attn:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
-    # xformers 0.0.32.post2 requires flash-attn<=2.8.2 (2.8.3 wheel breaks fmha import)
-    pip install --no-cache-dir --no-deps \
-        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.2/flash_attn-2.8.2+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
 
     export NVTE_FRAMEWORK=pytorch
     export MAX_JOBS=4
     pip install --no-cache-dir --no-build-isolation "transformer_engine[pytorch]"
 
-    # xformers 0.0.32.post2 matches torch 2.8.0+cu128 (cu128 index has .post1/.post2, not plain 0.0.32)
-    pip install --no-cache-dir --no-deps "xformers==0.0.32.post2" --index-url "${TORCH_CU128_INDEX}"
+    # Prebuilt FA2 2.8.3 — must match torch 2.9.x + cxx11 ABI (--no-deps: never touch torch)
+    python3 -c "import torch; print('torch for flash-attn:', torch.__version__, 'cxx11_abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
+    pip install --no-cache-dir --no-deps \
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
 
-    # esm: let pip install pyproject deps (incl. Biohub transformers); constrain torch so it stays 2.8.0+cu128
-    printf '%s\n' 'torch==2.8.0' > /tmp/pip-constraints.txt
+    # xformers 0.0.33.post2: torch 2.9.1 + flash-attn<=2.8.3 (0.0.32.x only allows FA<=2.8.2)
+    pip install --no-cache-dir --no-deps "xformers==0.0.33.post2" --index-url "${TORCH_CU128_INDEX}"
+
+    printf '%s\n' 'torch==2.9.1' > /tmp/pip-constraints.txt
     pip install --no-cache-dir -c /tmp/pip-constraints.txt \
         "esm@git+https://github.com/Biohub/esm.git@c94ed8d"
 
@@ -73,11 +70,11 @@ assert '+cu130' not in v, f'refusing cu130 torch: {v}'
 print('torch', v, 'cuda', torch.version.cuda)
 import flash_attn
 import xformers
-assert xformers.__version__.startswith('0.0.32'), f'xformers 0.0.32.x required for torch 2.8, got {xformers.__version__}'
-import xformers.ops.fmha  # fails if C++ ext missing
+assert xformers.__version__.startswith('0.0.33'), f'xformers 0.0.33.x required for torch 2.9, got {xformers.__version__}'
+import xformers.ops.fmha  # version-checks flash-attn + loads C++ ext
 from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 v_fa = flash_attn.__version__
-assert v_fa.startswith('2.8.2'), f'flash-attn must be <=2.8.2 for xformers 0.0.32, got {v_fa}'
+assert v_fa.startswith('2.8.'), f'expected flash-attn 2.8.x, got {v_fa}'
 print('flash_attn', v_fa)
 print('xformers', xformers.__version__)
 print('ESMFold2Model ok')
