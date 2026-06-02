@@ -1,13 +1,11 @@
-from functools import cache
-import os, time 
+import os
+import time
 from argparse import ArgumentParser
-from esm.sdk import batch_executor
-from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-from transformers.models.esmc.modeling_esmc import ESMCModel
-from esm.sdk.api import ESMProtein, LogitsConfig
-from containers.run_esmfold2 import hub_cache
 
-ESMFOLD2_REPO = "biohub/ESMFold2-Fast"
+from esm.sdk import batch_executor
+from esm.sdk.api import ESMProtein, LogitsConfig
+from transformers.models.esmc.modeling_esmc import ESMCModel
+
 ESMC_REPO = "biohub/ESMC-6B"
 #config for pooling 
 EMBEDDING_CONFIG = LogitsConfig(
@@ -37,7 +35,7 @@ def parse_inputs(input:str):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--cache", type=str)
-    parser.add_argument("--input", type=str)
+    # parser.add_argument("--input", type=str)
 
     args = parser.parse_args()
     hub_cache = _enforce_offline(args.cache)
