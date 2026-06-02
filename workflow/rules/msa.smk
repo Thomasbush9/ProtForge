@@ -69,9 +69,9 @@ rule run_colabfold_search:
     params:
         output_dir = f"{MSA_CHUNKS}/chunk_{{chunk_id}}/colabfold_output",
         mmseq2_db = MSA_CFG.get("mmseq2_db", ""),
-        colabfold_bin = MSA_CFG.get("colabfold_bin", ""),
         threads = 4,
-        container_cmd = container_cmd("colabfold"),
+        runtime = CONTAINER_RUNTIME,
+        sif = container_sif("colabfold"),
     resources:
         cpus_per_task = stage_resource("msa", "cpus_per_task", 4),
         mem_mb        = lambda wc: chunk_resource(
@@ -94,23 +94,27 @@ rule run_colabfold_search:
         export CUDA_VISIBLE_DEVICES=0
         export NUM_GPU_DEVICES=1
 
+        if [ -z "{params.sif}" ]; then
+            echo "ERROR: no MSA container configured. Set containers.colabfold" \
+                 "(or containers.gpu) in config to the msa .sif path." >&2
+            exit 1
+        fi
+
         # Clean stale temp files from previous failed runs (tmp1, tmp2, tmp3, ...)
         # but keep "tmp" itself — colabfold expects to rmtree("tmp") at the end
         rm -rf {params.output_dir}/tmp[0-9]* {params.output_dir}/.done
         mkdir -p {params.output_dir}/tmp
 
-        if [ -n "{params.container_cmd}" ]; then
-            {params.container_cmd} \
-                colabfold_search {input.combined} {params.mmseq2_db} {params.output_dir} \
-                    --thread {params.threads} --gpu 1
-        else
-            module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
-            if [ -n "{params.colabfold_bin}" ]; then
-                export PATH="{params.colabfold_bin}:$PATH"
-            fi
+        # Container-only: run colabfold_search inside the per-stage MSA image.
+        # Same-path binds (host:host) so the fasta, DB and output paths are
+        # identical inside the container — mirrors containers/test/msa_test_image.sh.
+        {params.runtime} exec --nv \
+            -B {input.combined}:{input.combined} \
+            -B {params.mmseq2_db}:{params.mmseq2_db} \
+            -B {params.output_dir}:{params.output_dir} \
+            {params.sif} \
             colabfold_search {input.combined} {params.mmseq2_db} {params.output_dir} \
                 --thread {params.threads} --gpu 1
-        fi
 
         touch {output.done}
         """

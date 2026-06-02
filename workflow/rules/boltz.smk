@@ -73,6 +73,16 @@ def _boltz_chunker_extra() -> str:
 BOLTZ_CHUNKER_EXTRA = _boltz_chunker_extra()
 BOLTZ_CHUNKS_TSV = f"{BOLTZ_CHUNKS}/chunks.tsv"
 
+# Boltz reads a chunk dir of (symlinked) YAMLs whose `msa:` field is an absolute
+# a3m path under sequences/. We bind sequences/ so both the symlink targets and
+# the a3m files resolve in-container. When MSA is skipped and the user supplies
+# their own yaml_dir, that dir differs from sequences/ and must also be bound.
+_BOLTZ_EXTRA_YAML_BIND = (
+    f"-B {YAML_SOURCE_DIR}:{YAML_SOURCE_DIR}"
+    if YAML_SOURCE_DIR and YAML_SOURCE_DIR != SEQUENCES_DIR
+    else ""
+)
+
 
 checkpoint chunk_yamls_for_boltz:
     """Split YAML files into chunk directories for parallel boltz predict."""
@@ -119,20 +129,14 @@ rule run_boltz_predict:
         f"{OUTPUT}/logs/boltz/predict_{{chunk_id}}_run_{{run_id}}.log"
     params:
         output_dir = f"{BOLTZ_CHUNKS}/chunk_{{chunk_id}}_run_{{run_id}}_output",
-        cache_dir = BOLTZ_CFG.get("cache_dir", ""),
-        env_path = BOLTZ_CFG.get("env_path", ""),
+        weights = BOLTZ_CFG.get("cache_dir", ""),
+        msa_dir = SEQUENCES_DIR,
+        extra_yaml_bind = _BOLTZ_EXTRA_YAML_BIND,
         recycling_steps = BOLTZ_CFG.get("recycling_steps", 10),
         diffusion_samples = BOLTZ_CFG.get("diffusion_samples", 25),
         extra_args = BOLTZ_EXTRA_ARGS,
-        # TRITON_CACHE_DIR is set by the rule's bash before container_cmd
-        # is expanded. Forwarding it via extra_env (instead of appending
-        # `--env ...` after the SIF) keeps it on the singularity option
-        # side; Singularity treats anything after the SIF as the in-
-        # container command.
-        container_cmd = container_cmd(
-            "boltz",
-            extra_env="--env TRITON_CACHE_DIR=$TRITON_CACHE_DIR",
-        ),
+        runtime = CONTAINER_RUNTIME,
+        sif = container_sif("boltz"),
     resources:
         cpus_per_task = stage_resource("boltz", "cpus_per_task", 8),
         mem_mb        = lambda wc: chunk_resource(
@@ -159,24 +163,31 @@ rule run_boltz_predict:
         mkdir -p "$TRITON_CACHE_DIR"
         mkdir -p {params.output_dir}
 
-        if [ -n "{params.container_cmd}" ]; then
-            {params.container_cmd} \
-                boltz predict {input.chunk_dir} \
-                    --cache {params.cache_dir} --out_dir {params.output_dir} \
-                    --devices 1 --accelerator gpu \
-                    --recycling_steps {params.recycling_steps} \
-                    --diffusion_samples {params.diffusion_samples} \
-                    {params.extra_args} --override
-        else
-            module load python/3.12.8-fasrc01 gcc/14.2.0-fasrc01 cuda/12.9.1-fasrc01 cudnn/9.10.2.21_cuda12-fasrc01 || true
-            mamba activate {params.env_path}
+        if [ -z "{params.sif}" ]; then
+            echo "ERROR: no Boltz container configured. Set containers.boltz" \
+                 "(or containers.gpu) in config to the boltz .sif path." >&2
+            exit 1
+        fi
+
+        # Container-only: run `boltz predict` inside the per-stage Boltz image.
+        # Per-job binds mirror containers/test/boltz_test_image.sh:
+        #   chunk dir (yamls) + sequences/ (msa a3m, same-path) + weights (->/weights)
+        #   + output dir. Node-local scratch is bound at /tmp for Triton/temp.
+        {params.runtime} exec --nv \
+            --env TRITON_CACHE_DIR="$TRITON_CACHE_DIR" \
+            -B "${{SLURM_TMPDIR:-/tmp}}":/tmp \
+            -B {input.chunk_dir}:{input.chunk_dir} \
+            -B {params.msa_dir}:{params.msa_dir} \
+            {params.extra_yaml_bind} \
+            -B {params.weights}:/weights \
+            -B {params.output_dir}:{params.output_dir} \
+            {params.sif} \
             boltz predict {input.chunk_dir} \
-                --cache {params.cache_dir} --out_dir {params.output_dir} \
+                --cache /weights --out_dir {params.output_dir} \
                 --devices 1 --accelerator gpu \
                 --recycling_steps {params.recycling_steps} \
                 --diffusion_samples {params.diffusion_samples} \
                 {params.extra_args} --override
-        fi
 
         touch {output.done}
         """
