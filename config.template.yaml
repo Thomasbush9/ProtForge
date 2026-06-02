@@ -23,7 +23,6 @@ msa:
   array_max_concurrency: 10
   mmseq2_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
-  colabfold_bin: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin
 
 # Boltz structure prediction - SHARED RESOURCES (no changes needed)
 boltz:
@@ -37,9 +36,10 @@ boltz:
   num_runs: 1                        # Number of independent Boltz runs per sequence
   # max_seq_len: 1500                # Optional: drop sequences longer than this (residues).
                                      # Skipped entries are listed in boltz_chunks/skipped_sequences.tsv.
+  # Boltz model weights. Bound into the container at /weights (the rule passes
+  # `boltz predict --cache /weights`).
   cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
-  env_path: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
 
 # ESM embeddings - USER SETUP REQUIRED
 # See docs/CLUSTER_SETUP.md for environment setup instructions

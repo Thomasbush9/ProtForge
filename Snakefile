@@ -187,6 +187,17 @@ def _parse_bind(entry):
     return f"-B {_shlex.quote(entry)}"
 
 
+def container_sif(stage):
+    """Resolve the SIF path for a stage: per-stage `containers.<stage>` wins,
+    else the optional shared `containers.gpu`. Returns "" when none is set.
+
+    Used by rules (MSA, Boltz) that build an explicit `<runtime> exec` command
+    with per-job bind mounts in their shell block, rather than going through
+    container_cmd()'s global-bind prefix.
+    """
+    return CONTAINERS.get(stage, "") or CONTAINERS.get("gpu", "")
+
+
 def container_cmd(stage, extra_env=""):
     """Return '<runtime> exec --nv --cleanenv ... <extra_env> -B ... sif',
     or '' for legacy (non-container) mode.
