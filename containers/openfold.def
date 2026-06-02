@@ -1,0 +1,38 @@
+Bootstrap: docker
+From: openfoldconsortium/openfold3:stable
+
+
+# Singularity Image for OpenFold 
+#
+%files 
+# Sections where you can specify which files from host you want to copy in the Image.
+# For bigger files (e.g., models weights) you can: 
+# --bind host_path:image_path 
+
+%post 
+
+    
+
+%environment
+# It defines environment variables that will be set at runtime -> not available at build time 
+# if you need envs available at build time define them in the 'post' section 
+
+
+
+
+
+
+%runscript
+# they are commands that are run when the container is invoked 
+
+
+%test
+# it runs at the end of the build process -> useful to test the container (imports and etc. )
+
+
+%labels
+
+
+
+
+%help
