@@ -1,9 +1,8 @@
 import os
+import time
 from argparse import ArgumentParser
 
 from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-
-ESMFOLD2_REPO = "biohub/ESMFold2-Fast"
 
 
 def _enforce_offline(cache_dir: str | None) -> str | None:
@@ -13,6 +12,8 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     return f"{cache_dir}/hub"
+
+
 
 
 if __name__ == "__main__":
@@ -27,20 +28,4 @@ if __name__ == "__main__":
 
     hub_cache = _enforce_offline(args.cache)
 
-    sequence = (
-        "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
-    )
 
-    print(f"Loading {ESMFOLD2_REPO} offline from {hub_cache}...", flush=True)
-    model = ESMFold2Model.from_pretrained(
-        ESMFOLD2_REPO,
-        cache_dir=hub_cache,
-        local_files_only=True,
-    ).cuda().eval()
-
-    output = model.infer_protein(sequence, num_loops=3, num_sampling_steps=50)
-    print(
-        f"pLDDT mean: {float(output['plddt'].mean()):.3f}, "
-        f"pTM: {float(output['ptm'].mean()):.3f}"
-    )
-    print(output)
