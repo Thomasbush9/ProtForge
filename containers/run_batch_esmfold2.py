@@ -51,3 +51,4 @@ if __name__ == "__main__":
     with torch.inference_mode():
         output = model(**inputs)
     print(f"Inference Completed in:{time.time()-start}")
+    print(output)
