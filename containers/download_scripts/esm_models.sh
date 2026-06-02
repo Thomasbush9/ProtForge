@@ -11,6 +11,7 @@ CACHE_DIR="${1:-./esm_models_cache}"
 model_repo() {
   case "$1" in
   ESMFold2) echo "biohub/ESMFold2-Fast" ;;
+  ESMFold2) echo "biohub/ESMFold2" ;;
   ESMC-6B) echo "biohub/ESMC-6B" ;;
   ESMC-600M) echo "biohub/ESMC-600M" ;;
   ESMC-300M) echo "biohub/ESMC-300M" ;;
