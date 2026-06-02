@@ -81,7 +81,7 @@ printf '  - %s\n' "${selected_saes[@]/#/}" 2>/dev/null
 python - <<PY
 from huggingface_hub import snapshot_download
 
-repos = ("${ESMFOLD2_REPO}", "${ESMC_REPO}")
+repos = ("${selected_models[@]}", "${selected_saes[@]}")
 for repo in repos:
     print(f"Downloading {repo}...", flush=True)
     snapshot_download(repo_id=repo)

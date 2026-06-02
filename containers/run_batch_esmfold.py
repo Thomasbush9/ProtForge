@@ -9,9 +9,18 @@ from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 from transformers.models.esmfold2.protein_utils import (
-    OUTPUT_TO_PDB_FEATURE_KEYS,
     output_to_pdb,
     prepare_protein_features,
+)
+
+# Featurization keys re-attached for output_to_pdb (stable across transformers versions).
+OUTPUT_TO_PDB_FEATURE_KEYS = (
+    "res_type",
+    "atom_to_token",
+    "ref_atom_name_chars",
+    "atom_attention_mask",
+    "token_attention_mask",
+    "residue_index",
 )
 
 ESMFOLD2_REPO = "biohub/ESMFold2-Fast"
