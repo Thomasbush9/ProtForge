@@ -86,7 +86,7 @@ shopt -s nullglob
 for yaml in "$INPUT_DIR"/*.yaml; do
   stem="$(basename "$yaml" .yaml)"
   base="$OUTPUT_DIR/$stem/$VARIANT"
-  for f in structure.pdb plddt.npy outputs.pt; do
+  for f in structure.cif plddt.npy metrics.pt; do
     if [[ ! -f "$base/$f" ]]; then
       echo "ERROR: missing $base/$f" >&2
       exit 1
