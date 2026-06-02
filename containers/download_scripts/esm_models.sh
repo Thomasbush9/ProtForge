@@ -72,24 +72,39 @@ for model in "${selected_models[@]}"; do
 done
 
 echo "Installing:"
+download_repos=()
 echo "Models:"
-printf '  - %s\n' "${selected_models[@]/#/}" 2>/dev/null
+for model in "${selected_models[@]}"; do
+  repo="$(model_repo "$model")"
+  printf '  - %s (%s)\n' "$model" "$repo"
+  download_repos+=("$repo")
+done
 echo "SAEs:"
-printf '  - %s\n' "${selected_saes[@]/#/}" 2>/dev/null
+for repo in "${selected_saes[@]}"; do
+  printf '  - %s\n' "$repo"
+  download_repos+=("$repo")
+done
 
-#TODO: add iteration over models selected etc.
-python - <<PY
+export DOWNLOAD_REPOS_JSON
+DOWNLOAD_REPOS_JSON="$(python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${download_repos[@]}")"
+python - <<'PY'
+import json
+import os
+
 from huggingface_hub import snapshot_download
 
-repos = ("${ESMFOLD2_REPO}", "${ESMC_REPO}")
-repos = ()
-for repo in repos:
-    print(f"Downloading {repo}...", flush=True)
-    snapshot_download(repo_id=repo)
-    print(f"[OK] {repo}", flush=True)
+repos = json.loads(os.environ["DOWNLOAD_REPOS_JSON"])
+cache_dir = os.environ["HF_HOME"]
 
-print(f"Cache ready: ${CACHE_DIR}/hub")
+if not repos:
+    print("Nothing selected; cache unchanged.", flush=True)
+else:
+    for repo in repos:
+        print(f"Downloading {repo}...", flush=True)
+        snapshot_download(repo_id=repo)
+        print(f"[OK] {repo}", flush=True)
+
+print(f"Cache ready: {cache_dir}/hub")
 PY
-
 echo "Download complete."
 echo "Model cache ready: $CACHE_DIR"
