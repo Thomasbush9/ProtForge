@@ -3,7 +3,6 @@ import time
 from argparse import ArgumentParser
 
 import torch
-from esm.utils.forge_context_manager import ForgeBatchExecutor
 from transformers import AutoTokenizer
 from transformers.models.esmc.modeling_esmc import ESMCModel
 
@@ -18,21 +17,6 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     return f"{cache_dir}/hub"
 
-
-def embed_sequence(sequence: str, model: ESMCModel, tokenizer) -> torch.Tensor:
-    """Mean-pool last hidden state. HF ESMCModel has no encode/logits (those are SDK-only)."""
-    inputs = tokenizer(sequence, return_tensors="pt")
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    with torch.inference_mode():
-        out = model(**inputs)
-    mask = inputs["attention_mask"].unsqueeze(-1)
-    return (out.last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-
-
-def _report_batch_failures(outputs: list) -> None:
-    for i, result in enumerate(outputs):
-        if isinstance(result, BaseException):
-            print(f"task {i} failed: {type(result).__name__}: {result}", flush=True)
 
 
 if __name__ == "__main__":
@@ -58,18 +42,12 @@ if __name__ == "__main__":
         "MQIFVKTTSDTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
     ]
 
-    print("Executing Batch operation")
+    print("Launching tokenizer...")
+    inputs = tokenizer(sequences, return_tensors="pt", padding=True)
+    print("Input tokenized")
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    print("Starting Inference")
     start = time.time()
-    # Local GPU: one worker — batch_executor defaults to many threads on one CUDA model.
-    with ForgeBatchExecutor(max_workers=1, max_attempts=1) as executor:
-        outputs = executor.execute_batch(
-            embed_sequence,
-            model=model,
-            tokenizer=tokenizer,
-            sequence=sequences,
-        )
-    _report_batch_failures(outputs)
-    ok = [o for o in outputs if not isinstance(o, BaseException)]
-    if ok:
-        print(f"Embeddings: {len(ok)} x shape {ok[0].shape}", flush=True)
-    print(f"Embeddings generated in {time.time() - start:.3f}s")
+    with torch.inference_mode():
+        output = model(**inputs)
+    print(f"Inference Completed in:{time.time()-start}")
