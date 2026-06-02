@@ -11,7 +11,6 @@ CACHE_DIR="${1:-./esm_models_cache}"
 model_repo() {
   case "$1" in
   ESMFold2) echo "biohub/ESMFold2-Fast" ;;
-  ESMFold2) echo "biohub/ESMFold2" ;;
   ESMC-6B) echo "biohub/ESMC-6B" ;;
   ESMC-600M) echo "biohub/ESMC-600M" ;;
   ESMC-300M) echo "biohub/ESMC-300M" ;;
@@ -49,12 +48,11 @@ fi
 
 echo "Select the main models to instal..."
 selected_models=()
-for model in ESMFold2 ESMC-6B ESMC-600M ESMC-300M; do
+for model in ESMFold2 ESMFold2_FAST ESMC-6B ESMC-600M ESMC-300M; do
   if ask "Install ${model} ($(model_repo "$model"))?"; then
     selected_models+=("$model")
   fi
 done
-
 selected_saes=()
 
 for model in "${selected_models[@]}"; do
@@ -82,7 +80,8 @@ printf '  - %s\n' "${selected_saes[@]/#/}" 2>/dev/null
 python - <<PY
 from huggingface_hub import snapshot_download
 
-repos = ("${selected_models[@]}", "${selected_saes[@]}")
+repos = ("${ESMFOLD2_REPO}", "${ESMC_REPO}")
+repos = ()
 for repo in repos:
     print(f"Downloading {repo}...", flush=True)
     snapshot_download(repo_id=repo)
