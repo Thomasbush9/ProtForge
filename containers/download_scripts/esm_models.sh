@@ -27,6 +27,7 @@ model_sae_size() {
   *) echo "" ;;
   esac
 }
+#TODO:revoew sae om hf
 SAE_REPO_ALL_LAYERS="biohub/EMSC-XXXX-sae-k64-codebook16384"
 SAE_REPO_MLP="biohub/EMSC-XXXX-sae-mlp-k64-codebook131072"
 
