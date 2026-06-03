@@ -28,6 +28,17 @@ YAML_FIXTURE="${3:-${SCRIPT_DIR}/fixtures/seq1.yaml}"
 SIZE="${4:-6B}"
 SAE_TYPE="${5:-all-layers}"
 
+# SAE layer shards to load (must match files in the HF SAE repo for each size)
+case "$SIZE" in
+  6B)   LAYERS="30,60" ;;
+  600M) LAYERS="18,36" ;;
+  300M) LAYERS="12,24" ;;
+  *)
+    echo "ERROR: no test SAE layers for SIZE=$SIZE" >&2
+    exit 1
+    ;;
+esac
+
 CONTAINER_CACHE="/models/hf"
 CONTAINER_YAML="/data/input/$(basename "$YAML_FIXTURE")"
 CONTAINER_SCRIPT="/opt/esmc_extract_sae.py"
@@ -65,6 +76,7 @@ echo "  cache:   $CACHE_DIR -> $CONTAINER_CACHE (ro)"
 echo "  yaml:    $YAML_FIXTURE"
 echo "  size:    $SIZE"
 echo "  sae:     $SAE_TYPE"
+echo "  layers:  $LAYERS"
 
 singularity exec --nv --cleanenv \
   --env HF_HOME="$CONTAINER_CACHE" \
@@ -79,7 +91,7 @@ singularity exec --nv --cleanenv \
     --cache "$CONTAINER_CACHE" \
     --size "$SIZE" \
     --sae "$SAE_TYPE" \
-    --yaml "$CONTAINER_YAML"
-    --layers 12,24
+    --yaml "$CONTAINER_YAML" \
+    --layers "$LAYERS"
 
 echo "Run completed."
