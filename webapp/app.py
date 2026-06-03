@@ -53,9 +53,10 @@ USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
 # Per-stage auto-refresh intervals (seconds)
-REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESM": 10, "ESMFold": 60}
+REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESMC": 30, "ESMC-SAE": 30, "ESMFold": 60}
 
-# Map Snakemake rule names to pipeline stages
+# Map Snakemake rule names to pipeline stages. ESMC/ESMC-SAE rules carry a
+# {size} wildcard, so match on the rule-name prefix (any rule containing the key).
 RULE_TO_STAGE = {
     "run_colabfold_search": "MSA",
     "scatter_msa_and_create_yaml": "MSA",
@@ -65,11 +66,18 @@ RULE_TO_STAGE = {
     "organize_boltz_chunk": "Boltz",
     "chunk_yamls_for_boltz": "Boltz",
     "boltz_complete": "Boltz",
-    "run_esm_chunk": "ESM",
-    "chunk_yamls_for_esm": "ESM",
-    "esm_complete": "ESM",
-    "run_esmfold_chunk": "ESMFold",
+    # SAE keys first so they win over the "esmc" substring match below.
+    "run_esmc_sae": "ESMC-SAE",
+    "chunk_yamls_for_sae": "ESMC-SAE",
+    "organize_esmc_sae": "ESMC-SAE",
+    "esmc_sae_complete": "ESMC-SAE",
+    "run_esmc": "ESMC",
+    "chunk_yamls_for_esmc": "ESMC",
+    "organize_esmc": "ESMC",
+    "esmc_complete": "ESMC",
+    "run_esmfold": "ESMFold",
     "chunk_yamls_for_esmfold": "ESMFold",
+    "organize_esmfold": "ESMFold",
     "esmfold_complete": "ESMFold",
 }
 
@@ -185,7 +193,7 @@ def autoscan_directory(path_str: str) -> dict | None:
 
 def render_gpu_preference(stage: str) -> None:
     """Per-stage GPU dropdown that persists in st.session_state["gpu_preferences"]."""
-    if stage not in {"msa", "boltz", "esm", "esmfold"}:
+    if stage not in {"msa", "boltz", "esmc", "esmfold"}:
         return
     prefs = st.session_state.setdefault("gpu_preferences", {})
     options = ["auto", "a100", "h100"]
@@ -208,38 +216,38 @@ def render_chunk_recommendation(stage: str) -> None:
     est = st.session_state.get("last_estimate", {}).get(stage)
     if not est:
         return
-    if stage in {"msa", "boltz"}:
-        st.caption(
-            f"Recommended chunk size: **{est['chunk_size']}** "
-            f"({est['num_chunks']} jobs, ~{est['runtime_min']} min/job)"
-        )
-    elif stage in {"esm", "esmfold"}:
-        st.caption(
-            f"Recommended num_chunks: **{est['num_chunks']}** "
-            f"({est['chunk_size']} seqs/chunk, ~{est['runtime_min']} min/chunk)"
-        )
+    st.caption(
+        f"Recommended files per job: **{est['chunk_size']}** "
+        f"({est['num_chunks']} jobs, ~{est['runtime_min']} min/job)"
+    )
 
 
 # Per-stage SLURM resource defaults — kept in sync with the rule fallbacks so a
 # blank session picks up reasonable values without forcing the user to run the
 # estimator first. Tuples are (mem_mb, runtime_min, cpus_per_task).
 _SLURM_DEFAULTS: dict[str, tuple[int, int, int]] = {
-    "msa":     (256000,  60, 4),
-    "boltz":   ( 16000,  60, 8),
-    "esm":     ( 32000,  60, 16),
-    "esmfold": ( 32000, 120, 8),
+    "msa":      (256000,  60, 4),
+    "boltz":    ( 16000,  60, 8),
+    "esmc":     (128000, 120, 8),
+    "esmc_sae": (128000, 120, 8),
+    "esmfold":  (128000, 120, 8),
 }
 
 
-def render_slurm_resources(cfg: dict, stage: str) -> None:
+def render_slurm_resources(cfg: dict, stage: str,
+                           defaults: tuple[int, int, int] | None = None) -> None:
     """Render mem / runtime / cpus number_inputs for a stage.
 
     Reads/writes cfg['slurm']['resources'][stage]. The webapp estimator's
     'Apply to session config' button populates the same block; values typed
-    here win on save, so this is also the manual-override surface."""
-    if stage not in _SLURM_DEFAULTS:
-        return
-    default_mem, default_runtime, default_cpus = _SLURM_DEFAULTS[stage]
+    here win on save, so this is also the manual-override surface. `defaults`
+    overrides the fallback tuple — used for per-size keys like esmc_6B that
+    aren't in _SLURM_DEFAULTS."""
+    if defaults is None:
+        if stage not in _SLURM_DEFAULTS:
+            return
+        defaults = _SLURM_DEFAULTS[stage]
+    default_mem, default_runtime, default_cpus = defaults
     slurm = cfg.setdefault("slurm", {})
     resources = slurm.setdefault("resources", {})
     stage_res = resources.setdefault(stage, {})
@@ -274,9 +282,10 @@ def render_binning_controls(cfg: dict, stage: str) -> None:
     The bins recipe (chunk_size/mem/runtime per bin) is populated by the
     estimator's 'Apply to session config' button. The UI toggles enabled +
     mode + num_bins; per-bin numbers are read-only here (edit config.yaml
-    for fine-grained overrides).
+    for fine-grained overrides). Only MSA/Boltz support binning — the ESMC /
+    ESMFold2 chunkers split by max_files_per_job only.
     """
-    if stage not in {"msa", "boltz", "esm", "esmfold"}:
+    if stage not in {"msa", "boltz"}:
         return
     stage_cfg = cfg.setdefault(stage, {})
     binning = stage_cfg.setdefault("binning", {})
@@ -408,8 +417,8 @@ def render_estimate_panel(scan_result: dict, cfg: dict, session: Session,
     if not estimates:
         st.info(
             f"Found {stats.count} valid {stats.file_type.upper()} file(s), "
-            "but no pipeline stages are enabled. Toggle MSA / Boltz / ESM / "
-            "ESMFold above to see resource estimates."
+            "but no pipeline stages are enabled. Toggle MSA / Boltz / ESMC / "
+            "ESMFold2 above to see resource estimates."
         )
         return
 
@@ -665,12 +674,29 @@ def get_stage_progress(cfg: dict) -> dict:
                                 done += 1
             progress["Boltz"] = (done, total * num_runs)
 
-    if pipeline.get("esm"):
-        done = count_files(seq_dir, "*/esm/logits.npy")
-        progress["ESM"] = (done, total)
+    if pipeline.get("esmc"):
+        # One outputs.pt per (sequence, model size): sequences/{seq}/esmc/{size}/outputs.pt
+        sizes = cfg.get("esmc", {}).get("models", []) or []
+        done = count_files(seq_dir, "*/esmc/*/outputs.pt")
+        progress["ESMC"] = (done, total * max(len(sizes), 1))
+
+    sae_cfg = cfg.get("esmc", {}).get("sae", {})
+    if sae_cfg.get("enabled"):
+        # One sae/{size}/{sae_type}/ dir per (sequence, size); count non-empty ones.
+        sae_sizes = sae_cfg.get("sizes") or cfg.get("esmc", {}).get("models", []) or []
+        done = 0
+        if seq_dir.is_dir():
+            for d in seq_dir.iterdir():
+                sae_root = d / "sae"
+                if sae_root.is_dir():
+                    for size_dir in sae_root.iterdir():
+                        if size_dir.is_dir() and list(size_dir.glob("*/sae_*.pt")):
+                            done += 1
+        progress["ESMC-SAE"] = (done, total * max(len(sae_sizes), 1))
 
     if pipeline.get("esmfold"):
-        done = count_files(seq_dir, "*/esmfold/structure.pdb")
+        # sequences/{seq}/esmfold/fast/structure.cif
+        done = count_files(seq_dir, "*/esmfold/*/structure.cif")
         progress["ESMFold"] = (done, total)
 
     return progress
@@ -1370,10 +1396,14 @@ with tab_config:
         cols = st.columns(4)
         pipeline["msa"] = cols[0].toggle("MSA", value=pipeline.get("msa", True))
         pipeline["boltz"] = cols[1].toggle("Boltz", value=pipeline.get("boltz", True))
-        pipeline["esm"] = cols[2].toggle("ESM", value=pipeline.get("esm", True))
-        pipeline["esmfold"] = cols[3].toggle("ESMFold", value=pipeline.get("esmfold", False))
+        pipeline["esmc"] = cols[2].toggle("ESMC", value=pipeline.get("esmc", False))
+        pipeline["esmfold"] = cols[3].toggle("ESMFold2", value=pipeline.get("esmfold", False))
+        # Legacy keys from the pre-container pipeline.
         pipeline.pop("es", None)
+        pipeline.pop("esm", None)
         cfg["pipeline"] = pipeline
+        st.caption("ESMC-SAE is enabled in the ESMC Settings section below "
+                   "(it can run independently of the ESMC embedding toggle).")
 
     with st.expander("Input / Output", expanded=True):
         inp = cfg.get("input", {})
@@ -1458,7 +1488,6 @@ with tab_config:
         render_binning_controls(cfg, "msa")
         msa["mmseq2_db"] = st.text_input("MMseqs2 DB", value=msa.get("mmseq2_db", ""))
         msa["colabfold_db"] = st.text_input("ColabFold DB", value=msa.get("colabfold_db", ""))
-        msa["colabfold_bin"] = st.text_input("ColabFold bin", value=msa.get("colabfold_bin", ""))
         cfg["msa"] = msa
 
     with st.expander("Boltz Settings"):
@@ -1519,8 +1548,10 @@ with tab_config:
             )
         else:
             boltz["max_seq_len"] = None
-        boltz["cache_dir"] = st.text_input("Boltz cache dir", value=boltz.get("cache_dir", ""))
-        boltz["env_path"] = st.text_input("Boltz env path", value=boltz.get("env_path", ""))
+        boltz["cache_dir"] = st.text_input(
+            "Boltz weights dir", value=boltz.get("cache_dir", ""),
+            help="Host dir with the Boltz model weights; bound into the container at /weights.")
+        boltz.pop("env_path", None)  # legacy conda path — boltz runs in a container now
 
         adv_count = len(boltz.get("advanced", {}) or {})
         adv_label = (
@@ -1534,163 +1565,147 @@ with tab_config:
 
         cfg["boltz"] = boltz
 
-    with st.expander("ESM Settings"):
-        esm = cfg.get("esm", {})
-        esm["num_chunks"] = st.number_input("Chunks", value=esm.get("num_chunks", 1), min_value=1)
-        render_chunk_recommendation("esm")
-        render_gpu_preference("esm")
-        render_slurm_resources(cfg, "esm")
-        render_binning_controls(cfg, "esm")
-        esm["env_path"] = st.text_input("ESM env path", value=esm.get("env_path", ""))
-        esm["cache_dir"] = st.text_input("ESM cache dir", value=esm.get("cache_dir", ""))
-        cfg["esm"] = esm
-
-    with st.expander("ESMFold Settings"):
-        esmfold = cfg.get("esmfold", {})
-        current_type = esmfold.get("input_type", "yaml")
-        esmfold["input_type"] = st.selectbox(
-            "Input source",
-            options=["yaml", "fasta"],
-            index=0 if current_type == "yaml" else 1,
-            help="'yaml' reads from sequences/ (post-MSA) or input.yaml_dir. "
-                 "'fasta' reads directly from input.fasta_dir (independent of MSA/Boltz).",
-            key="esmfold_input_type",
+    with st.expander("ESMC Settings"):
+        esmc = cfg.get("esmc", {})
+        cfg.pop("esm", None)  # drop the legacy fair-esm block
+        st.caption("ESM-C embeddings. Each selected size runs as its own parallel "
+                   "stage; outputs land in sequences/{seq}/esmc/{size}/.")
+        _all_sizes = ["300M", "600M", "6B"]
+        _current = [s for s in esmc.get("models", []) if s in _all_sizes]
+        esmc["models"] = st.multiselect(
+            "Model sizes", options=_all_sizes,
+            default=_current or ["600M"],
+            help="Each size launches its own SLURM jobs + sentinel.",
+            key="esmc_models",
         )
-        esmfold["num_chunks"] = st.number_input(
-            "Chunks ",
-            value=esmfold.get("num_chunks", 1),
-            min_value=1,
-            key="esmfold_num_chunks",
+        esmc["max_files_per_job"] = st.number_input(
+            "Files per job", value=int(esmc.get("max_files_per_job", 25)), min_value=1,
+            help="Sequences per encode job (also the padded batch size).",
+            key="esmc_max_files",
+        )
+        render_chunk_recommendation("esmc")
+        render_gpu_preference("esmc")
+        esmc["cache_dir"] = st.text_input(
+            "HF cache dir (host)", value=esmc.get("cache_dir", ""),
+            help="Host HuggingFace cache; must contain hub/models--biohub--ESMC-* "
+                 "(and the SAE repos if SAE is enabled). Bound read-only to /models/hf.",
+            key="esmc_cache_dir",
+        )
+
+        st.markdown("**Per-size SLURM resources**")
+        st.caption("`esmc` below is the shared fallback / estimator target; each "
+                   "size can override it (writes slurm.resources.esmc_<size>).")
+        render_slurm_resources(cfg, "esmc")
+        for _size in esmc["models"]:
+            st.markdown(f"_ESMC-{_size}_")
+            render_slurm_resources(cfg, f"esmc_{_size}", defaults=_SLURM_DEFAULTS["esmc"])
+
+        # --- SAE sub-section ---
+        st.markdown("---")
+        st.markdown("**ESMC-SAE (sparse activations)**")
+        sae = esmc.get("sae", {})
+        sae["enabled"] = st.toggle(
+            "Extract SAE activations",
+            value=bool(sae.get("enabled", False)),
+            help="Recomputed from the sequence (independent of the embeddings above), "
+                 "so it can run on a prior run's YAMLs. "
+                 "Outputs -> sequences/{seq}/sae/{size}/{sae_type}/.",
+            key="esmc_sae_enabled",
+        )
+        if sae["enabled"]:
+            c1, c2 = st.columns(2)
+            _sae_types = ["all-layers", "mlp"]
+            _cur_type = sae.get("sae_type", "all-layers")
+            sae["sae_type"] = c1.selectbox(
+                "SAE type", options=_sae_types,
+                index=_sae_types.index(_cur_type) if _cur_type in _sae_types else 0,
+                key="esmc_sae_type",
+            )
+            sae["layers"] = c2.text_input(
+                "Layers", value=str(sae.get("layers", "all")),
+                help="'all' = every trained layer, or a comma list e.g. 18,36.",
+                key="esmc_sae_layers",
+            )
+            _sae_default = [s for s in (sae.get("sizes") or esmc["models"]) if s in esmc["models"]]
+            sae["sizes"] = st.multiselect(
+                "Sizes to extract SAE for", options=esmc["models"],
+                default=_sae_default or esmc["models"],
+                help="Subset of the ESMC model sizes above.",
+                key="esmc_sae_sizes",
+            )
+            sae["max_files_per_job"] = st.number_input(
+                "Files per SAE job", value=int(sae.get("max_files_per_job", 25)), min_value=1,
+                key="esmc_sae_max_files",
+            )
+            st.markdown("_SAE SLURM resources_")
+            render_slurm_resources(cfg, "esmc_sae")
+        esmc["sae"] = sae
+        cfg["esmc"] = esmc
+
+    with st.expander("ESMFold2 Settings"):
+        esmfold = cfg.get("esmfold", {})
+        st.caption("ESMFold2 (biohub 'fast' variant). Runs off the MSA-stage YAMLs; "
+                   "outputs -> sequences/{seq}/esmfold/fast/.")
+        esmfold["max_files_per_job"] = st.number_input(
+            "Files per job", value=int(esmfold.get("max_files_per_job", 25)), min_value=1,
+            help="Sequences folded per job.",
+            key="esmfold_max_files",
         )
         render_chunk_recommendation("esmfold")
         render_gpu_preference("esmfold")
         render_slurm_resources(cfg, "esmfold")
-        render_binning_controls(cfg, "esmfold")
-        esmfold["array_max_concurrency"] = st.number_input(
-            "Max concurrent array tasks",
-            value=esmfold.get("array_max_concurrency", 10),
-            min_value=1,
-            key="esmfold_array_max_concurrency",
-        )
-        esmfold["env_path"] = st.text_input(
-            "ESMFold env path",
-            value=esmfold.get(
-                "env_path",
-                "/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold",
-            ),
-            key="esmfold_env_path",
-            help="Conda env prefix to `conda activate`. Shared lab default: "
-                 "/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge/envs/esmfold",
-        )
         esmfold["cache_dir"] = st.text_input(
-            "ESMFold cache dir (HF_HOME root)",
-            value=esmfold.get(
-                "cache_dir",
-                "/n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache",
-            ),
+            "HF cache dir (host)", value=esmfold.get("cache_dir", ""),
+            help="Host HF cache; must contain hub/models--biohub--ESMFold2-Fast. "
+                 "Bound read-only to /models/hf.",
             key="esmfold_cache_dir",
-            help="Must contain hub/models--facebook--esmfold_v1. Pre-populate with "
-                 "scripts/download_models.py on a login node.",
-        )
-
-        _esmfold_use_cutoff = st.toggle(
-            "Skip sequences over a length cutoff",
-            value=esmfold.get("max_seq_len") is not None,
-            help="Sequences longer than the cutoff are dropped before chunking. "
-                 "Skipped entries are listed in <output>/esmfold_chunks/skipped_sequences.tsv.",
-            key="esmfold_use_max_seq_len",
-        )
-        if _esmfold_use_cutoff:
-            esmfold["max_seq_len"] = st.number_input(
-                "Max sequence length (residues) ",
-                value=int(esmfold.get("max_seq_len") or 2500),
-                min_value=1,
-                key="esmfold_max_seq_len",
-            )
-        else:
-            esmfold["max_seq_len"] = None
-
-        st.markdown("---")
-        st.markdown("**Smart binning** — group long sequences into separate jobs")
-        esmfold["bin_by_length"] = st.toggle(
-            "Bin sequences by length",
-            value=bool(esmfold.get("bin_by_length", False)),
-            help="Partition inputs into a 'short' pool (L < threshold) and a 'long' pool "
-                 "(L ≥ threshold) and chunk each pool independently. Long-pool jobs get "
-                 "their own SLURM mem/time. Disable to use the legacy single-pool chunker.",
-            key="esmfold_bin_by_length",
         )
         c1, c2, c3 = st.columns(3)
-        esmfold["length_threshold"] = c1.number_input(
-            "Length threshold (aa)",
-            value=int(esmfold.get("length_threshold", 1200)),
-            min_value=1,
-            help="Sequences with L ≥ threshold go to the long pool. 1200 matches the "
-                 "H100 80GB OOM ceiling observed in calibration.",
-            key="esmfold_length_threshold",
-        )
-        esmfold["num_chunks_short"] = c2.number_input(
-            "Chunks (short pool)",
-            value=int(esmfold.get("num_chunks_short", esmfold.get("num_chunks", 1))),
-            min_value=1,
-            key="esmfold_num_chunks_short",
-        )
-        esmfold["num_chunks_long"] = c3.number_input(
-            "Chunks (long pool)",
-            value=int(esmfold.get("num_chunks_long", esmfold.get("num_chunks", 1))),
-            min_value=1,
-            key="esmfold_num_chunks_long",
-        )
-        c1, c2 = st.columns(2)
-        esmfold["mem_short_mb"] = c1.number_input(
-            "Short-pool mem (MB)",
-            value=int(esmfold.get("mem_short_mb", 32000)),
-            min_value=1000,
-            step=1000,
-            key="esmfold_mem_short_mb",
-        )
-        esmfold["mem_long_mb"] = c2.number_input(
-            "Long-pool mem (MB)",
-            value=int(esmfold.get("mem_long_mb", 80000)),
-            min_value=1000,
-            step=1000,
-            help="Long-pool jobs run the trunk-chunked path; on H100 80GB give them headroom.",
-            key="esmfold_mem_long_mb",
-        )
-        c1, c2 = st.columns(2)
-        esmfold["time_short_min"] = c1.number_input(
-            "Short-pool runtime (min)",
-            value=int(esmfold.get("time_short_min", 60)),
-            min_value=1,
-            key="esmfold_time_short_min",
-        )
-        esmfold["time_long_min"] = c2.number_input(
-            "Long-pool runtime (min)",
-            value=int(esmfold.get("time_long_min", 240)),
-            min_value=1,
-            help="Trunk-chunked path is ~50% slower per residue, so long-pool jobs need more wall time.",
-            key="esmfold_time_long_min",
-        )
-
-        st.markdown("---")
-        st.markdown("**Trunk chunking** — per-sequence OOM guard inside `run_esmfold.py`")
-        c1, c2 = st.columns(2)
-        esmfold["chunk_size_threshold"] = c1.number_input(
-            "Chunk-size threshold (aa)",
-            value=int(esmfold.get("chunk_size_threshold", 1200)),
-            min_value=1,
-            help="When a sequence's L ≥ threshold, model.trunk.set_chunk_size(chunk_size) "
-                 "is invoked at fold time to avoid OOM (slower but safe).",
-            key="esmfold_chunk_size_threshold",
-        )
-        esmfold["chunk_size"] = c2.number_input(
-            "Chunk size",
-            value=int(esmfold.get("chunk_size", 64)),
-            min_value=1,
-            key="esmfold_chunk_size",
-        )
-
+        esmfold["num_loops"] = c1.number_input(
+            "Num loops", value=int(esmfold.get("num_loops", 3)), min_value=1,
+            key="esmfold_num_loops")
+        esmfold["num_sampling_steps"] = c2.number_input(
+            "Sampling steps", value=int(esmfold.get("num_sampling_steps", 50)), min_value=1,
+            key="esmfold_num_sampling_steps")
+        esmfold["seed"] = c3.number_input(
+            "Seed", value=int(esmfold.get("seed", 0)), min_value=0, step=1,
+            key="esmfold_seed")
+        # Drop legacy ESMFold v1 keys if a pre-container config still carries them.
+        for _k in ("input_type", "num_chunks", "array_max_concurrency", "env_path",
+                   "max_seq_len", "bin_by_length", "length_threshold",
+                   "num_chunks_short", "num_chunks_long", "mem_short_mb", "mem_long_mb",
+                   "time_short_min", "time_long_min", "chunk_size_threshold", "chunk_size"):
+            esmfold.pop(_k, None)
         cfg["esmfold"] = esmfold
+
+    with st.expander("Container Images"):
+        containers = cfg.get("containers", {})
+        _rt_opts = ["auto", "singularity", "apptainer"]
+        _cur_rt = containers.get("runtime", "auto")
+        containers["runtime"] = st.selectbox(
+            "Runtime", options=_rt_opts,
+            index=_rt_opts.index(_cur_rt) if _cur_rt in _rt_opts else 0,
+            help="Container binary. 'auto' picks singularity if on PATH, else apptainer.",
+            key="containers_runtime",
+        )
+        containers["colabfold"] = st.text_input(
+            "MSA image (.sif)", value=containers.get("colabfold", ""), key="containers_colabfold")
+        containers["boltz"] = st.text_input(
+            "Boltz image (.sif)", value=containers.get("boltz", ""), key="containers_boltz")
+        containers["esmc"] = st.text_input(
+            "ESM image (.sif) — serves ESMC + SAE", value=containers.get("esmc", ""),
+            key="containers_esmc")
+        containers["esmfold"] = st.text_input(
+            "ESMFold2 image (.sif)", value=containers.get("esmfold", ""), key="containers_esmfold")
+        _gpu = st.text_input(
+            "Shared fallback image (.sif, optional)", value=containers.get("gpu", ""),
+            help="Used for any stage whose own image field is empty.",
+            key="containers_gpu")
+        if _gpu:
+            containers["gpu"] = _gpu
+        else:
+            containers.pop("gpu", None)
+        cfg["containers"] = containers
 
     with st.expander("SLURM Settings"):
         slurm = cfg.get("slurm", {})
@@ -1701,7 +1716,7 @@ with tab_config:
         slurm["email"] = st.text_input("Email", value=slurm.get("email", ""))
 
         st.markdown("**Per-stage partition overrides** (leave empty for default)")
-        for stage in ["msa", "boltz", "esm", "esmfold"]:
+        for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold"]:
             override = slurm.get(stage, {})
             val = st.text_input(f"{stage} partition", value=override.get("partition", ""), key=f"slurm_{stage}")
             if val:
@@ -1719,8 +1734,8 @@ with tab_config:
         # Resource overrides written by the estimator's "Apply" button
         resources = slurm.get("resources", {})
         if resources:
-            st.markdown("**Per-stage resource overrides** (set by Apply estimates)")
-            for stage in ["msa", "boltz", "esm", "esmfold"]:
+            st.markdown("**Per-stage resource overrides** (set by Apply estimates / per-size rows)")
+            for stage in sorted(resources.keys()):
                 r = resources.get(stage)
                 if not r:
                     continue
@@ -1754,8 +1769,10 @@ with tab_run:
     pipeline = cfg.get("pipeline", {})
 
     st.subheader("Pipeline Summary")
-    stages = ["msa", "boltz", "esm", "esmfold"]
-    active = [s.upper() for s in stages if pipeline.get(s, False)]
+    _labels = {"msa": "MSA", "boltz": "Boltz", "esmc": "ESMC", "esmfold": "ESMFold2"}
+    active = [_labels[s] for s in ["msa", "boltz", "esmc", "esmfold"] if pipeline.get(s, False)]
+    if cfg.get("esmc", {}).get("sae", {}).get("enabled"):
+        active.append("ESMC-SAE")
     if active:
         st.info(f"Active stages: {' → '.join(active)}")
     else:
@@ -1864,11 +1881,27 @@ with tab_monitor:
     if not progress:
         st.info("No stages enabled or output directory not set.")
     else:
-        sentinels = {"MSA": ".msa_complete", "Boltz": ".boltz_complete", "ESM": ".esm_complete", "ESMFold": ".esmfold_complete"}
+        def _stage_complete(stage: str) -> bool:
+            """ESMC / ESMC-SAE have one sentinel per model size — complete only
+            when every configured size is done."""
+            if not output_dir:
+                return False
+            base = Path(output_dir)
+            simple = {"MSA": ".msa_complete", "Boltz": ".boltz_complete",
+                      "ESMFold": ".esmfold_complete"}
+            if stage in simple:
+                return (base / simple[stage]).exists()
+            esmc = cfg.get("esmc", {})
+            if stage == "ESMC":
+                sizes = esmc.get("models", []) or []
+                return bool(sizes) and all((base / f".esmc_{s}_complete").exists() for s in sizes)
+            if stage == "ESMC-SAE":
+                sizes = esmc.get("sae", {}).get("sizes") or esmc.get("models", []) or []
+                return bool(sizes) and all((base / f".esmc_sae_{s}_complete").exists() for s in sizes)
+            return False
 
         for stage, (done, total) in progress.items():
-            sentinel = Path(output_dir) / sentinels[stage] if output_dir else None
-            is_complete = sentinel and sentinel.exists()
+            is_complete = _stage_complete(stage)
 
             col_label, col_bar, col_count = st.columns([1, 4, 1])
             with col_label:

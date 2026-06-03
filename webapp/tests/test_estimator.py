@@ -75,7 +75,7 @@ def test_stats_rejects_both_inputs():
 
 def _config():
     return {
-        "pipeline": {"msa": True, "boltz": True, "esm": True, "esmfold": False, "es": True},
+        "pipeline": {"msa": True, "boltz": True, "esmc": True, "esmfold": False},
         "boltz": {"recycling_steps": 10, "diffusion_samples": 25, "num_runs": 1},
         "slurm": {"partition": "kempner_requeue"},
     }
@@ -121,18 +121,8 @@ def test_chunk_size_caps_at_max():
     cfg = _config()
     # Tiny sequences — chunk size formula will want to be huge
     stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 50}] * 1000)
-    e = estimate_stage("esm", stats, cfg, scaling)
-    assert e.chunk_size <= scaling["esm"]["max_chunk_size"]
-
-
-def test_es_is_monolithic_and_no_gpu():
-    scaling = load_scaling_models()
-    cfg = _config()
-    stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 500}] * 50)
-    e = estimate_stage("es", stats, cfg, scaling)
-    assert e.num_chunks == 1
-    assert e.gpus == 0
-    assert e.gpu_type is None
+    e = estimate_stage("esmc", stats, cfg, scaling)
+    assert e.chunk_size <= scaling["esmc"]["max_chunk_size"]
 
 
 def test_partition_routing_auto_picks_smallest_fitting_gpu():
@@ -143,10 +133,10 @@ def test_partition_routing_auto_picks_smallest_fitting_gpu():
     small = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 200}] * 5)
     huge = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 4000}])
 
-    p_small, gpu_small = pick_partition("esm", small, cfg, scaling)
-    p_huge, gpu_huge = pick_partition("esm", huge, cfg, scaling)
+    p_small, gpu_small = pick_partition("esmc", small, cfg, scaling)
+    p_huge, gpu_huge = pick_partition("esmc", huge, cfg, scaling)
 
-    # Huge should land on H100 (or higher) since 4000-residue ESM > 40GB
+    # Huge should land on H100 (or higher) since 4000-residue ESMC > 40GB
     assert gpu_huge in {"h100", "h200"}
     # Small should land on something with smaller capacity
     assert gpu_small != gpu_huge or scaling["gpu_specs"][gpu_small]["mem_gb"] >= 40
@@ -157,11 +147,11 @@ def test_partition_routing_honors_user_pin():
     scaling = load_scaling_models()
     cfg = _config()
     stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 4000}] * 3)
-    # Without pin, large p95 routes ESM to h100 automatically
-    e_auto = estimate_stage("esm", stats, cfg, scaling)
+    # Without pin, large p95 routes ESMC to h100 automatically
+    e_auto = estimate_stage("esmc", stats, cfg, scaling)
     assert e_auto.gpu_type == "h100"
     # Explicit pin to a100 should override even though mem may not fit
-    e_pinned = estimate_stage("esm", stats, cfg, scaling, gpu_preference="a100")
+    e_pinned = estimate_stage("esmc", stats, cfg, scaling, gpu_preference="a100")
     assert e_pinned.gpu_type == "a100"
 
 
@@ -184,10 +174,10 @@ def test_boltz_runtime_scales_with_recycling_and_samples():
 def test_estimate_all_stages_skips_disabled():
     scaling = load_scaling_models()
     cfg = _config()
-    cfg["pipeline"]["es"] = False
+    cfg["pipeline"]["esmc"] = False
     stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 500}] * 10)
     out = estimate_all_stages(stats, cfg, scaling)
-    assert "es" not in out
+    assert "esmc" not in out
     assert "boltz" in out
 
 
@@ -208,11 +198,11 @@ def test_estimate_with_zero_inputs_returns_zero():
 def test_apply_round_trip_preserves_unrelated_keys(tmp_path):
     cfg_path = tmp_path / "config.yaml"
     initial = {
-        "pipeline": {"msa": True, "boltz": True, "esm": False, "esmfold": False, "es": False},
+        "pipeline": {"msa": True, "boltz": True, "esmc": False, "esmfold": False},
         "input": {"fasta_dir": "/tmp/data"},
         "output": {"parent_dir": "/tmp/out"},
         "boltz": {"recycling_steps": 10, "diffusion_samples": 25, "num_runs": 1,
-                  "cache_dir": "/cache/boltz", "env_path": "/env/boltz"},
+                  "cache_dir": "/cache/boltz"},
         "slurm": {"partition": "kempner_requeue", "account": "test_lab",
                   "msa": {"partition": "kempner"}},  # existing partition pin
     }

@@ -87,8 +87,8 @@ boltz:
   max_chunk_size: 40
   min_chunk_size: 1
 
-esm:
-  # ESM-C / ESM2 embeddings: roughly O(L) compute, O(L) memory
+esmc:
+  # ESM-C embeddings: roughly O(L) compute, O(L) memory
   default_gpu: a100
   cpus: 16
   gpus: 1

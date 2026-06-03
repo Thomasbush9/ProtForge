@@ -25,8 +25,8 @@ HERE = Path(__file__).parent
 DEFAULT_SCALING_PATH = HERE / "scaling_models.yaml"
 CALIBRATED_SCALING_PATH = HERE / "scaling_models.calibrated.yaml"
 
-GPU_USING_STAGES = {"msa", "boltz", "esm", "esmfold"}
-ALL_STAGES = ["msa", "boltz", "esm", "esmfold"]
+GPU_USING_STAGES = {"msa", "boltz", "esmc", "esmfold"}
+ALL_STAGES = ["msa", "boltz", "esmc", "esmfold"]
 
 
 # --- Data containers -------------------------------------------------------
@@ -384,10 +384,10 @@ def estimate_stage(
         chunk_size = max(chunk_size, 1)
         runtime_sec = per_seq_sec * chunk_size * time_safety
         num_chunks = math.ceil(stats.count / chunk_size) * num_runs
-    elif stage in ("esm", "esmfold"):
-        # ESMFold has two coefficient sets: un-chunked (fast, OOM at long L) and
-        # chunked (model.trunk.set_chunk_size, slower but no OOM). Pick based
-        # on `chunk_threshold` from the stage block (default high → never chunk).
+    elif stage in ("esmc", "esmfold"):
+        # ESMC embeddings / ESMFold2: roughly per-sequence cost, chunked by
+        # max_files_per_job. (ESMFold2 has no trunk-chunking, unlike the old v1
+        # path, but the scaling block keeps a `_chunked` fallback for long L.)
         rt_block = coeffs_per_gpu["runtime_sec_per_seq"]
         if stage == "esmfold":
             chunk_threshold = stage_models.get("chunk_threshold", 10**9)
@@ -395,9 +395,8 @@ def estimate_stage(
             if chunked_block is not None and stats.p95_len >= chunk_threshold:
                 rt_block = chunked_block
                 gpu_notes.append(
-                    f"ESMFold: p95_len {stats.p95_len} ≥ chunk_threshold "
-                    f"{chunk_threshold} — using chunked trunk path "
-                    f"(slower but avoids OOM). Pass --chunk_size 64 to run_esmfold.py."
+                    f"ESMFold2: p95_len {stats.p95_len} ≥ {chunk_threshold} — "
+                    f"using the slower long-sequence coefficients for the estimate."
                 )
         per_seq_sec = _eval_time_per_seq(rt_block, mean_len=stats.mean_len)
         per_seq_sec = max(per_seq_sec, 0.5)
@@ -713,8 +712,7 @@ def apply_estimate_to_config(
     Uses two namespaces:
       slurm.resources.<stage>.{mem_mb, runtime, cpus_per_task, gpus}
       slurm.<stage>.partition
-      <stage>.max_files_per_job  (msa, boltz)
-      <stage>.num_chunks         (esm, esmfold)
+      <stage>.max_files_per_job  (all stages — chunkers split by files-per-job)
     Preserves all other keys. Returns the backup path (or original path).
     """
     config_path = Path(config_path)
@@ -723,13 +721,6 @@ def apply_estimate_to_config(
 
     slurm = cfg.setdefault("slurm", {})
     slurm_resources = slurm.setdefault("resources", {})
-
-    chunk_key = {
-        "msa": "max_files_per_job",
-        "boltz": "max_files_per_job",
-        "esm": "num_chunks",
-        "esmfold": "num_chunks",
-    }
 
     for stage, est in estimates.items():
         if est.num_chunks == 0:
@@ -745,14 +736,10 @@ def apply_estimate_to_config(
         if est.partition:
             slurm.setdefault(stage, {})["partition"] = est.partition
 
-        # Chunk size into the stage's own config block
-        ck = chunk_key.get(stage)
-        if ck:
-            stage_cfg = cfg.setdefault(stage, {})
-            if stage in ("msa", "boltz"):
-                stage_cfg[ck] = est.chunk_size
-            else:  # esm, esmfold — num_chunks is the *number of jobs*
-                stage_cfg[ck] = est.num_chunks
+        # Chunk size = files per job. Every chunker (MSA/Boltz/ESMC/ESMFold2)
+        # splits by max_files_per_job now.
+        stage_cfg = cfg.setdefault(stage, {})
+        stage_cfg["max_files_per_job"] = est.chunk_size
 
         # If a BinPlan was produced, populate the binning recipe so the chunker
         # produces per-bin chunks with per-chunk SLURM resources at run time.
