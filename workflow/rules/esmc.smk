@@ -29,10 +29,10 @@ ESMC_ACCOUNT   = SLURM_CFG.get("account", "")
 # Absolute path to the in-container batch runner (bound to /opt at run time).
 ESMC_RUNNER = _os.path.abspath("containers/run_batch_esmc.py")
 
-
-wildcard_constraints:
-    size = "|".join(ESMC_SIZES),
-    chunk_id = r"\d+",
+# Rule-local constraint (NOT global): `size` is also a wildcard in the SAE
+# stage with a possibly different value set, so a global constraint here would
+# clobber it. `_ESMC_SIZE_RE` is reused by every rule that carries {size}.
+_ESMC_SIZE_RE = "|".join(ESMC_SIZES)
 
 
 def _esmc_resource(size, key, default):
@@ -85,6 +85,9 @@ def get_esmc_chunk_ids(wildcards):
 
 rule run_esmc:
     """Encode a chunk of sequences with one ESMC model size, inside the ESM container."""
+    wildcard_constraints:
+        size = _ESMC_SIZE_RE,
+        chunk_id = r"\d+",
     input:
         chunk_dir = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}",
     output:
@@ -155,6 +158,9 @@ rule run_esmc:
 
 rule organize_esmc:
     """Move encoder outputs to sequences/{seq}/esmc/{size}/ then drop the scratch dir."""
+    wildcard_constraints:
+        size = _ESMC_SIZE_RE,
+        chunk_id = r"\d+",
     input:
         done = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output/.done",
     output:
@@ -186,6 +192,8 @@ def aggregate_esmc_organized(wildcards):
 
 rule esmc_complete:
     """Aggregate sentinel: all chunks encoded + organized for one model size."""
+    wildcard_constraints:
+        size = _ESMC_SIZE_RE,
     input:
         aggregate_esmc_organized,
     output:

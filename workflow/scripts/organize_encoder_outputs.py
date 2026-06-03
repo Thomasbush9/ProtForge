@@ -49,7 +49,7 @@ def main():
     parser = argparse.ArgumentParser(description="Move encoder outputs into sequences/")
     parser.add_argument("--scratch_dir", required=True, help="Per-chunk scratch output dir")
     parser.add_argument("--sequences_dir", required=True, help="Base sequences directory")
-    parser.add_argument("--stage", required=True, choices=["esmc", "esmfold"],
+    parser.add_argument("--stage", required=True, choices=["esmc", "esmfold", "sae"],
                         help="Target subdirectory under each sequence")
     args = parser.parse_args()
 

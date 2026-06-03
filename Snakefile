@@ -32,6 +32,9 @@ RUN_BOLTZ   = config["pipeline"].get("boltz", True)
 # MSA->Boltz config does not pull them in. Both run off the MSA-stage YAMLs.
 RUN_ESMC    = config["pipeline"].get("esmc", False)
 RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
+# ESMC SAE extraction. Gated by esmc.sae.enabled (independent of RUN_ESMC) so it
+# can run standalone against YAMLs from a previous embedding run.
+RUN_ESMC_SAE = config.get("esmc", {}).get("sae", {}).get("enabled", False)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
 SEQUENCES_DIR = f"{OUTPUT}/sequences"
@@ -166,6 +169,8 @@ if RUN_BOLTZ:
     include: "workflow/rules/boltz.smk"
 if RUN_ESMC:
     include: "workflow/rules/esmc.smk"
+if RUN_ESMC_SAE:
+    include: "workflow/rules/esmc_sae.smk"
 if RUN_ESMFOLD:
     include: "workflow/rules/esmfold.smk"
 
@@ -180,6 +185,9 @@ def get_targets():
     if RUN_ESMC:
         # One sentinel per configured ESMC model size.
         targets += [f"{OUTPUT}/.esmc_{size}_complete" for size in ESMC_SIZES]
+    if RUN_ESMC_SAE:
+        # One sentinel per ESMC model size we extract SAE activations for.
+        targets += [f"{OUTPUT}/.esmc_sae_{size}_complete" for size in ESMC_SAE_SIZES]
     if RUN_ESMFOLD:
         targets.append(f"{OUTPUT}/.esmfold_complete")
     return targets
@@ -225,7 +233,7 @@ def _write_benchmark_summary(status):
             lines.append("-" * 50)
             lines.append(f"{'Stage':<15} {'Total (s)':>12} {'# Rules':>10} {'Avg (s)':>10}")
             total_rule_time = 0
-            for stage in ["msa", "boltz", "esmc", "esmfold"]:
+            for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold"]:
                 if stage not in stage_times:
                     continue
                 times = stage_times[stage]

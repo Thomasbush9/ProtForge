@@ -53,6 +53,17 @@ esmc:
   # /models/hf (ro) in-container. Populate it with:
   #   bash containers/download_scripts/esm_models.sh <cache_dir>
   cache_dir: /n/home06/<YOUR_USER>/protforge/models/hf
+  # SAE sparse-activation extraction. Recomputed from the sequence (not from the
+  # embeddings above), so it can run standalone on a prior run's YAMLs. One job
+  # per size; outputs -> sequences/{seq}/sae/{size}/{sae_type}/. The same ESM
+  # container/cache as the embeddings is reused (cache must also hold the SAE
+  # repos, e.g. hub/models--biohub--ESMC-<size>-sae-*).
+  sae:
+    enabled: false
+    sae_type: all-layers  # all-layers | mlp
+    layers: all           # "all" (every trained layer) or a comma list, e.g. "18,36"
+    # sizes: [600M]       # subset of `models` above (default: all of them)
+    max_files_per_job: 25
 
 # ESMFold2 structure prediction (Biohub "fast" variant) — runs after MSA.
 # Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
@@ -120,11 +131,15 @@ slurm:
   partition: kempner_requeue
   account: <YOUR_SLURM_ACCOUNT>  # e.g., kempner_yourpi_lab
   email: <YOUR_EMAIL>  # e.g., user@example.com (for SLURM job notifications)
-  # Per-job partition overrides (optional):
+  # Per-stage partition overrides (optional) — falls back to slurm.partition.
   # msa:
   #   partition: kempner
   # boltz:
-  #   partition: kempner
+  #   partition: kempner_h100
+  # esmc:
+  #   partition: kempner_h100
+  # esmfold:
+  #   partition: kempner_h100
   #
   # Per-stage SLURM resource overrides (optional). Populated automatically by
   # the webapp's resource estimator (Import dialog → "Apply to session config").
@@ -136,4 +151,5 @@ slurm:
   #   boltz:    {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
   #   esmc:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
   #   esmc_6B:  {mem_mb: 80000, runtime: 120, cpus_per_task: 8,  gpus: 1}
+  #   esmc_sae: {mem_mb: 32000, runtime: 60,  cpus_per_task: 8,  gpus: 1}  # +esmc_sae_<size>
   #   esmfold:  {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
