@@ -80,5 +80,6 @@ singularity exec --nv --cleanenv \
     --size "$SIZE" \
     --sae "$SAE_TYPE" \
     --yaml "$CONTAINER_YAML"
+    --layers 12,24
 
 echo "Run completed."
