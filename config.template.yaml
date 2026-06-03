@@ -1,12 +1,13 @@
 # ProtForge Configuration Template for Kempner Cluster
 # Copy this file to config.yaml and update paths marked with <YOUR_USER>
 
-# Which pipeline stages to run
+# Which pipeline stages to run.
+# NOTE: esm / esmfold are paused (Biohub ESMC + ESMFold2 rewrite in progress).
+# They default to OFF in the Snakefile; re-add `esm: true` / `esmfold: true`
+# plus their config block once those container rules are ported back.
 pipeline:
   msa: true
   boltz: true
-  esm: true
-  esmfold: false  # ESMFold2 structure prediction (alternative to Boltz)
 
 # Input data
 input:
@@ -41,57 +42,12 @@ boltz:
   cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 
-# ESM embeddings - USER SETUP REQUIRED
-# See docs/CLUSTER_SETUP.md for environment setup instructions
-esm:
-  num_chunks: 1
-  array_max_concurrency: 20
-  env_path: /n/home06/<YOUR_USER>/envs/esm
-  # Container mode: bind your host HF cache to /models/hf (see
-  # containers.bind_paths) and keep this path. Populate the host cache with:
-  #   python scripts/download_models.py --cache-dir <PROTFORGE_ROOT>/models/hf
-  cache_dir: /models/hf
-  # Legacy mode example (uncomment + adapt):
-  # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache
-  # NOTE (legacy mode only): the ESM library has hardcoded model paths in
-  # esm/utils/constants/esm3.py. Update those to match `cache_dir`. See
-  # docs/CLUSTER_SETUP.md.
-
-# ESMFold structure prediction - USER SETUP REQUIRED
-# In CONTAINER mode, bind your host HF cache to /models/hf and keep
-# cache_dir set to that mounted path. In LEGACY (conda env) mode, first
-# populate a host HF cache with scripts/download_models.py or
-# scripts/download_esmfold.py, then set cache_dir to that host path.
-esmfold:
-  input_type: yaml  # "yaml" (post-MSA from sequences/) or "fasta" (raw input.fasta_dir, independent of MSA/Boltz)
-  num_chunks: 1
-  array_max_concurrency: 10
-  env_path: /n/home06/<YOUR_USER>/envs/esmfold
-  cache_dir: /models/hf
-  # Example for legacy mode (uncomment + adapt):
-  # cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/esm_models_cache  # HF_HOME root; must contain hub/models--facebook--esmfold_v1
-  # Optional length cutoff. Sequences longer than this are dropped before
-  # chunking and listed in esmfold_chunks/skipped_sequences.tsv.
-  # max_seq_len: 2500
-  # Smart binning: when true, the chunker partitions sequences into a "short"
-  # pool (L < length_threshold) and a "long" pool (L >= length_threshold) and
-  # chunks each pool separately. The run rule applies pool-specific SLURM
-  # resources (mem_short/long_mb, time_short/long_min). Use this when you have
-  # a mix of short and long proteins — long ones use the slower trunk-chunked
-  # path, short ones don't pay that overhead.
-  bin_by_length: false
-  length_threshold: 1200             # H100 80GB OOM ceiling observed in calibration
-  num_chunks_short: 1                # Chunks for short pool (only when bin_by_length: true)
-  num_chunks_long: 1                 # Chunks for long pool  (only when bin_by_length: true)
-  mem_short_mb: 32000                # SLURM mem for short-pool jobs
-  mem_long_mb: 80000                 # SLURM mem for long-pool jobs (close to H100 80GB)
-  time_short_min: 60                 # SLURM runtime for short-pool jobs
-  time_long_min: 240                 # SLURM runtime for long-pool jobs (trunk-chunking is slower)
-  # Trunk chunking inside run_esmfold.py. When a sequence's L is at least
-  # chunk_size_threshold, model.trunk.set_chunk_size(chunk_size) is invoked to
-  # avoid OOM at the cost of ~50% slower per-residue runtime.
-  chunk_size_threshold: 1200
-  chunk_size: 64
+# ---------------------------------------------------------------------------
+# ESM (ESMC embeddings) / ESMFold (ESMFold2) — PAUSED, coming soon
+# ---------------------------------------------------------------------------
+# These stages are mid-rewrite onto Biohub container models and are disabled
+# for now (RUN_ESM / RUN_ESMFOLD default to False in the Snakefile). When they
+# land, re-enable in `pipeline:` above and paste their config block back here.
 
 # ---------------------------------------------------------------------------
 # Bin-aware chunking (per stage) — OPTIONAL

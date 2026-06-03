@@ -28,7 +28,9 @@ _PIPELINE_START = _time.time()
 
 RUN_MSA     = config["pipeline"].get("msa", True)
 RUN_BOLTZ   = config["pipeline"].get("boltz", True)
-RUN_ESM     = config["pipeline"].get("esm", True)
+# ESM / ESMFold are paused features (Biohub ESMC + ESMFold2 rewrite in progress).
+# Default OFF so a config that omits them does not pull in the not-yet-ported rules.
+RUN_ESM     = config["pipeline"].get("esm", False)
 RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
