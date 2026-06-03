@@ -1,4 +1,5 @@
 import os
+import time
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -91,6 +92,11 @@ if __name__ == "__main__":
         spi = StructurePredictionInput(
             sequences=[ProteinInput(id="A", sequence=sequence)]
         )
+        # Time only the model call (CUDA-synced) for the stair benchmark's
+        # infer_s column; load/setup is excluded by construction.
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        _t0 = time.perf_counter()
         result = builder.fold(
             model,
             spi,
@@ -99,6 +105,9 @@ if __name__ == "__main__":
             num_diffusion_samples=1,
             seed=args.seed,
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"BENCH_INFER_S {name} {time.perf_counter() - _t0:.4f}", flush=True)
         save_outputs(args.output_dir, name, ESMFOLD_VARIANT, result)
 
         plddt_mean = float(result.plddt.mean())

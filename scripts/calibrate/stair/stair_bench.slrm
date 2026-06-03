@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# stair_bench.slrm — SLURM array wrapper: one task == one staircase rung.
+#
+# Exclusive node (contention-free wall time) but a single visible GPU
+# (cgroup-isolated), so the VRAM sampler in bench_one.sh sees only our card.
+# STAGE/RUN_DIR/CONFIG/GPU_TYPE/BENCH_ONE arrive via --export.
+#
+# The driver (run_stage.sh) normally overrides the placeholders below via
+# sbatch flags (--partition/--account/--time/--array/--output). The header
+# values let `sbatch stair_bench.slrm` also work standalone once filled in.
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --exclusive
+#SBATCH --gpus-per-node=1
+#SBATCH --partition=        # FILL e.g. kempner_h100  (or pass --partition)
+#SBATCH --account=          # FILL e.g. kempner_bsabatini_lab (or pass --account)
+#SBATCH --time=02:00:00     # FILL per stage (or pass --time, minutes ok)
+#SBATCH --array=0-14        # FILL n_rungs-1 (or pass --array)
+#SBATCH --output=stair_%x.%A_%a.out   # FILL log dir (or pass --output)
+set -uo pipefail
+
+: "${STAGE:?set via --export}"
+: "${RUN_DIR:?set via --export}"
+: "${CONFIG:?set via --export}"
+: "${GPU_TYPE:?set via --export}"
+: "${BENCH_ONE:?set via --export}"
+
+echo "[slrm] job=$SLURM_JOB_ID array_task=$SLURM_ARRAY_TASK_ID stage=$STAGE node=$(hostname)"
+echo "[slrm] visible GPUs: ${CUDA_VISIBLE_DEVICES:-<none>}"
+
+bash "$BENCH_ONE" \
+  --stage "$STAGE" \
+  --rung-idx "$SLURM_ARRAY_TASK_ID" \
+  --run-dir "$RUN_DIR" \
+  --config "$CONFIG" \
+  --gpu-type "$GPU_TYPE"

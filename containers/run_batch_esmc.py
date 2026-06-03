@@ -1,4 +1,5 @@
 import os
+import time
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List
@@ -68,8 +69,16 @@ def encode_sequences(sequences: List, model_name, hub_cache):
     ).cuda().eval()
     inputs = tokenizer(sequences, return_tensors="pt", padding=True)
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    # Time only the forward pass (CUDA-synced) for the stair benchmark's
+    # infer_s column; model load / tokenization are excluded by construction.
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    _t0 = time.perf_counter()
     with torch.inference_mode():
         outputs = model(**inputs)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    print(f"BENCH_INFER_S {model_name} {time.perf_counter() - _t0:.4f}", flush=True)
     return outputs
 
 
