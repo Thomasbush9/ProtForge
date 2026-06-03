@@ -22,13 +22,13 @@ model_repo() {
 model_sae_size() {
   case "$1" in
   ESMC-6B) echo "6B" ;;
-  ESMC-600M) echo "600B" ;;
+  ESMC-600M) echo "600M" ;;
   ESMC-300M) echo "300M" ;;
   *) echo "" ;;
   esac
 }
-SAE_REPO_ALL_LAYERS="biohub/EMSC-XXXX-sae-k64-codebook16384"
-SAE_REPO_MLP="biohub/EMSC-XXXX-sae-mlp-k64-codebook131072"
+SAE_REPO_ALL_LAYERS="biohub/ESMC-XXXX-sae-k64-codebook16384"
+SAE_REPO_MLP="biohub/ESMC-XXXX-sae-mlp-k64-codebook131072"
 
 ask() {
   local reply
