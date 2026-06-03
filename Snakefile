@@ -28,9 +28,9 @@ _PIPELINE_START = _time.time()
 
 RUN_MSA     = config["pipeline"].get("msa", True)
 RUN_BOLTZ   = config["pipeline"].get("boltz", True)
-# ESM / ESMFold are paused features (Biohub ESMC + ESMFold2 rewrite in progress).
-# Default OFF so a config that omits them does not pull in the not-yet-ported rules.
-RUN_ESM     = config["pipeline"].get("esm", False)
+# ESM-C embeddings + ESMFold2 structure prediction. Default OFF so a minimal
+# MSA->Boltz config does not pull them in. Both run off the MSA-stage YAMLs.
+RUN_ESMC    = config["pipeline"].get("esmc", False)
 RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
@@ -126,7 +126,6 @@ def binning_args(stage_cfg: dict, *, stage_name: str = "?") -> str:
 
 # Container support (set .sif paths in config to enable)
 CONTAINERS = config.get("containers", {})
-BIND_PATHS = CONTAINERS.get("bind_paths", "/n/holylfs06,/n/home06")
 
 # Container runtime: "singularity" | "apptainer" | "auto" (default).
 # "auto" picks whichever binary is on PATH, preferring `singularity` (the
@@ -151,115 +150,22 @@ else:
 import shlex as _shlex
 
 
-def _parse_bind(entry):
-    """Parse one bind_paths entry into a shell-safe -B flag.
-
-    Accepted forms (longest-match first):
-      - "host:container:ro"  (or :rw)        explicit indirection + mode
-      - "host:container"                     explicit indirection, mode rw
-      - "host:ro"            (or :rw)        host:host bind at given mode
-      - "host"                               host:host bind, mode rw
-
-    Disambiguation: when an entry has two parts, a second part equal to
-    `ro` or `rw` is treated as the mode (host:host:mode); otherwise it's
-    the container-side path. This lets the template default stay readable
-    (`/n/.../db:ro`) without inventing a new separator.
-
-    The full `-B` argument is `shlex.quote`d so paths with spaces or shell
-    metachars can't break the rule's bash line. Empty entries are ignored.
-    Unknown modes are rejected.
-    """
-    entry = entry.strip()
-    if not entry:
-        return None
-    parts = entry.split(":")
-    if len(parts) == 3:
-        host, cont, mode = parts
-        if mode not in ("ro", "rw"):
-            raise ValueError(
-                f"containers.bind_paths: invalid mode {mode!r} in {entry!r} "
-                f"(expected 'ro' or 'rw')"
-            )
-        return f"-B {_shlex.quote(f'{host}:{cont}:{mode}')}"
-    if len(parts) == 2:
-        host, second = parts
-        if second in ("ro", "rw"):
-            return f"-B {_shlex.quote(f'{host}:{host}:{second}')}"
-        return f"-B {_shlex.quote(f'{host}:{second}')}"
-    return f"-B {_shlex.quote(entry)}"
-
-
 def container_sif(stage):
     """Resolve the SIF path for a stage: per-stage `containers.<stage>` wins,
     else the optional shared `containers.gpu`. Returns "" when none is set.
 
-    Used by rules (MSA, Boltz) that build an explicit `<runtime> exec` command
-    with per-job bind mounts in their shell block, rather than going through
-    container_cmd()'s global-bind prefix.
+    Every GPU stage (MSA, Boltz, ESMC, ESMFold2) builds its own
+    `<runtime> exec --nv ...` command with per-job bind mounts in its shell
+    block, so this just hands back the image path to drop in.
     """
     return CONTAINERS.get(stage, "") or CONTAINERS.get("gpu", "")
-
-
-def container_cmd(stage, extra_env=""):
-    """Return '<runtime> exec --nv --cleanenv ... <extra_env> -B ... sif',
-    or '' for legacy (non-container) mode.
-
-    Args:
-      stage: stage name used to resolve the SIF (containers.<stage>, else
-        containers.gpu fallback).
-      extra_env: optional `--env KEY=VALUE [--env ...]` string the caller
-        wants injected *between* the runtime flags and the SIF path. The
-        whole string lands BEFORE the SIF so Singularity treats it as a
-        runtime option, not part of the in-container command. Values may
-        contain `$VAR` references — those are resolved by bash at rule
-        runtime, not at Snakemake plan time.
-
-    Audit hardening (H1, H3, H5 — see vault container-audit.md):
-      - --cleanenv: strip host env to prevent PYTHONPATH/CONDA_PREFIX leaks.
-        Rules that need to forward a host env var into the container must
-        pass it through `extra_env` so it lands before the SIF (Singularity
-        rejects --env after the image).
-      - bind_paths entries support 'host:container:ro' for read-only mounts
-        (DBs should be :ro). See _parse_bind for accepted shorthand.
-      - SLURM_TMPDIR (or /tmp if unset) is bound at /tmp and TMPDIR=/tmp is
-        propagated, so tools that write large temp files (Boltz, Triton,
-        HF) land on node-local scratch instead of the container's tmpfs.
-        The ${{SLURM_TMPDIR:-/tmp}} expansion is shell-expanded at rule
-        runtime (it appears inside the rule's bash shell block).
-    """
-    # Resolve SIF: per-stage image (containers.<stage>, e.g. containers.boltz)
-    # is the primary path. `containers.gpu` remains as an optional shared
-    # fallback for users who bundle several stages into one image.
-    sif = CONTAINERS.get(stage, "") or CONTAINERS.get("gpu", "")
-    if not sif:
-        return ""
-    binds = [_parse_bind(p) for p in BIND_PATHS.split(",")]
-    binds = [b for b in binds if b is not None]
-    # Node-local scratch for tmp (shell-expanded by the rule's bash).
-    binds.append('-B "${SLURM_TMPDIR:-/tmp}":/tmp')
-    flags = [
-        CONTAINER_RUNTIME, "exec",
-        "--nv",
-        "--cleanenv",
-        "--env", "TMPDIR=/tmp",
-    ]
-    parts = flags + binds
-    if extra_env:
-        # extra_env is a pre-rendered flag string (e.g. "--env FOO=bar
-        # --env BAZ=$BAZ"). Trust the caller to have quoted any path
-        # components — we just inject it verbatim before the SIF.
-        parts.append(extra_env)
-    # `sif` lands at the end of a rule's bash command line, so quote it
-    # in case the user's path contains spaces or shell metachars.
-    parts.append(_shlex.quote(sif))
-    return " ".join(parts)
 
 if RUN_MSA:
     include: "workflow/rules/msa.smk"
 if RUN_BOLTZ:
     include: "workflow/rules/boltz.smk"
-if RUN_ESM:
-    include: "workflow/rules/esm.smk"
+if RUN_ESMC:
+    include: "workflow/rules/esmc.smk"
 if RUN_ESMFOLD:
     include: "workflow/rules/esmfold.smk"
 
@@ -271,8 +177,9 @@ def get_targets():
         targets.append(f"{OUTPUT}/.msa_complete")
     if RUN_BOLTZ:
         targets.append(f"{OUTPUT}/.boltz_complete")
-    if RUN_ESM:
-        targets.append(f"{OUTPUT}/.esm_complete")
+    if RUN_ESMC:
+        # One sentinel per configured ESMC model size.
+        targets += [f"{OUTPUT}/.esmc_{size}_complete" for size in ESMC_SIZES]
     if RUN_ESMFOLD:
         targets.append(f"{OUTPUT}/.esmfold_complete")
     return targets
@@ -303,7 +210,7 @@ def _write_benchmark_summary(status):
         import csv
         stage_times = {}
         for bench_file in sorted(bench_dir.rglob("*.tsv")):
-            stage = bench_file.parent.name  # e.g. msa, boltz, esm, es
+            stage = bench_file.parent.name  # e.g. msa, boltz, esmc, esmfold
             try:
                 with open(bench_file) as f:
                     reader = csv.DictReader(f, delimiter="\t")
@@ -318,7 +225,7 @@ def _write_benchmark_summary(status):
             lines.append("-" * 50)
             lines.append(f"{'Stage':<15} {'Total (s)':>12} {'# Rules':>10} {'Avg (s)':>10}")
             total_rule_time = 0
-            for stage in ["msa", "boltz", "esm", "esmfold"]:
+            for stage in ["msa", "boltz", "esmc", "esmfold"]:
                 if stage not in stage_times:
                     continue
                 times = stage_times[stage]

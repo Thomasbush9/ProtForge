@@ -1,13 +1,13 @@
 # ProtForge Configuration Template for Kempner Cluster
 # Copy this file to config.yaml and update paths marked with <YOUR_USER>
 
-# Which pipeline stages to run.
-# NOTE: esm / esmfold are paused (Biohub ESMC + ESMFold2 rewrite in progress).
-# They default to OFF in the Snakefile; re-add `esm: true` / `esmfold: true`
-# plus their config block once those container rules are ported back.
+# Which pipeline stages to run. esmc / esmfold run off the MSA-stage YAMLs
+# (in parallel with Boltz) and default OFF in the Snakefile.
 pipeline:
   msa: true
   boltz: true
+  esmc: false      # ESM-C embeddings (one stage per model size; see esmc:)
+  esmfold: false   # ESMFold2 structure prediction (see esmfold:)
 
 # Input data
 input:
@@ -42,12 +42,26 @@ boltz:
   cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 
-# ---------------------------------------------------------------------------
-# ESM (ESMC embeddings) / ESMFold (ESMFold2) — PAUSED, coming soon
-# ---------------------------------------------------------------------------
-# These stages are mid-rewrite onto Biohub container models and are disabled
-# for now (RUN_ESM / RUN_ESMFOLD default to False in the Snakefile). When they
-# land, re-enable in `pipeline:` above and paste their config block back here.
+# ESM-C embeddings (Biohub ESMC) — runs after MSA, in parallel with Boltz.
+# `models` is any subset of {6B, 600M, 300M}; each size is its own stage with
+# its own jobs, resources (slurm.resources.esmc_<size>) and
+# .esmc_<size>_complete sentinel. Outputs -> sequences/{seq}/esmc/{size}/.
+esmc:
+  models: [600M]          # subset of: 6B, 600M, 300M
+  max_files_per_job: 25   # sequences per encode job (also the padded batch size)
+  # HOST HuggingFace cache (contains hub/models--biohub--ESMC-*); bound to
+  # /models/hf (ro) in-container. Populate it with:
+  #   bash containers/download_scripts/esm_models.sh <cache_dir>
+  cache_dir: /n/home06/<YOUR_USER>/protforge/models/hf
+
+# ESMFold2 structure prediction (Biohub "fast" variant) — runs after MSA.
+# Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
+esmfold:
+  max_files_per_job: 25
+  cache_dir: /n/home06/<YOUR_USER>/protforge/models/hf  # HOST HF cache (hub/models--biohub--ESMFold2-Fast)
+  num_loops: 3
+  num_sampling_steps: 50
+  seed: 0
 
 # ---------------------------------------------------------------------------
 # Bin-aware chunking (per stage) — OPTIONAL
@@ -83,45 +97,22 @@ boltz:
 #       - {mem_mb: 80000, runtime_min: 180}
 #       - {mem_mb: 80000, runtime_min: 240}
 #
-# Container images (Singularity .sif files) — OPTIONAL
-# Set `gpu` to the single ProtForge GPU SIF (built from containers/protforge-gpu.def)
-# to run colabfold/boltz/esm/esmfold inside the container. Leave empty for legacy
-# conda-env mode. Per-stage keys override `gpu` when set (used once we split the
-# image, e.g. PDAnalysis ships in its own MPI SIF).
+# Container images (Singularity .sif files)
+# Each GPU stage runs inside its per-stage image and binds its own inputs/DB/
+# weights/cache in the rule, so no global bind list is needed. Set the .sif
+# paths you built. `gpu` is an optional shared fallback used when a per-stage
+# key is empty (handy if you bundle several stages into one image — e.g. ESMC
+# and ESMFold2 ship in the same ESM image).
 containers:
   # Container runtime to invoke. "auto" (default) picks singularity if on
   # PATH, else apptainer. Override to "apptainer" or "singularity" to force.
-  # On Kempner the binary is named `singularity` — whether that's
-  # SingularityCE or Apptainer's compat symlink doesn't affect us.
+  # On Kempner the binary is named `singularity`.
   runtime: auto
-  # Single SIF for all GPU stages (MSA / Boltz / ESM-C / ESMFold).
-  gpu: ""          # e.g., /n/holylfs06/.../<YOUR_USER>/sifs/protforge-gpu.sif
-  # Per-stage overrides (optional — leave empty to use `gpu` above).
-  colabfold: ""
-  boltz: ""
-  esm: ""
-  esmfold: ""
-  # Comma-separated bind list. Each entry is one of:
-  #   - host                  (host:host, rw — for writable workspace dirs)
-  #   - host:ro      (or :rw) (host:host bind at given mode — shortcut)
-  #   - host:container        (rebind to a different in-container path)
-  #   - host:container:ro|rw  (same with explicit mode)
-  #
-  # Default policy below = bind each shared DB at the SAME path inside the
-  # container, read-only. Stage configs below (msa.mmseq2_db, boltz.cache_dir,
-  # etc.) keep their host paths and work unchanged in container mode. The
-  # model cache bind maps the user's HF cache to /models/hf read-only. The
-  # writable bind covers the user's home dir; add your lab's holylfs path too
-  # if the repo or output dir lives there.
-  #
-  # The Snakefile additionally auto-binds ${SLURM_TMPDIR:-/tmp} at /tmp for
-  # scratch (Boltz/Triton/HF temp files), no need to list it here.
-  #
-  # Alternate `/data/*` convention (see containers/protforge-gpu.def %environment):
-  # if you prefer the canonical in-container paths, replace each `host:ro`
-  # below with `host:/data/<name>:ro` AND change the matching stage config
-  # values (msa.mmseq2_db, msa.colabfold_db, boltz.cache_dir) to `/data/...`.
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:ro,/n/home06/<YOUR_USER>/protforge/models/hf:/models/hf:ro,/n/home06/<YOUR_USER>"
+  gpu: ""          # optional shared fallback SIF (used when a stage key is empty)
+  colabfold: ""    # MSA image  (msa.def)
+  boltz: ""        # Boltz image (boltz.def)
+  esmc: ""         # ESM image  (esmfold_cu.def) — serves ESMC + ESMFold2
+  esmfold: ""      # same ESM image as esmc, unless you split them later
 
 # SLURM settings - UPDATE FOR YOUR ACCOUNT
 slurm:
@@ -138,8 +129,11 @@ slurm:
   # Per-stage SLURM resource overrides (optional). Populated automatically by
   # the webapp's resource estimator (Import dialog → "Apply to session config").
   # Each entry maps a Snakemake `resources:` field; gpus=0 disables GPU request.
+  # runtime is in minutes. For ESMC, `esmc` is the shared default; add
+  # `esmc_<size>` (e.g. esmc_6B) to give a specific model size more memory.
   # resources:
-  #   msa:     {mem_mb: 48000, runtime: 60,  cpus_per_task: 4,  gpus: 1}
-  #   boltz:   {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
-  #   esm:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 16, gpus: 1}
-  #   esmfold: {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
+  #   msa:      {mem_mb: 48000, runtime: 60,  cpus_per_task: 4,  gpus: 1}
+  #   boltz:    {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
+  #   esmc:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
+  #   esmc_6B:  {mem_mb: 80000, runtime: 120, cpus_per_task: 8,  gpus: 1}
+  #   esmfold:  {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
