@@ -25,6 +25,7 @@ SLRM="$SCRIPT_DIR/stair_bench.slrm"
 RUN_DIR="" CONFIG="" INPUT_DIR="" GPU_TYPE="h100"
 STAGES="msa boltz esmfold esmc_300M esmc_600M esmc_6B"
 MIN=200 MAX=3000 STEP=200 SETUP_ONLY=0 DRY=0
+MEM_MB=256000 EXCLUSIVE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-dir)    RUN_DIR="$2"; shift 2 ;;
@@ -35,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --min)        MIN="$2"; shift 2 ;;
     --max)        MAX="$2"; shift 2 ;;
     --step)       STEP="$2"; shift 2 ;;
+    --mem-mb)     MEM_MB="$2"; shift 2 ;;   # host-RAM cap per task (default 256000)
+    --exclusive)  EXCLUSIVE=1; shift ;;      # whole node per task -> clean wall time
     --setup-only) SETUP_ONLY=1; shift ;;
     --dry-run)    DRY=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -87,9 +90,10 @@ submit_stage() {  # submit_stage STAGE [DEP_JOBID]
     --job-name="stair_${stage}_${GPU_TYPE}"
     --partition="$PART" --account="$ACCT"
     --array="0-$((NRUNGS-1))"
-    --time="$runtime_min" --cpus-per-task="$cpus"
+    --time="$runtime_min" --cpus-per-task="$cpus" --mem="$MEM_MB"
     --output="$LOGDIR/stair_${stage}_%A_%a.out"
     --export="ALL,STAGE=${stage},RUN_DIR=${RUN_DIR},CONFIG=${CONFIG},GPU_TYPE=${GPU_TYPE},BENCH_ONE=${BENCH_ONE}")
+  [[ "$EXCLUSIVE" == 1 ]] && cmd+=(--exclusive --mem=0)  # whole node + all its RAM
   [[ -n "$dep" ]] && cmd+=(--dependency="afterok:${dep}")
   cmd+=("$SLRM")
   if [[ "$DRY" == 1 ]]; then

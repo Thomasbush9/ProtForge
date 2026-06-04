@@ -106,6 +106,13 @@ classify_status() {  # classify_status EXIT_CODE LOGFILE
   if grep -qiE 'cuda (error )?out of memory|CUDA_ERROR_OUT_OF_MEMORY|torch\.cuda\.OutOfMemoryError' "$logf" 2>/dev/null; then
     echo oom; return
   fi
+  # Host OOM: a child (e.g. colabfold's `mmseqs result2msa`) gets SIGKILL'd by
+  # the cgroup OOM-killer, but the parent CLI re-raises it as a generic exit-1,
+  # hiding the 137. Scan the log for the kill signature so >--mem rungs are
+  # labeled oom-host (the real reason) instead of a vague "error".
+  if grep -qiE 'Signals\.SIGKILL|signal 9|SIGKILL|oom-kill(er)?|Out of memory|\bKilled\b' "$logf" 2>/dev/null; then
+    echo oom-host; return
+  fi
   # 137 = 128+SIGKILL (cgroup OOM-killer); 124 = GNU timeout / SLURM TERM
   case "$code" in
     137|139) echo oom-host ;;

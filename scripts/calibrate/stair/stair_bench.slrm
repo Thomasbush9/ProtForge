@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # stair_bench.slrm — SLURM array wrapper: one task == one staircase rung.
 #
-# Exclusive node (contention-free wall time) but a single visible GPU
-# (cgroup-isolated), so the VRAM sampler in bench_one.sh sees only our card.
+# One GPU per task (cgroup-isolated -> the VRAM sampler sees only our card)
+# and --mem=256000 so several tasks pack onto a node, one GPU each. VRAM
+# (per-GPU) and host RAM (per-job cgroup) stay clean; only wall time is
+# softened by node-sharing. Add --exclusive (driver flag or `sbatch
+# --exclusive`) for a contention-free wall-time pass later.
 # STAGE/RUN_DIR/CONFIG/GPU_TYPE/BENCH_ONE arrive via --export.
 #
 # The driver (run_stage.sh) normally overrides the placeholders below via
-# sbatch flags (--partition/--account/--time/--array/--output). The header
-# values let `sbatch stair_bench.slrm` also work standalone once filled in.
+# sbatch flags (--partition/--account/--time/--array/--output/--mem). The
+# header values let `sbatch stair_bench.slrm` also work standalone once filled.
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --exclusive
 #SBATCH --gpus-per-node=1
+#SBATCH --mem=256000        # host-RAM cap; a rung needing more is recorded oom-host
 #SBATCH --partition=        # FILL e.g. kempner_h100  (or pass --partition)
 #SBATCH --account=          # FILL e.g. kempner_bsabatini_lab (or pass --account)
 #SBATCH --time=02:00:00     # FILL per stage (or pass --time, minutes ok)
