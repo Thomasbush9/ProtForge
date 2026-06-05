@@ -11,6 +11,8 @@ From: openfoldconsortium/openfold3:stable
 
 %post 
         # install pytest 
+        conda activate openfold3 
+        python -m biotite.setup_ccd
         
 
 %environment
