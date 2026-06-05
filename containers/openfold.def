@@ -11,9 +11,9 @@ From: openfoldconsortium/openfold3:stable
 
 %post 
         # install pytest 
-        conda activate openfold3 
+        export PATH=/opt/conda/envs/openfold3/bin:$PATH
         python -m biotite.setup_ccd
-        
+            
 
 %environment
 # It defines environment variables that will be set at runtime -> not available at build time 
