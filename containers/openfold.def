@@ -10,8 +10,8 @@ From: openfoldconsortium/openfold3:stable
 # --bind host_path:image_path 
 
 %post 
-
-    
+        # install pytest 
+        
 
 %environment
 # It defines environment variables that will be set at runtime -> not available at build time 
@@ -19,15 +19,21 @@ From: openfoldconsortium/openfold3:stable
 
 
 
-
-
-
 %runscript
 # they are commands that are run when the container is invoked 
 
+        exec run_openfold "$@"
 
 %test
 # it runs at the end of the build process -> useful to test the container (imports and etc. )
+        set -e 
+        echo "Testing Openfold"
+        run_openfold --help > /dev/null
+        echo "Openfold tests passed"
+        echo "Testing imports"
+        python -c "
+        import torch; print(torch.__version__)"
+        echo "Openfold imports passed"
 
 
 %labels
