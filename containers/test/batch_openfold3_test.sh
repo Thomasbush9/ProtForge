@@ -29,7 +29,7 @@ OUTPUT_DIR="${4:-/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/
 
 CONTAINER_CACHE="/models/openfold"
 CONTAINER_OUTPUT="/data/output"
-RUNNER_YAML = "${INPUT_DIR}/runner.yaml"
+RUNNER_YAML="${INPUT_DIR}/runner.yaml"
 if [[ ! -d "$INPUT_DIR" ]]; then
   echo "ERROR: INPUT_DIR is not a directory: $INPUT_DIR" >&2
   exit 1
