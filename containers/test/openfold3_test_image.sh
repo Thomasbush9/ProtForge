@@ -14,8 +14,8 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 IMAGE.sif OPENFOLD_CACHE_DIR [INPUT_YAML_DIR] [OUTPUT_DIR]" >&2
-  echo "  INPUT_YAML_DIR  directory of Boltz *.yaml (default: repo fixtures/)" >&2
+  echo "usage: $0 IMAGE.sif OPENFOLD_CACHE_DIR [INPUT_JSON_DIR] [OUTPUT_DIR]" >&2
+  echo "  INPUT_JSON_DIR  directory with exactly one OpenFold *.json (default: repo fixtures/)" >&2
   echo "  OUTPUT_DIR      writable output root (default: cluster output_tests/openfold3)" >&2
   exit 1
 }
@@ -24,54 +24,51 @@ IMAGE_PATH="${1:-}"
 CACHE_DIR="${2:-}"
 [[ -n "$IMAGE_PATH" && -n "$CACHE_DIR" ]] || usage
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INPUT_DIR="${3:-${SCRIPT_DIR}/fixtures}"
+INPUT_DIR="${3:-fixtures}"
 OUTPUT_DIR="${4:-/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests/openfold3}"
 
-CONVERTER="${SCRIPT_DIR}/../yaml_to_openfold_json.py"
-CONTAINER_DATA="/data"
 CONTAINER_CACHE="/models/openfold"
 CONTAINER_OUTPUT="/data/output"
-WORK_DIR="${OUTPUT_DIR}/.openfold_work"
 
-if [[ ! -f "$CONVERTER" ]]; then
-  echo "ERROR: converter not found: $CONVERTER" >&2
+if [[ ! -d "$INPUT_DIR" ]]; then
+  echo "ERROR: INPUT_DIR is not a directory: $INPUT_DIR" >&2
   exit 1
 fi
-if [[ ! -d "$INPUT_DIR" ]] || [[ -z "$(find "$INPUT_DIR" -maxdepth 1 -name '*.yaml' -print -quit)" ]]; then
-  echo "ERROR: no *.yaml in INPUT_DIR=$INPUT_DIR" >&2
+
+shopt -s nullglob
+json_count="$(find "$INPUT_DIR" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
+if [[ "$json_count" -ne 1 ]]; then
+  echo "ERROR: expected exactly one *.json in INPUT_DIR=$INPUT_DIR, found $json_count" >&2
+  exit 1
+fi
+QUERY_JSON="$(find "$INPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit)"
+MSA_DIR="${INPUT_DIR}/msa"
+if [[ ! -d "$MSA_DIR" ]]; then
+  echo "ERROR: expected MSA directory at $MSA_DIR" >&2
   exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"
-rm -rf "$WORK_DIR"
-python3 "$CONVERTER" \
-  --input-dir "$INPUT_DIR" \
-  --work-dir "$WORK_DIR" \
-  --container-prefix "$CONTAINER_DATA"
-
-RUNNER_ARGS=()
-if [[ -f "$WORK_DIR/inference_precomputed.yml" ]]; then
-  RUNNER_ARGS=(--runner-yaml "${CONTAINER_DATA}/inference_precomputed.yml")
-fi
 
 echo "Launching OpenFold3 test..."
 echo "  image:   $IMAGE_PATH"
 echo "  cache:   $CACHE_DIR -> $CONTAINER_CACHE (ro)"
-echo "  input:   $INPUT_DIR -> query.json via $WORK_DIR"
+echo "  query:   $QUERY_JSON"
+echo "  input:   $INPUT_DIR -> $INPUT_DIR (ro)"
+echo "  msa:     $MSA_DIR -> $MSA_DIR (ro)"
 echo "  output:  $OUTPUT_DIR -> $CONTAINER_OUTPUT (rw)"
 
 singularity exec --nv --cleanenv \
   --env OPENFOLD_CACHE="$CONTAINER_CACHE" \
   -B "$CACHE_DIR:$CONTAINER_CACHE:ro" \
-  -B "$WORK_DIR:$CONTAINER_DATA:ro" \
+  -B "$INPUT_DIR:$INPUT_DIR:ro" \
+  -B "$MSA_DIR:$MSA_DIR:ro" \
   -B "$OUTPUT_DIR:$CONTAINER_OUTPUT" \
   "$IMAGE_PATH" \
   run_openfold predict \
-    --query-json "${CONTAINER_DATA}/query.json" \
+    --query-json "$QUERY_JSON" \
     --output-dir "$CONTAINER_OUTPUT" \
-    --use-msa-server=False \
-    "${RUNNER_ARGS[@]}"
+    --use-msa-server=False
 
 echo "Verifying outputs..."
 shopt -s nullglob
