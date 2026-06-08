@@ -37,7 +37,7 @@ fi
 
 shopt -s nullglob
 
-QUERY_JSON="${4:-}"
+QUERY_JSON="${5:-}"
 #TODO: rename msa to correct openfold standard names: uniref90_hits.a3m-> other names are not accepted 
 
 
