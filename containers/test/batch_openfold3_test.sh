@@ -39,11 +39,7 @@ shopt -s nullglob
 
 QUERY_JSON="${4:-}"
 #TODO: rename msa to correct openfold standard names: uniref90_hits.a3m-> other names are not accepted 
-MSA_DIR="${INPUT_DIR}/msa"
-if [[ ! -d "$MSA_DIR" ]]; then
-  echo "ERROR: expected MSA directory at $MSA_DIR" >&2
-  exit 1
-fi
+
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -52,14 +48,13 @@ echo "  image:   $IMAGE_PATH"
 echo "  cache:   $CACHE_DIR -> $CONTAINER_CACHE (ro)"
 echo "  query:   $QUERY_JSON"
 echo "  input:   $INPUT_DIR -> $INPUT_DIR (ro)"
-echo "  msa:     $MSA_DIR -> $MSA_DIR (ro)"
+
 echo "  output:  $OUTPUT_DIR -> $CONTAINER_OUTPUT (rw)"
 
 singularity exec --nv --cleanenv \
   --env OPENFOLD_CACHE="$CONTAINER_CACHE" \
   -B "$CACHE_DIR:$CONTAINER_CACHE:ro" \
   -B "$INPUT_DIR:$INPUT_DIR:ro" \
-  -B "$MSA_DIR:$MSA_DIR:ro" \
   -B "$OUTPUT_DIR:$CONTAINER_OUTPUT" \
   -B "$RUNNER_YAML:$RUNNER_YAML:ro" \
   "$IMAGE_PATH" \
