@@ -12,6 +12,7 @@ import json
 
 from results import (
     list_result_sequences,
+    list_sequence_dirs,
     find_structures,
     read_confidence,
     read_structure_text,
@@ -61,6 +62,12 @@ def test_list_and_find_structures(tmp_path):
 
     seqs = list_result_sequences(tmp_path)
     assert seqs == ["mutant_A"]
+
+    # Cheap listing returns every dir (incl. result-less ones) without globbing.
+    (tmp_path / "sequences" / "running_B").mkdir()
+    assert list_sequence_dirs(tmp_path) == ["mutant_A", "running_B"]
+    # list_result_sequences still filters to those with structures.
+    assert list_result_sequences(tmp_path) == ["mutant_A"]
 
     structures = find_structures(tmp_path / "sequences" / "mutant_A")
     stages = {s.stage for s in structures}

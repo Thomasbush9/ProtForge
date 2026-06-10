@@ -11,18 +11,61 @@ py3Dmol and plotly are optional; the tab degrades to a download link / native
 charts and prints an install hint when they're missing.
 """
 
+from pathlib import Path
+
 import streamlit as st
 
 from session import Session
 from pipeline_ops import load_config
 from results import (
-    list_result_sequences,
+    StructureFile,
+    list_sequence_dirs,
     find_structures,
     read_structure_text,
     structure_format,
     read_confidence,
     read_benchmarks,
 )
+
+# How many sequences to put in the picker before asking the user to narrow the
+# filter — keeps the selectbox responsive on runs with thousands of mutants.
+_MAX_PICKER = 300
+
+# Filesystem reads are cached with a short TTL so reruns (widget changes,
+# autorefresh) don't re-walk the output tree on the network filesystem. The
+# Refresh button clears them when the user wants fresh state.
+_RESULTS_TTL = 30
+
+
+@st.cache_data(ttl=_RESULTS_TTL, show_spinner=False)
+def _seq_dirs(output_dir: str) -> list[str]:
+    return list_sequence_dirs(output_dir)
+
+
+@st.cache_data(ttl=_RESULTS_TTL, show_spinner=False)
+def _structures(output_dir: str, seq: str) -> list[StructureFile]:
+    return find_structures(Path(output_dir) / "sequences" / seq)
+
+
+@st.cache_data(ttl=_RESULTS_TTL, show_spinner=False)
+def _confidence(path_str: str, stage: str) -> dict:
+    return read_confidence(StructureFile(stage=stage, path=Path(path_str), label=""))
+
+
+@st.cache_data(show_spinner=False)
+def _structure_text(path_str: str, _mtime: float) -> str:
+    # _mtime is part of the cache key so an overwritten file invalidates.
+    return read_structure_text(path_str)
+
+
+@st.cache_data(ttl=_RESULTS_TTL, show_spinner=False)
+def _benchmarks(output_dir: str) -> dict:
+    return read_benchmarks(output_dir)
+
+
+def _clear_results_cache() -> None:
+    for fn in (_seq_dirs, _structures, _confidence, _structure_text, _benchmarks):
+        fn.clear()
 
 
 # pLDDT colour scheme (AlphaFold-style): blue = confident, orange/red = low.
@@ -56,22 +99,45 @@ def _render_3d(structure_text: str, fmt: str, color_mode: str) -> bool:
 
 
 def _structure_viewer(output_dir: str):
-    seqs = list_result_sequences(output_dir)
-    if not seqs:
+    all_dirs = _seq_dirs(output_dir)
+    if not all_dirs:
         st.info(
-            "No predicted structures found yet under "
-            f"`{output_dir}/sequences/`. Structures appear here once Boltz / "
-            "OpenFold3 / ESMFold2 finish."
+            f"No sequences under `{output_dir}/sequences/` yet. Structures "
+            "appear here once Boltz / OpenFold3 / ESMFold2 finish."
         )
         return
 
     c1, c2 = st.columns([2, 2])
     with c1:
-        seq = st.selectbox(f"Sequence ({len(seqs)} with results)", options=seqs,
-                           key="results_seq")
-    structures = find_structures(f"{output_dir}/sequences/{seq}")
+        query = st.text_input(
+            "Filter sequences", value="", key="results_seq_filter",
+            placeholder="substring match…",
+            help="Narrow the picker by name. Structures are resolved only for "
+                 "the selected sequence, so this stays fast on large runs.",
+        )
+    filtered = [d for d in all_dirs if query.lower() in d.lower()] if query else all_dirs
+    if not filtered:
+        st.warning(f"No sequence names match `{query}`.")
+        return
+    shown = filtered[:_MAX_PICKER]
+    with c2:
+        seq = st.selectbox(
+            f"Sequence ({len(filtered)} of {len(all_dirs)} shown)"
+            if query else f"Sequence ({len(all_dirs)} total)",
+            options=shown, key="results_seq",
+        )
+    if len(filtered) > _MAX_PICKER:
+        st.caption(
+            f"Showing first {_MAX_PICKER} of {len(filtered)} matches — "
+            "type more to narrow."
+        )
+
+    structures = _structures(output_dir, seq)
     if not structures:
-        st.warning("No structure files for this sequence.")
+        st.warning(
+            f"No structure files for `{seq}` yet — its predictions may still be "
+            "running, or only embeddings (ESMC) were produced."
+        )
         return
 
     with c2:
@@ -86,7 +152,7 @@ def _structure_viewer(output_dir: str):
     )
 
     # Confidence metrics for this model
-    metrics = read_confidence(chosen)
+    metrics = _confidence(str(chosen.path), chosen.stage)
     if metrics:
         # Surface the most informative scores first, then the rest.
         priority = ["confidence_score", "ranking_score", "ptm", "iptm",
@@ -98,7 +164,8 @@ def _structure_viewer(output_dir: str):
             cols[i % len(cols)].metric(k, f"{metrics[k]:.3f}")
 
     try:
-        text = read_structure_text(chosen.path)
+        mtime = chosen.path.stat().st_mtime
+        text = _structure_text(str(chosen.path), mtime)
     except Exception as exc:
         st.error(f"Could not read structure: {exc}")
         return
@@ -118,7 +185,7 @@ def _structure_viewer(output_dir: str):
 
 
 def _run_analytics(output_dir: str):
-    benches = read_benchmarks(output_dir)
+    benches = _benchmarks(output_dir)
     if not benches:
         st.info(
             f"No benchmark data under `{output_dir}/benchmarks/`. "
@@ -174,13 +241,21 @@ def render_results_tab(session: Session):
         st.info("Set an output directory in the Configuration tab to see results.")
         return
 
-    from pathlib import Path
     if not Path(output_dir).is_dir():
         st.info(f"Output directory does not exist yet: `{output_dir}`")
         return
 
-    view = st.radio("View", ["Structure viewer", "Run analytics"],
-                    horizontal=True, key="results_view")
+    c_view, c_refresh = st.columns([4, 1])
+    with c_view:
+        view = st.radio("View", ["Structure viewer", "Run analytics"],
+                        horizontal=True, key="results_view")
+    with c_refresh:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("↻ Refresh", width="stretch", key="results_refresh",
+                     help=f"Results are cached for ~{_RESULTS_TTL}s; click to "
+                          "re-read the output tree now."):
+            _clear_results_cache()
+            st.rerun()
     st.divider()
     if view == "Structure viewer":
         _structure_viewer(output_dir)

@@ -46,8 +46,22 @@ def sequences_root(output_dir: str | Path) -> Path:
     return Path(output_dir) / "sequences"
 
 
+def list_sequence_dirs(output_dir: str | Path) -> list[str]:
+    """All sequence dir names under sequences/ — a single iterdir, no per-dir
+    globbing. Cheap enough to call on every rerun even for large runs; use this
+    to populate the picker and check structures lazily for the chosen one."""
+    root = sequences_root(output_dir)
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir() if d.is_dir())
+
+
 def list_result_sequences(output_dir: str | Path) -> list[str]:
-    """Names of sequence dirs that contain at least one predicted structure."""
+    """Names of sequence dirs that contain at least one predicted structure.
+
+    Globs every sequence — O(N × stages). Prefer list_sequence_dirs() for the
+    UI picker and resolve structures lazily; this stays for callers that need
+    the filtered set (and the tests)."""
     root = sequences_root(output_dir)
     if not root.is_dir():
         return []
