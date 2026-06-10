@@ -205,6 +205,7 @@ Snakefile
 | Document | Description |
 |----------|-------------|
 | [Cluster Setup](docs/CLUSTER_SETUP.md) | Environment setup, shared resources, troubleshooting |
+| [Web UI](docs/WEBAPP.md) | Streamlit front-end: install, how to access it (SSH / VS Code / Open OnDemand), usage |
 | [Snakemake Guide](docs/SNAKEMAKE_GUIDE.md) | How the Snakemake workflow works, SLURM integration |
 | [Containers](docs/CONTAINERS.md) | Container design and migration plan |
 | [config.template.yaml](config.template.yaml) | Annotated configuration reference |

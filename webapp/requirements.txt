@@ -1,3 +1,13 @@
+# ProtForge webapp (host-side). Install into the same env that runs Snakemake:
+#   pip install -r webapp/requirements.txt
+# See docs/WEBAPP.md for the full setup + access guide.
+
 streamlit>=1.30
 streamlit-autorefresh
 pyyaml
+
+# Results tab (optional — the tab degrades gracefully without these):
+#   plotly  -> per-stage runtime charts
+#   py3Dmol -> in-browser 3D structure viewer
+plotly>=5.0
+py3Dmol>=2.0
