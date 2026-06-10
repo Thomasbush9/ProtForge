@@ -26,6 +26,12 @@ streamlit-autorefresh
 pyyaml>=5.0
 huggingface_hub>=0.20
 
+# --- Results dashboard (optional; tab degrades gracefully without them) ------
+# plotly  -> per-stage runtime distribution charts
+# py3Dmol -> in-browser 3D structure viewer
+plotly>=5.0
+py3Dmol>=2.0
+
 # --- Data prep / general utilities used by host scripts ---------------------
 pandas>=1.0
 numpy>=1.20

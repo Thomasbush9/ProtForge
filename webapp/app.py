@@ -14,7 +14,8 @@ sidebar, and tab dispatch. The bulk lives in sibling modules:
   pipeline_ops.py  — config I/O, snakemake launch/status (pure)
   monitoring.py    — squeue/sacct queries, output progress (pure)
   ui_helpers.py    — reusable Configuration-tab widgets
-  config_tab.py / run_tab.py / monitor_tab.py — tab bodies
+  results.py       — output-tree + benchmark readers for the Results tab (pure)
+  config_tab.py / run_tab.py / monitor_tab.py / results_tab.py — tab bodies
 """
 
 import os
@@ -37,6 +38,7 @@ from pipeline_ops import load_config, snakemake_status
 from config_tab import render_config_tab
 from run_tab import render_run_tab
 from monitor_tab import render_monitor_tab
+from results_tab import render_results_tab
 
 USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
@@ -169,7 +171,9 @@ with col_title:
 with col_info:
     st.caption(f"{USER}@{HOST}")
 
-tab_config, tab_run, tab_monitor = st.tabs(["Configuration", "Run Pipeline", "Job Monitor"])
+tab_config, tab_run, tab_monitor, tab_results = st.tabs(
+    ["Configuration", "Run Pipeline", "Job Monitor", "Results"]
+)
 
 with tab_config:
     render_config_tab(session)
@@ -179,3 +183,6 @@ with tab_run:
 
 with tab_monitor:
     render_monitor_tab(session)
+
+with tab_results:
+    render_results_tab(session)
