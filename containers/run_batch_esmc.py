@@ -25,24 +25,53 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     return f"{cache_dir}/hub"
 
 
+def _seq_from_yaml(path: Path) -> str:
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    if not data or "sequences" not in data:
+        raise KeyError(f"{path}: missing 'sequences'")
+    entry = data["sequences"][0]
+    if "protein" not in entry or "sequence" not in entry["protein"]:
+        raise KeyError(f"{path}: expected sequences[0].protein.sequence")
+    return str(entry["protein"]["sequence"]).strip()
+
+
+def _seq_from_fasta(path: Path) -> str:
+    """Return the sequence of the single record in a FASTA file."""
+    records, cur = [], []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if cur:
+                records.append("".join(cur))
+                cur = []
+        else:
+            cur.append(line)
+    if cur:
+        records.append("".join(cur))
+    if not records:
+        raise ValueError(f"{path}: no sequence found")
+    if len(records) > 1:
+        raise ValueError(f"{path}: expected one sequence per FASTA, found {len(records)}")
+    return records[0]
+
+
 def parse_inputs(input_dir: str) -> dict[str, str]:
-    paths = sorted(Path(input_dir).glob("*.yaml"))
+    """Read sequences keyed by file stem from .yaml and/or .fasta/.fa inputs."""
+    base = Path(input_dir)
+    paths = sorted([*base.glob("*.yaml"), *base.glob("*.fasta"), *base.glob("*.fa")])
     if not paths:
-        raise FileNotFoundError(f"No *.yaml in {input_dir}")
+        raise FileNotFoundError(f"No *.yaml/*.fasta in {input_dir}")
 
     out: dict[str, str] = {}
     for p in paths:
-        with open(p) as f:
-            data = yaml.safe_load(f)
-        if not data or "sequences" not in data:
-            raise KeyError(f"{p}: missing 'sequences'")
-        entry = data["sequences"][0]
-        if "protein" not in entry or "sequence" not in entry["protein"]:
-            raise KeyError(f"{p}: expected sequences[0].protein.sequence")
+        seq = _seq_from_yaml(p) if p.suffix == ".yaml" else _seq_from_fasta(p)
         stem = p.stem
         if stem in out:
             raise ValueError(f"Duplicate stem {stem!r} in {input_dir}")
-        out[stem] = str(entry["protein"]["sequence"]).strip()
+        out[stem] = seq
     return out
 
 

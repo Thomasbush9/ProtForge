@@ -28,9 +28,20 @@ from binning import (
 )
 
 
-def find_yaml_files(search_dir: str) -> list[Path]:
-    """Recursively find all .yaml files, sorted."""
-    return sorted(Path(search_dir).rglob("*.yaml"))
+def find_yaml_files(search_dir: str, include_fasta: bool = False) -> list[Path]:
+    """Recursively find input files, sorted.
+
+    Always picks up .yaml. With `include_fasta`, also picks up .fasta/.fa — used
+    by the sequence-only stages (ESMC, ESMFold2) so they can run straight from a
+    FASTA directory, independent of the MSA stage. Boltz never sets this flag.
+    """
+    patterns = ["*.yaml"]
+    if include_fasta:
+        patterns += ["*.fasta", "*.fa"]
+    files: list[Path] = []
+    for pat in patterns:
+        files.extend(Path(search_dir).rglob(pat))
+    return sorted(files)
 
 
 def _yaml_seq_length(path: Path) -> int:
@@ -183,15 +194,19 @@ def main():
     parser.add_argument("--max_files_per_job", type=int, required=True, help="Max YAML files per chunk")
     parser.add_argument("--max_seq_len", type=int, default=None,
                         help="Drop sequences longer than this (residues). Default: no cutoff.")
+    parser.add_argument("--include_fasta", action="store_true",
+                        help="Also chunk .fasta/.fa files (sequence-only stages "
+                             "like ESMC/ESMFold2 that don't need an MSA).")
     add_binning_argparse(parser)
     args = parser.parse_args()
 
-    yaml_files = find_yaml_files(args.yaml_dir)
+    yaml_files = find_yaml_files(args.yaml_dir, include_fasta=args.include_fasta)
     if not yaml_files:
-        print(f"ERROR: No .yaml files found in {args.yaml_dir}", file=sys.stderr)
+        kinds = "YAML/FASTA" if args.include_fasta else "YAML"
+        print(f"ERROR: No {kinds} files found in {args.yaml_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(yaml_files)} YAML files in {args.yaml_dir}")
+    print(f"Found {len(yaml_files)} input files in {args.yaml_dir}")
 
     output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)

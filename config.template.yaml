@@ -43,7 +43,10 @@ boltz:
   cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 
-# ESM-C embeddings (Biohub ESMC) — runs after MSA, in parallel with Boltz.
+# ESM-C embeddings (Biohub ESMC). ESMC needs only the sequence (no MSA), so it
+# runs straight from input.fasta_dir when MSA is off (independent of Boltz/MSA),
+# or off the MSA-stage YAMLs when MSA is on. Input precedence: yaml_dir >
+# MSA-stage YAMLs > fasta_dir.
 # `models` is any subset of {6B, 600M, 300M}; each size is its own stage with
 # its own jobs, resources (slurm.resources.esmc_<size>) and
 # .esmc_<size>_complete sentinel. Outputs -> sequences/{seq}/esmc/{size}/.
@@ -90,7 +93,9 @@ openfold:
   # OpenFold weights + CCD cache (host). Bound to /models/openfold (OPENFOLD_CACHE).
   cache_dir: /n/home06/<YOUR_USER>/protforge/models/openfold
 
-# ESMFold2 structure prediction (Biohub "fast" variant) — runs after MSA.
+# ESMFold2 structure prediction (Biohub "fast" variant). Like ESMC it needs only
+# the sequence, so it runs straight from input.fasta_dir when MSA is off, or off
+# the MSA-stage YAMLs when MSA is on (precedence: yaml_dir > MSA YAMLs > fasta_dir).
 # Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
 esmfold:
   max_files_per_job: 25

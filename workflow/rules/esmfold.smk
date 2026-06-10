@@ -4,10 +4,12 @@ ESMFold2 Stage Rules
 chunk_yamls_for_esmfold -> run_esmfold (per chunk) ->
 organize_esmfold (per chunk) -> esmfold_complete (aggregate)
 
-Folds the per-sequence YAMLs from the MSA stage with ESMFold2 (biohub
-"fast" variant) inside the ESM container via containers/run_batch_esmfold.py
-(bound to /opt at run time, never baked in). Outputs (structure.cif, plddt.npy,
-metrics.pt) land in sequences/{seq}/esmfold/fast/.
+Folds per-sequence inputs with ESMFold2 (biohub "fast" variant) inside the ESM
+container via containers/run_batch_esmfold.py (bound to /opt at run time, never
+baked in). ESMFold2 needs only the sequence, so inputs are either the MSA-stage
+YAMLs (MSA on) or a raw FASTA directory (MSA off — the runner parses .fasta
+directly). Outputs (structure.cif, plddt.npy, metrics.pt) land in
+sequences/{seq}/esmfold/fast/.
 """
 
 import os as _os
@@ -15,9 +17,19 @@ import os as _os
 ESMFOLD_CFG    = config.get("esmfold", {})
 ESMFOLD_CHUNKS = f"{OUTPUT}/esmfold_chunks"
 
-# YAML source: user-provided yaml_dir, or the per-sequence YAMLs from MSA.
+# Input source precedence: explicit yaml_dir > MSA-stage YAMLs > raw FASTA dir.
+# ESMFold2 only needs the sequence (no MSA), so the FASTA path lets it run
+# standalone with MSA off — the in-container runner parses sequences straight
+# from .fasta (see workflow/scripts/prepare_boltz_chunks.py --include_fasta).
 _esmfold_yaml_override = config["input"].get("yaml_dir", "")
-ESMFOLD_YAML_SOURCE = _esmfold_yaml_override if _esmfold_yaml_override else SEQUENCES_DIR
+_esmfold_fasta_dir = config["input"].get("fasta_dir", "")
+if _esmfold_yaml_override:
+    ESMFOLD_INPUT_SOURCE, ESMFOLD_FROM_FASTA = _esmfold_yaml_override, False
+elif RUN_MSA:
+    ESMFOLD_INPUT_SOURCE, ESMFOLD_FROM_FASTA = SEQUENCES_DIR, False
+else:
+    ESMFOLD_INPUT_SOURCE, ESMFOLD_FROM_FASTA = _esmfold_fasta_dir, True
+ESMFOLD_FASTA_FLAG = "--include_fasta" if ESMFOLD_FROM_FASTA else ""
 
 ESMFOLD_PARTITION = SLURM_CFG.get("esmfold", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESMFOLD_ACCOUNT   = SLURM_CFG.get("account", "")
@@ -32,31 +44,35 @@ wildcard_constraints:
 
 def esmfold_chunk_input(wildcards):
     """Depend on MSA completion (so ESMFold2 runs right after MSA, in parallel
-    with Boltz). When the user supplies their own yaml_dir, no dependency."""
+    with Boltz). With an explicit yaml_dir or a standalone FASTA dir, no MSA dependency."""
     inputs = {}
     if _esmfold_yaml_override:
         inputs["yaml_dir"] = _esmfold_yaml_override
     elif RUN_MSA:
         inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
+    elif _esmfold_fasta_dir:
+        inputs["fasta_dir"] = _esmfold_fasta_dir
     return inputs
 
 
 checkpoint chunk_yamls_for_esmfold:
-    """Symlink the per-sequence YAMLs into chunk directories for parallel folding."""
+    """Symlink the per-sequence inputs (YAML or FASTA) into chunk directories."""
     input:
         unpack(esmfold_chunk_input),
     output:
         manifest = f"{ESMFOLD_CHUNKS}/manifest.txt",
     params:
-        yaml_dir = ESMFOLD_YAML_SOURCE,
+        yaml_dir = ESMFOLD_INPUT_SOURCE,
         max_files = ESMFOLD_CFG.get("max_files_per_job", 25),
+        fasta_flag = ESMFOLD_FASTA_FLAG,
     localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
             --yaml_dir {params.yaml_dir} \
             --output_dir {ESMFOLD_CHUNKS} \
-            --max_files_per_job {params.max_files}
+            --max_files_per_job {params.max_files} \
+            {params.fasta_flag}
         """
 
 
@@ -81,7 +97,7 @@ rule run_esmfold:
     params:
         output_dir = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}_output",
         cache_dir = ESMFOLD_CFG.get("cache_dir", ""),
-        yaml_src = ESMFOLD_YAML_SOURCE,
+        yaml_src = ESMFOLD_INPUT_SOURCE,
         runner = ESMFOLD_RUNNER,
         num_loops = ESMFOLD_CFG.get("num_loops", 3),
         num_sampling_steps = ESMFOLD_CFG.get("num_sampling_steps", 50),

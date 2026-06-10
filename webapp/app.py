@@ -139,7 +139,16 @@ def validate_launch_inputs(cfg: dict) -> list[str]:
     """Validate configured inputs before submitting cluster jobs."""
     errors = []
     pipeline = cfg.get("pipeline", {})
+    inp = cfg.get("input", {})
     if not pipeline.get("msa", False):
+        # MSA off: ESMC/ESMFold2 can run straight from a FASTA (or YAML) dir;
+        # Boltz/OpenFold still need YAMLs. Just check an input source exists.
+        esm_on = pipeline.get("esmc") or pipeline.get("esmfold")
+        if esm_on and not (inp.get("fasta_dir") or inp.get("yaml_dir")):
+            errors.append(
+                "ESMC/ESMFold2 are enabled with MSA off, but neither "
+                "input.fasta_dir nor input.yaml_dir is set."
+            )
         return errors
 
     fasta_dir_value = cfg.get("input", {}).get("fasta_dir", "")
@@ -1586,7 +1595,9 @@ with tab_config:
         esmc = cfg.get("esmc", {})
         cfg.pop("esm", None)  # drop the legacy fair-esm block
         st.caption("ESM-C embeddings. Each selected size runs as its own parallel "
-                   "stage; outputs land in sequences/{seq}/esmc/{size}/.")
+                   "stage; outputs land in sequences/{seq}/esmc/{size}/. "
+                   "Needs only the sequence — with MSA off it runs straight from "
+                   "the FASTA directory (no MSA/Boltz required).")
         _all_sizes = ["300M", "600M", "6B"]
         _current = [s for s in esmc.get("models", []) if s in _all_sizes]
         esmc["models"] = st.multiselect(
@@ -1661,8 +1672,10 @@ with tab_config:
 
     with st.expander("ESMFold2 Settings"):
         esmfold = cfg.get("esmfold", {})
-        st.caption("ESMFold2 (biohub 'fast' variant). Runs off the MSA-stage YAMLs; "
-                   "outputs -> sequences/{seq}/esmfold/fast/.")
+        st.caption("ESMFold2 (biohub 'fast' variant). Needs only the sequence — "
+                   "with MSA off it runs straight from the FASTA directory; with "
+                   "MSA on it uses the MSA-stage YAMLs. Outputs -> "
+                   "sequences/{seq}/esmfold/fast/.")
         esmfold["max_files_per_job"] = st.number_input(
             "Files per job", value=int(esmfold.get("max_files_per_job", 25)), min_value=1,
             help="Sequences folded per job.",

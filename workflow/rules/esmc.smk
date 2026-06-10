@@ -9,8 +9,9 @@ each size is driven through the same rules via the {size} wildcard, so it gets
 its own jobs, per-size SLURM resources, and a `.esmc_{size}_complete` sentinel.
 
 Encoding runs inside the ESM container via containers/run_batch_esmc.py (bound
-to /opt at run time, never baked in). Inputs are the Boltz-style per-sequence
-YAMLs produced by the MSA stage; outputs land in sequences/{seq}/esmc/{size}/.
+to /opt at run time, never baked in). ESMC needs only the sequence, so inputs
+are either the MSA-stage YAMLs (MSA on) or a raw FASTA directory (MSA off — the
+runner parses .fasta directly). Outputs land in sequences/{seq}/esmc/{size}/.
 """
 
 import os as _os
@@ -19,9 +20,19 @@ ESMC_CFG    = config.get("esmc", {})
 ESMC_CHUNKS = f"{OUTPUT}/esmc_chunks"
 ESMC_SIZES  = ESMC_CFG.get("models", ["6B"])
 
-# YAML source: user-provided yaml_dir, or the per-sequence YAMLs from MSA.
+# Input source precedence: explicit yaml_dir > MSA-stage YAMLs > raw FASTA dir.
+# ESMC only needs the sequence (no MSA), so the FASTA path lets it run standalone
+# with MSA off — the in-container runner parses sequences straight from .fasta
+# (see workflow/scripts/prepare_boltz_chunks.py --include_fasta).
 _esmc_yaml_override = config["input"].get("yaml_dir", "")
-ESMC_YAML_SOURCE = _esmc_yaml_override if _esmc_yaml_override else SEQUENCES_DIR
+_esmc_fasta_dir = config["input"].get("fasta_dir", "")
+if _esmc_yaml_override:
+    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = _esmc_yaml_override, False
+elif RUN_MSA:
+    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = SEQUENCES_DIR, False
+else:
+    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = _esmc_fasta_dir, True
+ESMC_FASTA_FLAG = "--include_fasta" if ESMC_FROM_FASTA else ""
 
 ESMC_PARTITION = SLURM_CFG.get("esmc", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESMC_ACCOUNT   = SLURM_CFG.get("account", "")
@@ -47,31 +58,35 @@ def _esmc_resource(size, key, default):
 
 def esmc_chunk_input(wildcards):
     """Depend on MSA completion (so ESMC runs right after MSA, in parallel with
-    Boltz). When the user supplies their own yaml_dir, no upstream dependency."""
+    Boltz). With an explicit yaml_dir or a standalone FASTA dir, no MSA dependency."""
     inputs = {}
     if _esmc_yaml_override:
         inputs["yaml_dir"] = _esmc_yaml_override
     elif RUN_MSA:
         inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
+    elif _esmc_fasta_dir:
+        inputs["fasta_dir"] = _esmc_fasta_dir
     return inputs
 
 
 checkpoint chunk_yamls_for_esmc:
-    """Symlink the per-sequence YAMLs into chunk directories for parallel encode."""
+    """Symlink the per-sequence inputs (YAML or FASTA) into chunk directories."""
     input:
         unpack(esmc_chunk_input),
     output:
         manifest = f"{ESMC_CHUNKS}/manifest.txt",
     params:
-        yaml_dir = ESMC_YAML_SOURCE,
+        yaml_dir = ESMC_INPUT_SOURCE,
         max_files = ESMC_CFG.get("max_files_per_job", 25),
+        fasta_flag = ESMC_FASTA_FLAG,
     localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
             --yaml_dir {params.yaml_dir} \
             --output_dir {ESMC_CHUNKS} \
-            --max_files_per_job {params.max_files}
+            --max_files_per_job {params.max_files} \
+            {params.fasta_flag}
         """
 
 
@@ -99,7 +114,7 @@ rule run_esmc:
     params:
         output_dir = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output",
         cache_dir = ESMC_CFG.get("cache_dir", ""),
-        yaml_src = ESMC_YAML_SOURCE,
+        yaml_src = ESMC_INPUT_SOURCE,
         runner = ESMC_RUNNER,
         runtime = CONTAINER_RUNTIME,
         sif = container_sif("esmc"),
