@@ -12,6 +12,10 @@ import shutil
 import sys
 from pathlib import Path
 
+import output_schema
+
+_STRUCTURE_EXTS = (".cif", ".pdb", ".cif.gz")
+
 
 def find_predictions_dir(boltz_output_dir: str, chunk_id: str) -> Path | None:
     """Find the predictions directory within boltz output for a given chunk."""
@@ -103,7 +107,8 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
         # organized Boltz artifacts for this target so stale higher-numbered
         # models do not survive and confuse later CIF discovery.
         for existing in target_dir.iterdir():
-            if existing.is_file() and model_pattern.search(existing.name):
+            if existing.is_file() and (model_pattern.search(existing.name)
+                                       or existing.name.endswith(output_schema.SUMMARY_SUFFIX)):
                 existing.unlink()
 
         # Decide which model indices to keep. Boltz ranks model_0 as best, so
@@ -119,6 +124,18 @@ def organize_chunk(boltz_output_dir: str, chunk_id: str, sequences_dir: str,
             for f in model_files[idx]:
                 shutil.copy2(f, target_dir / f.name)
                 total_copied += 1
+
+        # Write a normalized summary sidecar per kept model (reads the confidence
+        # JSON copied alongside the structure).
+        for idx in keep_indices:
+            structure = next(
+                (f for f in model_files[idx]
+                 if f.name.endswith(_STRUCTURE_EXTS)), None)
+            if structure is not None:
+                try:
+                    output_schema.write_summary_for("boltz", target_dir / structure.name)
+                except Exception as e:
+                    print(f"  WARNING: could not write summary for {structure.name}: {e}")
 
         if samples_to_save == "all":
             label = f"all {len(keep_indices)} models"

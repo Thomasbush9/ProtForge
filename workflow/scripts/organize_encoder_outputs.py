@@ -23,6 +23,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import output_schema
+
 
 def organize(scratch_dir: str, sequences_dir: str, stage: str) -> int:
     """Move every {name}/{sub} under scratch into sequences/{name}/{stage}/{sub}."""
@@ -42,6 +44,17 @@ def organize(scratch_dir: str, sequences_dir: str, stage: str) -> int:
             shutil.move(str(sub), target)
             moved += 1
             print(f"Organized: {name_dir.name}/{sub.name} -> {target}")
+
+            # ESMFold2 produces a structure; write a normalized summary sidecar
+            # next to it. (ESMC/SAE are embeddings — no structure to summarize.)
+            if stage == "esmfold" and target.is_dir():
+                structure = next((target / c for c in ("structure.cif", "structure.pdb")
+                                  if (target / c).is_file()), None)
+                if structure is not None:
+                    try:
+                        output_schema.write_summary_for("esmfold", structure)
+                    except Exception as e:
+                        print(f"  WARNING: could not write summary for {structure.name}: {e}")
     return moved
 
 

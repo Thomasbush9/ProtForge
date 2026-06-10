@@ -22,6 +22,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import output_schema
+
 # Per-query metadata files OpenFold drops next to the query dirs (not queries).
 _METADATA_NAMES = {
     "inference_query_set.json",
@@ -115,6 +117,15 @@ def organize(openfold_output_dir: str, sequences_dir: str,
             for f in sample["files"]:
                 shutil.copy2(f, target / f.name)
                 copied += 1
+            # Normalized summary sidecar for this sample's model.
+            model_name = next(
+                (f.name for f in sample["files"]
+                 if any(f.name.endswith(s) for s in _MODEL_SUFFIXES)), None)
+            if model_name:
+                try:
+                    output_schema.write_summary_for("openfold", target / model_name)
+                except Exception as e:
+                    print(f"  WARNING: could not write summary for {model_name}: {e}")
         label = "all" if samples_to_save == "all" else f"top {len(keep)}"
         print(f"Organized {seq_id}: {label} sample(s) ({copied} files) -> {target}")
         processed += 1

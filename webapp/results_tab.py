@@ -23,7 +23,7 @@ from results import (
     find_structures,
     read_structure_text,
     structure_format,
-    read_confidence,
+    model_summary,
     read_benchmarks,
 )
 
@@ -48,8 +48,8 @@ def _structures(output_dir: str, seq: str) -> list[StructureFile]:
 
 
 @st.cache_data(ttl=_RESULTS_TTL, show_spinner=False)
-def _confidence(path_str: str, stage: str) -> dict:
-    return read_confidence(StructureFile(stage=stage, path=Path(path_str), label=""))
+def _summary(path_str: str, stage: str) -> dict:
+    return model_summary(StructureFile(stage=stage, path=Path(path_str), label=""))
 
 
 @st.cache_data(show_spinner=False)
@@ -64,7 +64,7 @@ def _benchmarks(output_dir: str) -> dict:
 
 
 def _clear_results_cache() -> None:
-    for fn in (_seq_dirs, _structures, _confidence, _structure_text, _benchmarks):
+    for fn in (_seq_dirs, _structures, _summary, _structure_text, _benchmarks):
         fn.clear()
 
 
@@ -146,22 +146,37 @@ def _structure_viewer(output_dir: str):
                            format_func=lambda i: labels[i], key="results_model")
     chosen = structures[idx]
 
+    # Normalized summary (uniform across Boltz / OpenFold3 / ESMFold2).
+    summary = _summary(str(chosen.path), chosen.stage)
+
+    # Headline confidence: same fields regardless of predictor.
+    headline = [(lbl, summary.get(key)) for lbl, key in (
+        ("pLDDT", "plddt_mean"), ("pTM", "ptm"),
+        ("ipTM", "iptm"), ("Ranking", "ranking_score"))]
+    headline = [(lbl, v) for lbl, v in headline if v is not None]
+    if headline:
+        cols = st.columns(len(headline))
+        for i, (lbl, v) in enumerate(headline):
+            cols[i].metric(lbl, f"{v:.2f}")
+    raw = summary.get("metrics") or {}
+    if raw:
+        with st.expander("All raw metrics"):
+            st.json(raw)
+
     color_mode = st.radio(
         "Colour by", ["pLDDT (b-factor)", "Rainbow (N→C)", "Chain"],
         horizontal=True, key="results_color",
     )
-
-    # Confidence metrics for this model
-    metrics = _confidence(str(chosen.path), chosen.stage)
-    if metrics:
-        # Surface the most informative scores first, then the rest.
-        priority = ["confidence_score", "ranking_score", "ptm", "iptm",
-                    "complex_plddt", "mean_plddt", "min_plddt"]
-        ordered = [k for k in priority if k in metrics]
-        ordered += [k for k in metrics if k not in ordered]
-        cols = st.columns(min(len(ordered), 4) or 1)
-        for i, k in enumerate(ordered[:8]):
-            cols[i % len(cols)].metric(k, f"{metrics[k]:.3f}")
+    if color_mode.startswith("pLDDT"):
+        plddt_ok = summary.get("plddt_in_bfactor")
+        if plddt_ok is False:
+            st.warning(
+                "This model's B-factor column doesn't look like pLDDT "
+                "(constant or out of 0-100) — the colouring may be meaningless. "
+                "Try Rainbow / Chain."
+            )
+        elif plddt_ok is None:
+            st.caption("Note: pLDDT-in-B-factor couldn't be verified for this file.")
 
     try:
         mtime = chosen.path.stat().st_mtime

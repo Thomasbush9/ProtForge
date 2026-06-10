@@ -16,9 +16,18 @@ from __future__ import annotations
 
 import csv
 import gzip
-import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# The normalized output schema is shared with the workflow's organize_* scripts,
+# which live in workflow/scripts/ (not on the webapp's import path). Add it so
+# both sides go through one definition of the per-model summary.
+_WORKFLOW_SCRIPTS = Path(__file__).resolve().parents[1] / "workflow" / "scripts"
+if str(_WORKFLOW_SCRIPTS) not in sys.path:
+    sys.path.append(str(_WORKFLOW_SCRIPTS))
+
+import output_schema  # noqa: E402
 
 # Stage -> glob(s) for kept structure files, relative to sequences/{seq}/.
 _STRUCTURE_GLOBS: dict[str, list[str]] = {
@@ -107,65 +116,23 @@ def structure_format(path: str | Path) -> str:
 # --- Confidence -----------------------------------------------------------
 
 
-def read_confidence(structure: StructureFile) -> dict[str, float]:
-    """Best-effort per-model confidence scalars for a structure.
+def model_summary(structure: StructureFile) -> dict:
+    """Normalized per-model summary for a structure (uniform across predictors).
 
-    Boltz/OpenFold write sibling confidence JSONs; ESMFold writes plddt.npy.
-    Returns a flat {metric: value} dict (empty if nothing parseable found).
+    Prefers a `<model_id>.summary.json` sidecar written by the organize_*
+    scripts; falls back to live extraction for outputs produced before sidecars
+    existed. See workflow/scripts/output_schema.py for the schema.
     """
-    p = structure.path
-    stage = structure.stage
-
-    if stage == "esmfold":
-        return _read_esmfold_plddt(p.parent)
-
-    # Boltz / OpenFold: find a sibling JSON sharing the model stem.
-    stem = p.name
-    for suffix in ("_model.cif.gz", "_model.cif", "_model.pdb"):
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
-            break
-    else:
-        # Boltz stems look like "<seq>_model_0.cif"
-        stem = p.stem
-
-    metrics: dict[str, float] = {}
-    for js in sorted(p.parent.glob("*.json")):
-        name = js.name.lower()
-        if "confidence" not in name and "ranking" not in name:
-            continue
-        # Prefer JSONs that reference this model's stem; fall back to any.
-        if stem and stem.split("_model")[0] not in js.name:
-            continue
-        metrics.update(_flatten_scalar_json(js))
-    return metrics
+    return output_schema.summary_for_structure(structure.stage, structure.path)
 
 
-def _flatten_scalar_json(path: Path) -> dict[str, float]:
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        return {}
-    out: dict[str, float] = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if isinstance(v, bool):
-                continue
-            if isinstance(v, (int, float)):
-                out[k] = float(v)
-    return out
+def read_confidence(structure: StructureFile) -> dict[str, float]:
+    """Raw per-model confidence scalars (the `metrics` block of model_summary).
 
-
-def _read_esmfold_plddt(fast_dir: Path) -> dict[str, float]:
-    npy = fast_dir / "plddt.npy"
-    if not npy.is_file():
-        return {}
-    try:
-        import numpy as np
-        arr = np.load(npy)
-        return {"mean_plddt": float(arr.mean()), "min_plddt": float(arr.min())}
-    except Exception:
-        return {}
+    Kept for callers that just want the flat metric dict; new code should prefer
+    model_summary() for the normalized headline fields.
+    """
+    return model_summary(structure).get("metrics", {})
 
 
 # --- Benchmarks -----------------------------------------------------------
