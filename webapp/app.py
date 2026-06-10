@@ -166,10 +166,21 @@ def validate_launch_inputs(cfg: dict) -> list[str]:
     pipeline = cfg.get("pipeline", {})
     inp = cfg.get("input", {})
     if not pipeline.get("msa", False):
-        # MSA off: ESMC/ESMFold2 can run straight from a FASTA (or YAML) dir;
-        # Boltz/OpenFold still need YAMLs. Just check an input source exists.
-        esm_on = pipeline.get("esmc") or pipeline.get("esmfold")
-        if esm_on and not (inp.get("fasta_dir") or inp.get("yaml_dir")):
+        # MSA off. ESMC/ESMFold2 can run straight from a FASTA (or YAML) dir;
+        # Boltz/OpenFold3 can't build an MSA themselves, so they need prebuilt
+        # YAMLs. Check the right input source exists for the enabled stages.
+        needs_yaml = pipeline.get("boltz") or pipeline.get("openfold")
+        needs_seq = pipeline.get("esmc") or pipeline.get("esmfold")
+        yaml_dir_value = inp.get("yaml_dir", "")
+        if needs_yaml:
+            if not yaml_dir_value:
+                errors.append(
+                    "Boltz/OpenFold3 are enabled with MSA off, but "
+                    "input.yaml_dir is not set (they need prebuilt YAMLs)."
+                )
+            elif not Path(yaml_dir_value).is_dir():
+                errors.append(f"YAML input directory does not exist: {yaml_dir_value}")
+        if needs_seq and not (inp.get("fasta_dir") or yaml_dir_value):
             errors.append(
                 "ESMC/ESMFold2 are enabled with MSA off, but neither "
                 "input.fasta_dir nor input.yaml_dir is set."
@@ -1796,8 +1807,9 @@ with tab_config:
             openfold["max_files_per_job"] = int(c1.number_input(
                 "Queries per JSON", value=int(openfold.get("max_files_per_job", 25)),
                 min_value=1, key="openfold_max_files"))
-        render_chunk_recommendation("openfold")
-        render_gpu_preference("openfold")
+        # NOTE: OpenFold3 has no scaling model in the estimator (estimator.ALL_STAGES
+        # excludes it), so chunk-size/GPU recommendations aren't available here yet.
+        # Set GPUs per job and SLURM resources manually below.
 
         openfold["gpus_per_job"] = int(c2.slider(
             "GPUs per job", min_value=1, max_value=4,
@@ -2016,8 +2028,10 @@ with tab_run:
     pipeline = cfg.get("pipeline", {})
 
     st.subheader("Pipeline Summary")
-    _labels = {"msa": "MSA", "boltz": "Boltz", "esmc": "ESMC", "esmfold": "ESMFold2"}
-    active = [_labels[s] for s in ["msa", "boltz", "esmc", "esmfold"] if pipeline.get(s, False)]
+    _labels = {"msa": "MSA", "boltz": "Boltz", "openfold": "OpenFold3",
+               "esmc": "ESMC", "esmfold": "ESMFold2"}
+    active = [_labels[s] for s in ["msa", "boltz", "openfold", "esmc", "esmfold"]
+              if pipeline.get(s, False)]
     if cfg.get("esmc", {}).get("sae", {}).get("enabled"):
         active.append("ESMC-SAE")
     if active:
