@@ -35,6 +35,9 @@ RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
 # ESMC SAE extraction. Gated by esmc.sae.enabled (independent of RUN_ESMC) so it
 # can run standalone against YAMLs from a previous embedding run.
 RUN_ESMC_SAE = config.get("esmc", {}).get("sae", {}).get("enabled", False)
+# OpenFold3 structure prediction. Runs off the MSA-stage YAMLs in parallel with
+# Boltz; default OFF. Outputs -> sequences/{seq}/openfold/.
+RUN_OPENFOLD = config["pipeline"].get("openfold", False)
 OUTPUT    = config["output"]["parent_dir"]
 SLURM_CFG = config.get("slurm", {})
 SEQUENCES_DIR = f"{OUTPUT}/sequences"
@@ -42,15 +45,16 @@ SEQUENCES_DIR = f"{OUTPUT}/sequences"
 # SLURM email notifications (reads slurm.email from config)
 SLURM_EMAIL = SLURM_CFG.get("email", "")
 
-def slurm_extra(gpu=False):
+def slurm_extra(gpu=False, gpu_count=1):
     """Build slurm_extra string with optional GPU and mail flags.
 
     Each sbatch flag must be individually quoted so the shell
-    passes them as separate arguments to sbatch.
+    passes them as separate arguments to sbatch. `gpu_count` sets how many
+    GPUs the node request asks for (e.g. OpenFold's multi-GPU batched jobs).
     """
     parts = []
     if gpu:
-        parts.append("'--gpus-per-node=1'")
+        parts.append(f"'--gpus-per-node={int(gpu_count)}'")
     if SLURM_EMAIL:
         parts.append(f"'--mail-type=END,FAIL'")
         parts.append(f"'--mail-user={SLURM_EMAIL}'")
@@ -173,6 +177,8 @@ if RUN_ESMC_SAE:
     include: "workflow/rules/esmc_sae.smk"
 if RUN_ESMFOLD:
     include: "workflow/rules/esmfold.smk"
+if RUN_OPENFOLD:
+    include: "workflow/rules/openfold.smk"
 
 
 def get_targets():
@@ -190,6 +196,8 @@ def get_targets():
         targets += [f"{OUTPUT}/.esmc_sae_{size}_complete" for size in ESMC_SAE_SIZES]
     if RUN_ESMFOLD:
         targets.append(f"{OUTPUT}/.esmfold_complete")
+    if RUN_OPENFOLD:
+        targets.append(f"{OUTPUT}/.openfold_complete")
     return targets
 
 
@@ -233,7 +241,7 @@ def _write_benchmark_summary(status):
             lines.append("-" * 50)
             lines.append(f"{'Stage':<15} {'Total (s)':>12} {'# Rules':>10} {'Avg (s)':>10}")
             total_rule_time = 0
-            for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold"]:
+            for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold", "openfold"]:
                 if stage not in stage_times:
                     continue
                 times = stage_times[stage]

@@ -8,6 +8,7 @@ pipeline:
   boltz: true
   esmc: false      # ESM-C embeddings (one stage per model size; see esmc:)
   esmfold: false   # ESMFold2 structure prediction (see esmfold:)
+  openfold: false  # OpenFold3 structure prediction (see openfold:)
 
 # Input data
 input:
@@ -64,6 +65,30 @@ esmc:
     layers: all           # "all" (every trained layer) or a comma list, e.g. "18,36"
     # sizes: [600M]       # subset of `models` above (default: all of them)
     max_files_per_job: 25
+
+# OpenFold3 structure prediction — runs off the MSA-stage YAMLs, in parallel
+# with Boltz. Each chunk is one query JSON = one SLURM job; a job folds all its
+# queries, distributing them across `gpus_per_job` GPUs on one node via PyTorch
+# Lightning. So: num jobs == num JSONs. The MSA a3m is copied to the
+# OpenFold-expected uniref90_hits.a3m at chunk time (--use-msa-server=False).
+# Outputs (top-N samples' .cif + confidence JSONs) -> sequences/{seq}/openfold/.
+openfold:
+  # Batch control — set EITHER (num_batches wins when set):
+  num_batches:               # split all YAMLs into exactly this many JSONs/jobs
+  max_files_per_job: 25      # else: queries per JSON
+  gpus_per_job: 1            # 1..4 — pl_trainer_args.devices + --gpus-per-node
+  num_workers: 10            # data_module_args.num_workers in runner.yaml
+  num_diffusion_samples: 5   # --num-diffusion-samples
+  num_model_seeds: 1         # --num-model-seeds
+  # seeds: [42]              # optional explicit seeds -> experiment_settings.seeds
+  samples_to_save: 1         # int (top-N by ranking score) or "all"
+  structure_format: cif      # cif | pdb | cif.gz
+  write_full_confidence: true
+  # recycling_iters:         # optional -> model_update.custom.num_recycling_iters
+  #                          # (leave unset to use the predict preset default)
+  # advanced: {}             # raw dict deep-merged into runner.yaml (escape hatch)
+  # OpenFold weights + CCD cache (host). Bound to /models/openfold (OPENFOLD_CACHE).
+  cache_dir: /n/home06/<YOUR_USER>/protforge/models/openfold
 
 # ESMFold2 structure prediction (Biohub "fast" variant) — runs after MSA.
 # Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
@@ -124,6 +149,7 @@ containers:
   boltz: ""        # Boltz image (boltz.def)
   esmc: ""         # ESM image  (esmfold_cu.def) — serves ESMC + ESMFold2
   esmfold: ""      # same ESM image as esmc, unless you split them later
+  openfold: ""     # OpenFold3 image (openfold.def)
 
 # SLURM settings - UPDATE FOR YOUR ACCOUNT
 slurm:

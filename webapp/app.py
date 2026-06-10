@@ -53,7 +53,8 @@ USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
 
 # Per-stage auto-refresh intervals (seconds)
-REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESMC": 30, "ESMC-SAE": 30, "ESMFold": 60}
+REFRESH_INTERVALS = {"MSA": 300, "Boltz": 60, "ESMC": 30, "ESMC-SAE": 30,
+                     "ESMFold": 60, "OpenFold": 60}
 
 # Map Snakemake rule names to pipeline stages. ESMC/ESMC-SAE rules carry a
 # {size} wildcard, so match on the rule-name prefix (any rule containing the key).
@@ -79,6 +80,10 @@ RULE_TO_STAGE = {
     "chunk_yamls_for_esmfold": "ESMFold",
     "organize_esmfold": "ESMFold",
     "esmfold_complete": "ESMFold",
+    "run_openfold_predict": "OpenFold",
+    "chunk_yamls_for_openfold": "OpenFold",
+    "organize_openfold_chunk": "OpenFold",
+    "openfold_complete": "OpenFold",
 }
 
 # ---------------------------------------------------------------------------
@@ -193,7 +198,7 @@ def autoscan_directory(path_str: str) -> dict | None:
 
 def render_gpu_preference(stage: str) -> None:
     """Per-stage GPU dropdown that persists in st.session_state["gpu_preferences"]."""
-    if stage not in {"msa", "boltz", "esmc", "esmfold"}:
+    if stage not in {"msa", "boltz", "esmc", "esmfold", "openfold"}:
         return
     prefs = st.session_state.setdefault("gpu_preferences", {})
     options = ["auto", "a100", "h100"]
@@ -231,6 +236,7 @@ _SLURM_DEFAULTS: dict[str, tuple[int, int, int]] = {
     "esmc":     (128000, 120, 8),
     "esmc_sae": (128000, 120, 8),
     "esmfold":  (128000, 120, 8),
+    "openfold": ( 48000,  60, 8),
 }
 
 
@@ -698,6 +704,16 @@ def get_stage_progress(cfg: dict) -> dict:
         # sequences/{seq}/esmfold/fast/structure.cif
         done = count_files(seq_dir, "*/esmfold/*/structure.cif")
         progress["ESMFold"] = (done, total)
+
+    if pipeline.get("openfold"):
+        # One kept model per sequence: sequences/{seq}/openfold/*_model.cif
+        done = 0
+        if seq_dir.is_dir():
+            for d in seq_dir.iterdir():
+                of_dir = d / "openfold"
+                if of_dir.is_dir() and any(of_dir.glob("*_model.*")):
+                    done += 1
+        progress["OpenFold"] = (done, total)
 
     return progress
 
@@ -1393,11 +1409,12 @@ with tab_config:
 
     with st.expander("Pipeline Stages", expanded=True):
         pipeline = cfg.get("pipeline", {})
-        cols = st.columns(4)
+        cols = st.columns(5)
         pipeline["msa"] = cols[0].toggle("MSA", value=pipeline.get("msa", True))
         pipeline["boltz"] = cols[1].toggle("Boltz", value=pipeline.get("boltz", True))
         pipeline["esmc"] = cols[2].toggle("ESMC", value=pipeline.get("esmc", False))
         pipeline["esmfold"] = cols[3].toggle("ESMFold2", value=pipeline.get("esmfold", False))
+        pipeline["openfold"] = cols[4].toggle("OpenFold3", value=pipeline.get("openfold", False))
         # Legacy keys from the pre-container pipeline.
         pipeline.pop("es", None)
         pipeline.pop("esm", None)
@@ -1678,6 +1695,144 @@ with tab_config:
             esmfold.pop(_k, None)
         cfg["esmfold"] = esmfold
 
+    with st.expander("OpenFold3 Settings"):
+        openfold = cfg.get("openfold", {})
+        st.caption("OpenFold3 structure prediction. Runs off the MSA-stage YAMLs "
+                   "(in parallel with Boltz). Each query JSON is one SLURM job that "
+                   "batches its queries across `GPUs per job` GPUs on one node; "
+                   "num jobs == num JSONs. Outputs -> sequences/{seq}/openfold/.")
+
+        # --- Batching: num_batches (jobs) wins, else queries-per-JSON ---
+        _use_num_batches = st.toggle(
+            "Set number of batches (jobs) directly",
+            value=openfold.get("num_batches") is not None,
+            help="ON: split all sequences into exactly N JSONs/jobs. "
+                 "OFF: fixed number of queries per JSON.",
+            key="openfold_use_num_batches",
+        )
+        c1, c2 = st.columns(2)
+        if _use_num_batches:
+            openfold["num_batches"] = int(c1.number_input(
+                "Number of batches (jobs)",
+                value=int(openfold.get("num_batches") or 4), min_value=1,
+                key="openfold_num_batches"))
+            c2.number_input("Queries per JSON", value=int(openfold.get("max_files_per_job", 25)),
+                            min_value=1, disabled=True, key="openfold_max_files_disabled")
+        else:
+            openfold.pop("num_batches", None)
+            openfold["max_files_per_job"] = int(c1.number_input(
+                "Queries per JSON", value=int(openfold.get("max_files_per_job", 25)),
+                min_value=1, key="openfold_max_files"))
+        render_chunk_recommendation("openfold")
+        render_gpu_preference("openfold")
+
+        openfold["gpus_per_job"] = int(c2.slider(
+            "GPUs per job", min_value=1, max_value=4,
+            value=int(openfold.get("gpus_per_job", 1)),
+            help="GPUs requested per job (one node). Sets pl_trainer_args.devices "
+                 "in runner.yaml; queries are batched across them by Lightning.",
+            key="openfold_gpus_per_job"))
+
+        c1, c2, c3 = st.columns(3)
+        openfold["num_diffusion_samples"] = int(c1.number_input(
+            "Diffusion samples", value=int(openfold.get("num_diffusion_samples", 5)),
+            min_value=1, key="openfold_diffusion_samples"))
+        openfold["num_model_seeds"] = int(c2.number_input(
+            "Model seeds", value=int(openfold.get("num_model_seeds", 1)),
+            min_value=1, key="openfold_model_seeds"))
+        openfold["num_workers"] = int(c3.number_input(
+            "Data workers", value=int(openfold.get("num_workers", 10)),
+            min_value=1, key="openfold_num_workers"))
+
+        # samples_to_save: int top-N or "all" (max = diffusion samples)
+        _ds_max = int(openfold["num_diffusion_samples"])
+        _current_save = openfold.get("samples_to_save", 1)
+        c1, c2 = st.columns(2)
+        _save_all = c1.toggle(
+            "Save all samples", value=_current_save == "all",
+            help="Keep every diffusion sample. Otherwise keep the top-N by "
+                 "ranking score.",
+            key="openfold_save_all")
+        if _save_all:
+            openfold["samples_to_save"] = "all"
+            c2.number_input("Top N to save", value=_ds_max, min_value=1, max_value=_ds_max,
+                            disabled=True, key="openfold_samples_disabled")
+        else:
+            _n_default = 1 if _current_save == "all" else int(_current_save)
+            _n_default = min(max(_n_default, 1), _ds_max)
+            openfold["samples_to_save"] = int(c2.number_input(
+                "Top N to save", value=_n_default, min_value=1, max_value=_ds_max,
+                help=f"Save top-N samples by ranking score (max = {_ds_max}).",
+                key="openfold_samples_to_save"))
+
+        c1, c2 = st.columns(2)
+        _fmts = ["cif", "pdb", "cif.gz"]
+        _cur_fmt = openfold.get("structure_format", "cif")
+        openfold["structure_format"] = c1.selectbox(
+            "Structure format", options=_fmts,
+            index=_fmts.index(_cur_fmt) if _cur_fmt in _fmts else 0,
+            key="openfold_structure_format")
+        openfold["write_full_confidence"] = c2.toggle(
+            "Write full confidence scores",
+            value=bool(openfold.get("write_full_confidence", True)),
+            key="openfold_write_full_confidence")
+
+        _seeds_str = st.text_input(
+            "Explicit seeds (comma list, optional)",
+            value=",".join(str(s) for s in (openfold.get("seeds") or [])),
+            help="experiment_settings.seeds in runner.yaml. Leave blank to use "
+                 "num_model_seeds.",
+            key="openfold_seeds")
+        _seeds = [int(s) for s in _seeds_str.replace(" ", "").split(",") if s]
+        if _seeds:
+            openfold["seeds"] = _seeds
+        else:
+            openfold.pop("seeds", None)
+
+        _use_recycling = st.toggle(
+            "Override recycling iterations",
+            value=openfold.get("recycling_iters") is not None,
+            help="Writes model_update.custom.num_recycling_iters in runner.yaml. "
+                 "Leave off to use the predict preset's default.",
+            key="openfold_use_recycling")
+        if _use_recycling:
+            openfold["recycling_iters"] = int(st.number_input(
+                "Recycling iterations", value=int(openfold.get("recycling_iters") or 4),
+                min_value=1, key="openfold_recycling_iters"))
+        else:
+            openfold.pop("recycling_iters", None)
+
+        render_slurm_resources(cfg, "openfold")
+
+        openfold["cache_dir"] = st.text_input(
+            "OpenFold cache dir (host)", value=openfold.get("cache_dir", ""),
+            help="Host dir with OpenFold weights + CCD cache. Bound read-only to "
+                 "/models/openfold (OPENFOLD_CACHE).",
+            key="openfold_cache_dir")
+
+        # Escape hatch: raw YAML deep-merged into runner.yaml.
+        _adv_str = st.text_area(
+            "Advanced runner.yaml overrides (YAML, optional)",
+            value=(yaml.safe_dump(openfold.get("advanced"), sort_keys=False)
+                   if openfold.get("advanced") else ""),
+            help="Deep-merged into the generated runner.yaml. For settings not "
+                 "covered above (e.g. nested model_update.custom keys).",
+            key="openfold_advanced")
+        if _adv_str.strip():
+            try:
+                _adv = yaml.safe_load(_adv_str)
+                if isinstance(_adv, dict):
+                    openfold["advanced"] = _adv
+                else:
+                    st.warning("Advanced overrides must be a YAML mapping; ignored.")
+                    openfold.pop("advanced", None)
+            except yaml.YAMLError as e:
+                st.warning(f"Invalid YAML in advanced overrides: {e}")
+        else:
+            openfold.pop("advanced", None)
+
+        cfg["openfold"] = openfold
+
     with st.expander("Container Images"):
         containers = cfg.get("containers", {})
         _rt_opts = ["auto", "singularity", "apptainer"]
@@ -1697,6 +1852,8 @@ with tab_config:
             key="containers_esmc")
         containers["esmfold"] = st.text_input(
             "ESMFold2 image (.sif)", value=containers.get("esmfold", ""), key="containers_esmfold")
+        containers["openfold"] = st.text_input(
+            "OpenFold3 image (.sif)", value=containers.get("openfold", ""), key="containers_openfold")
         _gpu = st.text_input(
             "Shared fallback image (.sif, optional)", value=containers.get("gpu", ""),
             help="Used for any stage whose own image field is empty.",
