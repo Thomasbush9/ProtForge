@@ -15,3 +15,14 @@ default-resources:
   runtime: 30        # minutes
   cpus_per_task: 2
   slurm_extra: "'--mail-type=END,FAIL' '--mail-user=thomasbush52@gmail.com'"
+
+# Per-stage concurrency caps. Each GPU rule consumes one <stage>_jobs slot, so a
+# budget here limits that stage to N concurrent SLURM jobs (independent of the
+# global `jobs:` above). Leave unset for unbounded. The webapp sets these from
+# each stage's `max_concurrent_jobs` via `--resources`, overriding any value here.
+# resources:
+#   msa_jobs: 10
+#   boltz_jobs: 10
+#   esmc_jobs: 10
+#   esmfold_jobs: 10
+#   openfold_jobs: 4

@@ -115,12 +115,37 @@ def run_cmd(cmd: list[str], timeout: int = 30) -> str:
         return "Command timed out."
 
 
+# Per-stage Snakemake custom-resource names (one slot per running job). A global
+# budget passed via `--resources <name>=N` caps that stage to N concurrent jobs.
+_STAGE_JOB_RESOURCE = {
+    "msa": "msa_jobs", "boltz": "boltz_jobs", "esmc": "esmc_jobs",
+    "esmfold": "esmfold_jobs", "openfold": "openfold_jobs",
+}
+
+
+def concurrency_resource_args(cfg: dict) -> list[str]:
+    """Build `--resources <stage>_jobs=N ...` from each stage's max_concurrent_jobs.
+    Stages without the key are left unbounded (default Snakemake behavior)."""
+    pairs = []
+    for stage, res_name in _STAGE_JOB_RESOURCE.items():
+        n = cfg.get(stage, {}).get("max_concurrent_jobs")
+        if n:
+            pairs.append(f"{res_name}={int(n)}")
+    return ["--resources", *pairs] if pairs else []
+
+
 def launch_snakemake(session: Session, extra_args: list[str] | None = None):
+    cfg = load_config(session)
     cmd = [
         "snakemake",
         "--profile", "profiles/slurm/",
         "--configfile", str(session.config_path),
     ]
+    # Global concurrency cap (overrides the profile's `jobs:`), then per-stage caps.
+    max_jobs = cfg.get("slurm", {}).get("max_concurrent_jobs")
+    if max_jobs:
+        cmd.extend(["--jobs", str(int(max_jobs))])
+    cmd.extend(concurrency_resource_args(cfg))
     if extra_args:
         cmd.extend(extra_args)
     with open(session.log_file, "w") as log:
@@ -289,6 +314,29 @@ def render_slurm_resources(cfg: dict, stage: str,
         min_value=1,
         key=f"{stage}_cpus_override",
     )
+
+
+def render_max_concurrent(stage_cfg: dict, stage: str) -> None:
+    """Optional cap on how many of this stage's jobs run at once.
+
+    Writes <stage>.max_concurrent_jobs; launch_snakemake turns it into
+    `--resources <stage>_jobs=N`. Off = unbounded (up to the profile's global
+    `jobs:` limit). `stage_cfg` is the per-stage dict the caller saves back."""
+    on = st.toggle(
+        "Limit concurrent jobs",
+        value=stage_cfg.get("max_concurrent_jobs") is not None,
+        help="Cap how many of this stage's SLURM jobs run simultaneously "
+             "(Snakemake --resources). Useful to avoid flooding the scheduler "
+             "or to bound GPU usage (e.g. OpenFold jobs each take several GPUs).",
+        key=f"{stage}_cap_concurrency",
+    )
+    if on:
+        stage_cfg["max_concurrent_jobs"] = int(st.number_input(
+            "Max concurrent jobs",
+            value=int(stage_cfg.get("max_concurrent_jobs") or 4), min_value=1,
+            key=f"{stage}_max_concurrent_jobs"))
+    else:
+        stage_cfg.pop("max_concurrent_jobs", None)
 
 
 def render_binning_controls(cfg: dict, stage: str) -> None:
@@ -666,7 +714,15 @@ def get_stage_progress(cfg: dict) -> dict:
     progress = {}
 
     if pipeline.get("msa"):
-        done = count_files(seq_dir, "*/msa/*.a3m")
+        # Count sequence dirs that have an MSA, not a3m files: the OpenFold
+        # converter adds a second a3m (uniref90_hits.a3m) per msa/, so a file
+        # count would exceed `total` and overflow the progress bar.
+        done = 0
+        if seq_dir.is_dir():
+            for d in seq_dir.iterdir():
+                msa_d = d / "msa"
+                if msa_d.is_dir() and any(msa_d.glob("*.a3m")):
+                    done += 1
         progress["MSA"] = (done, total)
 
     if pipeline.get("boltz"):
@@ -1512,6 +1568,7 @@ with tab_config:
         render_gpu_preference("msa")
         render_slurm_resources(cfg, "msa")
         render_binning_controls(cfg, "msa")
+        render_max_concurrent(msa, "msa")
         msa["mmseq2_db"] = st.text_input("MMseqs2 DB", value=msa.get("mmseq2_db", ""))
         msa["colabfold_db"] = st.text_input("ColabFold DB", value=msa.get("colabfold_db", ""))
         cfg["msa"] = msa
@@ -1525,6 +1582,7 @@ with tab_config:
         render_gpu_preference("boltz")
         render_slurm_resources(cfg, "boltz")
         render_binning_controls(cfg, "boltz")
+        render_max_concurrent(boltz, "boltz")
         c1, c2 = st.columns(2)
         boltz["recycling_steps"] = c1.number_input("Recycling steps", value=boltz.get("recycling_steps", 10), min_value=1)
         boltz["diffusion_samples"] = c2.number_input("Diffusion samples", value=boltz.get("diffusion_samples", 25), min_value=1)
@@ -1627,6 +1685,7 @@ with tab_config:
         for _size in esmc["models"]:
             st.markdown(f"_ESMC-{_size}_")
             render_slurm_resources(cfg, f"esmc_{_size}", defaults=_SLURM_DEFAULTS["esmc"])
+        render_max_concurrent(esmc, "esmc")
 
         # --- SAE sub-section ---
         st.markdown("---")
@@ -1684,6 +1743,7 @@ with tab_config:
         render_chunk_recommendation("esmfold")
         render_gpu_preference("esmfold")
         render_slurm_resources(cfg, "esmfold")
+        render_max_concurrent(esmfold, "esmfold")
         esmfold["cache_dir"] = st.text_input(
             "HF cache dir (host)", value=esmfold.get("cache_dir", ""),
             help="Host HF cache; must contain hub/models--biohub--ESMFold2-Fast. "
@@ -1816,6 +1876,7 @@ with tab_config:
             openfold.pop("recycling_iters", None)
 
         render_slurm_resources(cfg, "openfold")
+        render_max_concurrent(openfold, "openfold")
 
         openfold["cache_dir"] = st.text_input(
             "OpenFold cache dir (host)", value=openfold.get("cache_dir", ""),
@@ -1885,8 +1946,24 @@ with tab_config:
         slurm["account"] = c2.text_input("Account", value=slurm.get("account", ""))
         slurm["email"] = st.text_input("Email", value=slurm.get("email", ""))
 
+        _cap_jobs = st.toggle(
+            "Limit total concurrent cluster jobs",
+            value=slurm.get("max_concurrent_jobs") is not None,
+            help="Global cap across all stages (Snakemake --jobs), overriding the "
+                 "profile default (100). Per-stage caps below further restrict "
+                 "individual stages.",
+            key="slurm_cap_total_jobs",
+        )
+        if _cap_jobs:
+            slurm["max_concurrent_jobs"] = int(st.number_input(
+                "Max concurrent jobs (all stages)",
+                value=int(slurm.get("max_concurrent_jobs") or 20), min_value=1,
+                key="slurm_max_concurrent_jobs"))
+        else:
+            slurm.pop("max_concurrent_jobs", None)
+
         st.markdown("**Per-stage partition overrides** (leave empty for default)")
-        for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold"]:
+        for stage in ["msa", "boltz", "esmc", "esmc_sae", "esmfold", "openfold"]:
             override = slurm.get(stage, {})
             val = st.text_input(f"{stage} partition", value=override.get("partition", ""), key=f"slurm_{stage}")
             if val:
@@ -2083,6 +2160,9 @@ with tab_monitor:
                     st.markdown(f"**{stage}**")
             with col_bar:
                 frac = done / total if total > 0 else 0.0
+                # Clamp: done can briefly exceed total (extra artifacts, reruns)
+                # and st.progress rejects values outside [0, 1].
+                frac = max(0.0, min(1.0, frac))
                 st.progress(frac)
             with col_count:
                 st.caption(f"{done} / {total}")

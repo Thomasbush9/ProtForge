@@ -147,6 +147,7 @@ rule run_boltz_predict:
             BOLTZ_CHUNKS_TSV, wc.chunk_id, "runtime_min",
             stage_resource("boltz", "runtime", 60),
         ),
+        boltz_jobs = 1,
         slurm_partition = BOLTZ_PARTITION,
         slurm_account = BOLTZ_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("boltz", True)),

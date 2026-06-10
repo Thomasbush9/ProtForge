@@ -44,9 +44,9 @@ boltz:
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 
 # ESM-C embeddings (Biohub ESMC). ESMC needs only the sequence (no MSA), so it
-# runs straight from input.fasta_dir when MSA is off (independent of Boltz/MSA),
-# or off the MSA-stage YAMLs when MSA is on. Input precedence: yaml_dir >
-# MSA-stage YAMLs > fasta_dir.
+# runs INDEPENDENTLY of MSA — straight from input.fasta_dir, in parallel with
+# MSA/Boltz rather than waiting for them. Input precedence: yaml_dir > fasta_dir
+# > MSA-stage YAMLs (the last is only a fallback for yaml-only reruns).
 # `models` is any subset of {6B, 600M, 300M}; each size is its own stage with
 # its own jobs, resources (slurm.resources.esmc_<size>) and
 # .esmc_<size>_complete sentinel. Outputs -> sequences/{seq}/esmc/{size}/.
@@ -85,6 +85,8 @@ openfold:
   num_model_seeds: 1         # --num-model-seeds
   # seeds: [42]              # optional explicit seeds -> experiment_settings.seeds
   samples_to_save: 1         # int (top-N by ranking score) or "all"
+  # max_concurrent_jobs: 4   # cap simultaneous OpenFold jobs (each uses up to
+  #                          # gpus_per_job GPUs). Unset = unbounded.
   structure_format: cif      # cif | pdb | cif.gz
   write_full_confidence: true
   # recycling_iters:         # optional -> model_update.custom.num_recycling_iters
@@ -94,8 +96,8 @@ openfold:
   cache_dir: /n/home06/<YOUR_USER>/protforge/models/openfold
 
 # ESMFold2 structure prediction (Biohub "fast" variant). Like ESMC it needs only
-# the sequence, so it runs straight from input.fasta_dir when MSA is off, or off
-# the MSA-stage YAMLs when MSA is on (precedence: yaml_dir > MSA YAMLs > fasta_dir).
+# the sequence, so it runs INDEPENDENTLY of MSA — straight from input.fasta_dir,
+# in parallel with MSA/Boltz (precedence: yaml_dir > fasta_dir > MSA YAMLs).
 # Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
 esmfold:
   max_files_per_job: 25
@@ -162,6 +164,9 @@ slurm:
   partition: kempner_requeue
   account: <YOUR_SLURM_ACCOUNT>  # e.g., kempner_yourpi_lab
   email: <YOUR_EMAIL>  # e.g., user@example.com (for SLURM job notifications)
+  # max_concurrent_jobs: 20   # global cap on simultaneous cluster jobs across all
+  #                           # stages (Snakemake --jobs; overrides profile's 100).
+  #                           # Per-stage <stage>.max_concurrent_jobs caps further.
   # Per-stage partition overrides (optional) — falls back to slurm.partition.
   # msa:
   #   partition: kempner

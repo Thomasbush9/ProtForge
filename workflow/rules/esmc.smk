@@ -9,9 +9,10 @@ each size is driven through the same rules via the {size} wildcard, so it gets
 its own jobs, per-size SLURM resources, and a `.esmc_{size}_complete` sentinel.
 
 Encoding runs inside the ESM container via containers/run_batch_esmc.py (bound
-to /opt at run time, never baked in). ESMC needs only the sequence, so inputs
-are either the MSA-stage YAMLs (MSA on) or a raw FASTA directory (MSA off — the
-runner parses .fasta directly). Outputs land in sequences/{seq}/esmc/{size}/.
+to /opt at run time, never baked in). ESMC needs only the sequence, so it runs
+INDEPENDENTLY of MSA — straight from the FASTA directory (in parallel with MSA),
+the runner parsing .fasta directly. MSA-stage YAMLs are only a fallback when no
+fasta_dir is set. Outputs land in sequences/{seq}/esmc/{size}/.
 """
 
 import os as _os
@@ -20,18 +21,22 @@ ESMC_CFG    = config.get("esmc", {})
 ESMC_CHUNKS = f"{OUTPUT}/esmc_chunks"
 ESMC_SIZES  = ESMC_CFG.get("models", ["6B"])
 
-# Input source precedence: explicit yaml_dir > MSA-stage YAMLs > raw FASTA dir.
-# ESMC only needs the sequence (no MSA), so the FASTA path lets it run standalone
-# with MSA off — the in-container runner parses sequences straight from .fasta
-# (see workflow/scripts/prepare_boltz_chunks.py --include_fasta).
+# Input source precedence: explicit yaml_dir > raw FASTA dir > MSA-stage YAMLs.
+# ESMC only needs the sequence (no MSA), so FASTA wins over the MSA YAMLs even
+# when MSA is enabled: ESMC then runs straight from the FASTA in parallel with
+# MSA instead of waiting on .msa_complete. The MSA-YAML path is only the fallback
+# when no fasta_dir is given (e.g. yaml-only reruns). The in-container runner
+# parses sequences directly from .fasta (prepare_boltz_chunks.py --include_fasta).
 _esmc_yaml_override = config["input"].get("yaml_dir", "")
 _esmc_fasta_dir = config["input"].get("fasta_dir", "")
 if _esmc_yaml_override:
     ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = _esmc_yaml_override, False
+elif _esmc_fasta_dir:
+    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = _esmc_fasta_dir, True
 elif RUN_MSA:
     ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = SEQUENCES_DIR, False
 else:
-    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = _esmc_fasta_dir, True
+    ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = "", True
 ESMC_FASTA_FLAG = "--include_fasta" if ESMC_FROM_FASTA else ""
 
 ESMC_PARTITION = SLURM_CFG.get("esmc", {}).get("partition", SLURM_CFG.get("partition", ""))
@@ -57,15 +62,16 @@ def _esmc_resource(size, key, default):
 
 
 def esmc_chunk_input(wildcards):
-    """Depend on MSA completion (so ESMC runs right after MSA, in parallel with
-    Boltz). With an explicit yaml_dir or a standalone FASTA dir, no MSA dependency."""
+    """ESMC needs no MSA: source from yaml_dir or fasta_dir with no dependency so
+    it runs in parallel with MSA. Only the MSA-YAML fallback (no fasta_dir) waits
+    on .msa_complete."""
     inputs = {}
     if _esmc_yaml_override:
         inputs["yaml_dir"] = _esmc_yaml_override
-    elif RUN_MSA:
-        inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
     elif _esmc_fasta_dir:
         inputs["fasta_dir"] = _esmc_fasta_dir
+    elif RUN_MSA:
+        inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
     return inputs
 
 
@@ -122,6 +128,7 @@ rule run_esmc:
         cpus_per_task   = lambda wc: _esmc_resource(wc.size, "cpus_per_task", 8),
         mem_mb          = lambda wc: _esmc_resource(wc.size, "mem_mb", 32000),
         runtime         = lambda wc: _esmc_resource(wc.size, "runtime", 60),
+        esmc_jobs       = 1,
         slurm_partition = ESMC_PARTITION,
         slurm_account   = ESMC_ACCOUNT,
         slurm_extra     = slurm_extra(gpu=stage_uses_gpu("esmc", True)),

@@ -129,6 +129,7 @@ rule run_openfold_predict:
         cpus_per_task = stage_resource("openfold", "cpus_per_task", 8),
         mem_mb        = stage_resource("openfold", "mem_mb", 48000),
         runtime       = stage_resource("openfold", "runtime", 60),
+        openfold_jobs = 1,
         slurm_partition = OPENFOLD_PARTITION,
         slurm_account = OPENFOLD_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("openfold", True),

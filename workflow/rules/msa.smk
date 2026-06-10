@@ -82,6 +82,7 @@ rule run_colabfold_search:
             MSA_CHUNKS_TSV, wc.chunk_id, "runtime_min",
             stage_resource("msa", "runtime", 60),
         ),
+        msa_jobs      = 1,
         slurm_partition = MSA_PARTITION,
         slurm_account = MSA_ACCOUNT,
         slurm_extra = slurm_extra(gpu=stage_uses_gpu("msa", True)),
