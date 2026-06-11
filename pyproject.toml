@@ -17,6 +17,7 @@ test = [
 viz = [
     "plotly>=5.0",
     "py3Dmol>=2.0",
+    "tmtools>=0.2",
 ]
 webapp = [
     "streamlit>=1.30",
