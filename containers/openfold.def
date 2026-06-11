@@ -13,7 +13,9 @@ From: openfoldconsortium/openfold3:stable
         # install pytest 
         export PATH=/opt/conda/envs/openfold3/bin:$PATH
         python -m biotite.setup_ccd
+        #TODO: add cuEquivariance kernels + test
             
+
 
 %environment
 # It defines environment variables that will be set at runtime -> not available at build time 

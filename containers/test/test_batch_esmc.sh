@@ -24,7 +24,7 @@ usage() {
 IMAGE_PATH="${1:-}"
 CACHE_DIR="${2:-}"
 [[ -n "$IMAGE_PATH" && -n "$CACHE_DIR" ]] || usage
-
+#TODO: bind script to container
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUT_DIR="${3:-${SCRIPT_DIR}/fixtures}"
 OUTPUT_DIR="${4:-/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests/esmc_batch}"
@@ -40,7 +40,7 @@ if [[ ! -f "$BATCH_RUNNER" ]]; then
   echo "ERROR: batch runner not found: $BATCH_RUNNER" >&2
   exit 1
 fi
-if [[ ! -d "$INPUT_DIR" ]] || [[ -z "$(find "$INPUT_DIR" -maxdepth 1 -name '*.yaml' -print -quit)" ]]; then
+if [[ ! -d "$INPUT_DIR" ]] || [[ -z "$(find "$INPUT_DIR" -name '*.yaml' -print -quit)" ]]; then
   echo "ERROR: no *.yaml in INPUT_DIR=$INPUT_DIR" >&2
   exit 1
 fi
@@ -87,8 +87,9 @@ singularity exec --nv --cleanenv \
     --cache "$CONTAINER_CACHE" \
     --input-dir "$CONTAINER_INPUT" \
     --output-dir "$CONTAINER_OUTPUT" \
+    --save-logits \
     --size "$SIZE"
-
+#TODO: verificatoin will be moved to snakemake rules 
 echo "Verifying outputs..."
 if [[ "$SIZE" == "all" ]]; then
   SIZES=(6B 600M 300M)
