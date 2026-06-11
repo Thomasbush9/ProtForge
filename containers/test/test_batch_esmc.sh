@@ -40,6 +40,7 @@ if [[ ! -f "$BATCH_RUNNER" ]]; then
   echo "ERROR: batch runner not found: $BATCH_RUNNER" >&2
   exit 1
 fi
+#TODO: correct this to support also .fasta
 if [[ ! -d "$INPUT_DIR" ]] || [[ -z "$(find "$INPUT_DIR" -name '*.yaml' -print -quit)" ]]; then
   echo "ERROR: no *.yaml in INPUT_DIR=$INPUT_DIR" >&2
   exit 1
@@ -84,12 +85,12 @@ singularity exec --nv --cleanenv \
   -B "$BATCH_RUNNER:$CONTAINER_SCRIPT:ro" \
   "$IMAGE_PATH" \
   python "$CONTAINER_SCRIPT" \
-    --cache "$CONTAINER_CACHE" \
-    --input-dir "$CONTAINER_INPUT" \
-    --output-dir "$CONTAINER_OUTPUT" \
-    --save-logits \
-    --size "$SIZE"
-#TODO: verificatoin will be moved to snakemake rules 
+  --cache "$CONTAINER_CACHE" \
+  --input-dir "$CONTAINER_INPUT" \
+  --output-dir "$CONTAINER_OUTPUT" \
+  --save-logits \
+  --size "$SIZE"
+#TODO: verificatoin will be moved to snakemake rules
 echo "Verifying outputs..."
 if [[ "$SIZE" == "all" ]]; then
   SIZES=(6B 600M 300M)
