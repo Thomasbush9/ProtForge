@@ -1,9 +1,11 @@
+import json
 import os
 import time
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List
 
+import numpy as np
 import torch
 import yaml
 from transformers import AutoTokenizer
@@ -14,6 +16,10 @@ ESMC_MODELS = {
     "600M": "biohub/ESMC-600M",
     "300M": "biohub/ESMC-300M",
 }
+
+# The 20 canonical amino acids — saved logit columns for these tokens are all a
+# mutation scan needs (see workflow/scripts/mutation_scan.py).
+CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
 
 
 def _enforce_offline(cache_dir: str | None) -> str | None:
@@ -111,12 +117,89 @@ def encode_sequences(sequences: List, model_name, hub_cache):
     return outputs
 
 
+def encode_for_logits(sequences: List, model_name, hub_cache):
+    """Forward pass with the LM-head model to get per-residue vocab logits.
+
+    The base ESMCModel has no LM head and cannot produce logits, so we load
+    AutoModelForMaskedLM (the released biohub/ESMC-* checkpoints ship the head;
+    EvolutionaryScale document it for zero-shot variant scoring). We request a
+    special-tokens mask so real residue positions can be selected exactly —
+    never assume a fixed BOS/EOS offset.
+
+    Returns (logits, special_tokens_mask, attention_mask, aa_token_ids) with
+    logits as a CPU float32 numpy array of shape (batch, tokens, vocab).
+    """
+    from transformers import AutoModelForMaskedLM
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, cache_dir=hub_cache, local_files_only=True,
+    )
+    model = AutoModelForMaskedLM.from_pretrained(
+        model_name, cache_dir=hub_cache, local_files_only=True,
+    ).cuda().eval()
+    enc = tokenizer(
+        sequences, return_tensors="pt", padding=True,
+        return_special_tokens_mask=True,
+    )
+    inputs = {k: v.to(model.device)
+              for k, v in enc.items() if k in ("input_ids", "attention_mask")}
+    with torch.inference_mode():
+        outputs = model(**inputs)
+    aa_token_ids = {
+        aa: int(tid) for aa, tid in
+        zip(CANONICAL_AAS, tokenizer.convert_tokens_to_ids(list(CANONICAL_AAS)))
+    }
+    return (
+        outputs.logits.float().cpu().numpy(),
+        enc["special_tokens_mask"].cpu().numpy(),
+        enc["attention_mask"].cpu().numpy(),
+        aa_token_ids,
+    )
+
+
+def save_logits_outputs(output_dir: str, name: str, size: str,
+                        logits_real: "np.ndarray", aa_token_ids: dict) -> None:
+    """Write per-residue logits (fp16) + the AA->token-id map for one sequence.
+
+    logits_real is (L_real, vocab) for real residues only. Downstream scoring
+    (workflow/scripts/mutation_scan.py) reads these with NumPy — no torch.
+    """
+    out_dir = Path(output_dir) / name / size
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(out_dir / "logits.npy", logits_real.astype(np.float16))
+    (out_dir / "aa_token_ids.json").write_text(json.dumps(aa_token_ids))
+
+
+def _real_residue_logits(logits, special_mask, attn_mask, idx, seq_len, name):
+    """Select the real-residue rows for sequence idx and verify the count.
+
+    Fails loudly if the number of non-special, non-padding positions doesn't
+    equal the sequence length — that mismatch means logit rows are misaligned
+    with residues and any LLR derived from them would be silently wrong.
+    """
+    real = (special_mask[idx] == 0) & (attn_mask[idx] == 1)
+    rows = logits[idx][real]
+    if rows.shape[0] != seq_len:
+        raise SystemExit(
+            f"{name}: {rows.shape[0]} real-residue logit rows != sequence length "
+            f"{seq_len}. Token/residue alignment is off — fix before trusting "
+            "any mutation scan derived from these logits."
+        )
+    return rows
+
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--cache", type=str, required=True)
     parser.add_argument("--input-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--size", type=str, default="6B", choices=[*ESMC_MODELS, "all"])
+    parser.add_argument(
+        "--save-logits", action="store_true",
+        help="Produce per-residue vocabulary logits (logits.npy + "
+             "aa_token_ids.json) for zero-shot mutation scanning instead of "
+             "embeddings. Loads the LM-head model (AutoModelForMaskedLM).",
+    )
     args = parser.parse_args()
     hub_cache = _enforce_offline(args.cache)
 
@@ -125,12 +208,18 @@ if __name__ == "__main__":
     sequences = [seq_by_name[n] for n in names]
     lengths = {n: len(seq_by_name[n]) for n in names}
 
-    if args.size == "all":
-        for size, model_name in ESMC_MODELS.items():
+    sizes = list(ESMC_MODELS) if args.size == "all" else [args.size]
+
+    for size in sizes:
+        model_name = ESMC_MODELS[size]
+        if args.save_logits:
+            logits, special_mask, attn_mask, aa_token_ids = encode_for_logits(
+                sequences, model_name, hub_cache)
+            for i, name in enumerate(names):
+                rows = _real_residue_logits(
+                    logits, special_mask, attn_mask, i, lengths[name], name)
+                save_logits_outputs(args.output_dir, name, size, rows, aa_token_ids)
+        else:
             out = encode_sequences(sequences, model_name, hub_cache)
             for i, name in enumerate(names):
                 save_outputs(args.output_dir, name, size, out, i, lengths[name])
-    else:
-        out = encode_sequences(sequences, ESMC_MODELS[args.size], hub_cache)
-        for i, name in enumerate(names):
-            save_outputs(args.output_dir, name, args.size, out, i, lengths[name])
