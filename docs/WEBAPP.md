@@ -17,8 +17,10 @@ Four tabs, all scoped to the **active session** (sessions live in
   starts a background `snakemake` process that submits SLURM jobs.
 - **Job Monitor** — per-stage progress bars (from output artifacts), live
   `squeue` jobs, recent `sacct` history, and a per-job log viewer.
-- **Results** — browse predicted structures in 3D and view per-stage runtime /
-  node-hour analytics from the Snakemake benchmarks.
+- **Results** — browse predicted structures in 3D, compare structures
+  (target vs queries: CA RMSD + TM-score, e.g. cross-predictor agreement or
+  mutant-vs-WT), and view per-stage runtime / node-hour analytics from the
+  Snakemake benchmarks.
 
 > The Streamlit process owns the Snakemake controller it launches. If that
 > process dies, **already-submitted SLURM jobs keep running**, but no new stages

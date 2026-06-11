@@ -26,6 +26,7 @@ from results import (
     model_summary,
     read_benchmarks,
 )
+from structure_compare import compare
 
 # How many sequences to put in the picker before asking the user to narrow the
 # filter — keeps the selectbox responsive on runs with thousands of mutants.
@@ -249,6 +250,89 @@ def _run_analytics(output_dir: str):
         st.bar_chart({b.stage.upper(): b.node_hours for b in benches.values()})
 
 
+def _structure_comparison(output_dir: str):
+    all_dirs = _seq_dirs(output_dir)
+    if not all_dirs:
+        st.info(f"No sequences under `{output_dir}/sequences/` yet.")
+        return
+
+    st.caption(
+        "Pick a **target** structure and one or more **queries**, then compute "
+        "RMSD (same-length, residue-by-residue) and TM-score (alignment-based). "
+        "Defaults to the target sequence's other models — i.e. cross-predictor "
+        "agreement; add other sequences to compare designs (e.g. mutant vs WT)."
+    )
+
+    # --- Target structure ---
+    c1, c2 = st.columns(2)
+    with c1:
+        tq = st.text_input("Filter target sequence", value="", key="cmp_tfilter",
+                           placeholder="substring…")
+        tdirs = [d for d in all_dirs if tq.lower() in d.lower()] if tq else all_dirs
+        if not tdirs:
+            st.warning(f"No sequence matches `{tq}`.")
+            return
+        tseq = st.selectbox("Target sequence", tdirs[:_MAX_PICKER], key="cmp_tseq")
+    target_structs = _structures(output_dir, tseq)
+    if not target_structs:
+        st.warning(f"No structures for `{tseq}`.")
+        return
+    with c2:
+        tlabels = [s.label for s in target_structs]
+        tidx = st.selectbox("Target model", range(len(tlabels)),
+                            format_func=lambda i: tlabels[i], key="cmp_tmodel")
+    target = target_structs[tidx]
+
+    # --- Query structures (across one or more sequences) ---
+    qfilter = st.text_input("Filter query sequences", value="", key="cmp_qfilter",
+                            placeholder="substring… (leave blank to use the target sequence)")
+    qpool = [d for d in all_dirs if qfilter.lower() in d.lower()] if qfilter else all_dirs
+    qseqs = st.multiselect("Query sequence(s)", qpool[:_MAX_PICKER],
+                           default=[tseq] if tseq in qpool else [], key="cmp_qseqs")
+
+    query_items = []  # (label, StructureFile)
+    for qs in qseqs:
+        for s in _structures(output_dir, qs):
+            if qs == tseq and s.path == target.path:
+                continue  # don't compare the target to itself
+            query_items.append((f"{qs} / {s.label}", s))
+    if not query_items:
+        st.info("Select at least one query sequence (its structures become queries).")
+        return
+
+    labels = [lab for lab, _ in query_items]
+    chosen = st.multiselect("Queries", labels, default=labels[:10], key="cmp_queries")
+    if not chosen:
+        st.info("Pick one or more queries.")
+        return
+
+    if st.button("Compute comparison", type="primary", key="cmp_go"):
+        tgt_text = _structure_text(str(target.path), target.path.stat().st_mtime)
+        rows, tm_missing = [], False
+        for lab, s in query_items:
+            if lab not in chosen:
+                continue
+            q_text = _structure_text(str(s.path), s.path.stat().st_mtime)
+            r = compare(tgt_text, q_text)
+            tm_missing = tm_missing or any("tmtools" in n for n in r["notes"])
+            rows.append({
+                "Query": lab,
+                "Target len": r["target_len"],
+                "Query len": r["query_len"],
+                "RMSD (Å)": round(r["rmsd"], 3) if r["rmsd"] is not None else "—",
+                "TM (norm target)": round(r["tm_norm_target"], 3) if r["tm_norm_target"] is not None else "—",
+                "TM (norm query)": round(r["tm_norm_query"], 3) if r["tm_norm_query"] is not None else "—",
+            })
+        st.caption(f"Target: `{target.label}` ({tseq})")
+        st.dataframe(rows, width="stretch", hide_index=True)
+        if tm_missing:
+            st.caption(
+                "TM-score shown as — because **tmtools** isn't installed "
+                "(`pip install tmtools` or `pip install '.[viz]'`). RMSD needs "
+                "no extra dependency."
+            )
+
+
 def render_results_tab(session: Session):
     cfg = load_config(session)
     output_dir = cfg.get("output", {}).get("parent_dir", "")
@@ -262,7 +346,7 @@ def render_results_tab(session: Session):
 
     c_view, c_refresh = st.columns([4, 1])
     with c_view:
-        view = st.radio("View", ["Structure viewer", "Run analytics"],
+        view = st.radio("View", ["Structure viewer", "Compare structures", "Run analytics"],
                         horizontal=True, key="results_view")
     with c_refresh:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -274,5 +358,7 @@ def render_results_tab(session: Session):
     st.divider()
     if view == "Structure viewer":
         _structure_viewer(output_dir)
+    elif view == "Compare structures":
+        _structure_comparison(output_dir)
     else:
         _run_analytics(output_dir)
