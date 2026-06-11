@@ -95,7 +95,9 @@ def _render_3d(structure_text: str, fmt: str, color_mode: str) -> bool:
         view.setStyle({"cartoon": {"color": "spectrum"}})
     view.zoomTo()
     view.setBackgroundColor("0xffffff")
-    st.components.v1.html(view._make_html(), height=540)
+    # st.iframe auto-detects the raw HTML string and embeds it in an iframe
+    # (replaces the deprecated st.components.v1.html; keeps JS execution).
+    st.iframe(view._make_html(), height=540)
     return True
 
 

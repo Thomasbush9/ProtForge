@@ -20,7 +20,7 @@ viz = [
     "tmtools>=0.2",
 ]
 webapp = [
-    "streamlit>=1.30",
+    "streamlit>=1.49",
     "streamlit-autorefresh",
     "PyYAML>=5.0",
 ]
@@ -30,7 +30,7 @@ webapp = [
 host = [
     "snakemake>=8.10,<9",
     "snakemake-executor-plugin-slurm>=0.10",
-    "streamlit>=1.30",
+    "streamlit>=1.49",
     "streamlit-autorefresh",
     "PyYAML>=5.0",
     "huggingface_hub>=0.20",

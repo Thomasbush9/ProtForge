@@ -21,7 +21,7 @@ snakemake>=8.10,<9
 snakemake-executor-plugin-slurm>=0.10
 
 # --- Webapp -----------------------------------------------------------------
-streamlit>=1.30
+streamlit>=1.49
 streamlit-autorefresh
 pyyaml>=5.0
 huggingface_hub>=0.20

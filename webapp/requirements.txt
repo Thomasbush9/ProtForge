@@ -2,7 +2,7 @@
 #   pip install -r webapp/requirements.txt
 # See docs/WEBAPP.md for the full setup + access guide.
 
-streamlit>=1.30
+streamlit>=1.49
 streamlit-autorefresh
 pyyaml
 
