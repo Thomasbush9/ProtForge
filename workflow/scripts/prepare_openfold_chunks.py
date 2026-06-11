@@ -13,8 +13,6 @@ Steps:
   3. Convert each batch YAML -> an OpenFold query (chains + main_msa_file_paths)
      and copy each sequence's a3m to the OpenFold-expected uniref90_hits.a3m.
   4. Write openfold_chunks/chunk_{i}.json + manifest.txt + a shared runner.yaml.
-
-Adapted from containers/convert_dir_op.py (the tested converter).
 """
 
 import argparse
