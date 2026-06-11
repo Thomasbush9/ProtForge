@@ -15,7 +15,9 @@ sidebar, and tab dispatch. The bulk lives in sibling modules:
   monitoring.py    — squeue/sacct queries, output progress (pure)
   ui_helpers.py    — reusable Configuration-tab widgets
   results.py       — output-tree + benchmark readers for the Results tab (pure)
-  config_tab.py / run_tab.py / monitor_tab.py / results_tab.py — tab bodies
+  satmut.py        — saturation-mutagenesis launch/derive/load (pure core)
+  config_tab.py / run_tab.py / monitor_tab.py / results_tab.py /
+  satmut_tab.py    — tab bodies
 """
 
 import os
@@ -39,6 +41,7 @@ from config_tab import render_config_tab
 from run_tab import render_run_tab
 from monitor_tab import render_monitor_tab
 from results_tab import render_results_tab
+from satmut_tab import render_satmut_tab
 
 USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
@@ -171,8 +174,8 @@ with col_title:
 with col_info:
     st.caption(f"{USER}@{HOST}")
 
-tab_config, tab_run, tab_monitor, tab_results = st.tabs(
-    ["Configuration", "Run Pipeline", "Job Monitor", "Results"]
+tab_config, tab_run, tab_monitor, tab_results, tab_satmut = st.tabs(
+    ["Configuration", "Run Pipeline", "Job Monitor", "Results", "Saturation Mutagenesis"]
 )
 
 with tab_config:
@@ -186,3 +189,6 @@ with tab_monitor:
 
 with tab_results:
     render_results_tab(session)
+
+with tab_satmut:
+    render_satmut_tab(session)

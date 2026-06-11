@@ -21,6 +21,11 @@ Four tabs, all scoped to the **active session** (sessions live in
   (target vs queries: CA RMSD + TM-score, e.g. cross-predictor agreement or
   mutant-vs-WT), and view per-stage runtime / node-hour analytics from the
   Snakemake benchmarks.
+- **Saturation Mutagenesis** — standalone single-sequence tool: paste a
+  sequence, pick an ESM-C size, launch one GPU job, and inspect the
+  position × amino-acid log-likelihood-ratio matrix as an interactive heatmap
+  (with CSV download). Independent of the pipeline; reuses the session's
+  container/cache/SLURM settings.
 
 > The Streamlit process owns the Snakemake controller it launches. If that
 > process dies, **already-submitted SLURM jobs keep running**, but no new stages
