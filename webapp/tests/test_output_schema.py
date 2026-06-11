@@ -132,6 +132,20 @@ def test_extract_esmfold(tmp_path):
     assert s.plddt_mean == pytest.approx(80.0)  # mean 0.8 -> 80
 
 
+def test_extract_esmfold_prefers_torch_free_json(tmp_path):
+    # The metrics.json the runner writes must be readable without numpy/torch,
+    # and supply ptm (which previously only lived in the metrics.pt pickle).
+    fast = tmp_path / "esmfold" / "fast"
+    fast.mkdir(parents=True)
+    fast.joinpath("structure.cif").write_text(_cif_with_bfactors([85.0, 90.0]))
+    fast.joinpath("metrics.json").write_text(
+        json.dumps({"name": "m", "variant": "fast", "ptm": 0.77, "mean_plddt": 88.0}))
+
+    s = osch.extract_summary("esmfold", fast / "structure.cif")
+    assert s.ptm == 0.77
+    assert s.plddt_mean == pytest.approx(88.0)  # already 0-100, unchanged
+
+
 # --- sidecar round-trip ---------------------------------------------------
 
 

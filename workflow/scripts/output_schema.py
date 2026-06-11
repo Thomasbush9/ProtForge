@@ -273,8 +273,21 @@ def _esmfold_metrics(fast_dir: Path) -> tuple[dict, float | None, float | None]:
     metrics: dict[str, float] = {}
     plddt = None
     ptm = None
+
+    # Prefer the torch-free metrics.json the runner writes (ptm, mean_plddt);
+    # fall back to plddt.npy (numpy) and finally metrics.pt (torch) for runs
+    # produced before the JSON existed.
+    js = fast_dir / "metrics.json"
+    if js.is_file():
+        for k, v in _flatten_scalar_json(js).items():
+            metrics[k] = v
+        if "ptm" in metrics:
+            ptm = metrics["ptm"]
+        if "mean_plddt" in metrics:
+            plddt = _norm_plddt(metrics["mean_plddt"])
+
     npy = fast_dir / "plddt.npy"
-    if npy.is_file():
+    if plddt is None and npy.is_file():
         try:
             import numpy as np
             arr = np.load(npy)
@@ -283,8 +296,9 @@ def _esmfold_metrics(fast_dir: Path) -> tuple[dict, float | None, float | None]:
             plddt = _norm_plddt(metrics["mean_plddt"])
         except Exception:
             pass
+
     pt = fast_dir / "metrics.pt"
-    if pt.is_file():
+    if ptm is None and pt.is_file():
         try:
             import torch
             meta = torch.load(pt, map_location="cpu", weights_only=False)

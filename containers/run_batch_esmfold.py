@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from argparse import ArgumentParser
@@ -85,12 +86,27 @@ def save_outputs(output_dir: str, name: str, variant: str, result) -> None:
     plddt = result.plddt
     if torch.is_tensor(plddt):
         plddt = plddt.detach().cpu().numpy()
-    np.save(out_dir / "plddt.npy", np.asarray(plddt))
+    plddt = np.asarray(plddt)
+    np.save(out_dir / "plddt.npy", plddt)
 
     meta = {"name": name, "variant": variant, "ptm": result.ptm}
     if result.iptm is not None:
         meta["iptm"] = result.iptm
     torch.save(meta, out_dir / "metrics.pt")
+
+    # Light, torch-free copy of the scalar metrics so the dashboard (and
+    # output_schema) can read ptm/pLDDT without loading the .pt pickle.
+    def _scalar(v):
+        return float(v.item()) if torch.is_tensor(v) else float(v)
+
+    metrics_json = {
+        "name": name, "variant": variant,
+        "ptm": _scalar(result.ptm),
+        "mean_plddt": float(np.mean(plddt)),
+    }
+    if result.iptm is not None:
+        metrics_json["iptm"] = _scalar(result.iptm)
+    (out_dir / "metrics.json").write_text(json.dumps(metrics_json))
 
 
 def load_model(hub_cache: str) -> ESMFold2Model:
