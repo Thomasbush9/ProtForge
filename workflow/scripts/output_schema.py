@@ -198,17 +198,24 @@ def _cif_bfactors(text: str, sample: int) -> list[float]:
 
 def _sibling_json(structure_path: Path, *, must_contain: tuple[str, ...],
                   prefer_suffix: str | None = None) -> Path | None:
-    """Find a confidence JSON next to the structure that shares its sample stem."""
+    """Find a confidence JSON next to the structure that shares its model stem.
+
+    The structure stem (filename minus the model/structure suffix) is a
+    substring of its confidence JSON's name for every predictor:
+      boltz:    34073_model_0(.cif)       -> confidence_34073_model_0.json
+      openfold: ..._sample_9(_model.cif)  -> ..._sample_9_confidences*.json
+    Match on the *full* stem so per-model files stay distinct — matching only
+    the sequence prefix would cross-wire model_0/model_1 (or sample_8/sample_9)
+    and attach the wrong confidence to a structure.
+    """
     stem = structure_path.name
     for suf in _MODEL_SUFFIXES:
         if stem.endswith(suf):
             stem = stem[: -len(suf)]
             break
-    # OpenFold model stems end in _model; drop it so we match *_confidences*.
-    base = stem[:-6] if stem.endswith("_model") else stem
     candidates = [p for p in structure_path.parent.glob("*.json")
                   if any(t in p.name.lower() for t in must_contain)
-                  and base.split("_model")[0] in p.name]
+                  and stem in p.name]
     if not candidates:
         return None
     if prefer_suffix:

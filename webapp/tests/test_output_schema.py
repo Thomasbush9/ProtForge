@@ -90,6 +90,23 @@ def test_extract_boltz(tmp_path):
     assert s.plddt_in_bfactor is True
 
 
+def test_boltz_multi_model_picks_its_own_confidence(tmp_path):
+    # Two models in one dir, real Boltz naming. Each must get ITS OWN confidence
+    # JSON — the sequence prefix ("34073") alone matches both, so matching on it
+    # would cross-wire model_1 to model_0's scores. Regression for that bug.
+    d = tmp_path / "boltz"
+    d.mkdir()
+    for n, ptm in ((0, 0.93), (1, 0.41)):
+        (d / f"34073_model_{n}.cif").write_text(_cif_with_bfactors([80.0, 90.0]))
+        (d / f"confidence_34073_model_{n}.json").write_text(
+            json.dumps({"ptm": ptm, "confidence_score": 0.5 + n, "complex_plddt": 0.9}))
+
+    s0 = osch.extract_summary("boltz", d / "34073_model_0.cif")
+    s1 = osch.extract_summary("boltz", d / "34073_model_1.cif")
+    assert (s0.model_id, s0.ptm) == ("model_0", 0.93)
+    assert (s1.model_id, s1.ptm) == ("model_1", 0.41)
+
+
 def test_extract_openfold(tmp_path):
     d = tmp_path / "openfold"
     d.mkdir()
