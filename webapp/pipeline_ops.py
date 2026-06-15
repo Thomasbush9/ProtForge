@@ -89,11 +89,41 @@ def launch_snakemake(session: Session, extra_args: list[str] | None = None):
     return proc.pid
 
 
-def validate_launch_inputs(cfg: dict) -> list[str]:
-    """Validate configured inputs before submitting cluster jobs."""
-    errors = []
+def check_launch_inputs(cfg: dict) -> dict:
+    """Inspect configured inputs before submitting cluster jobs.
+
+    Distinguishes two kinds of problem:
+
+    * Fatal errors (``errors``) — missing config, a missing input directory, or
+      a directory of the wrong type. These block the launch outright.
+    * Skippable per-file failures (``invalid_groups``) — individual FASTA/YAML
+      files that fail validation. These do NOT have to block the run: the
+      offending files can be excluded (renamed with ``.invalid`` so the
+      chunkers skip them) and the valid remainder processed. Each group is
+      ``{"dir", "scan_result", "invalid": [...], "valid_count"}`` where
+      ``scan_result`` is the value to hand to ``validate.exclude_invalid_files``.
+
+    Returns ``{"errors": [...], "invalid_groups": [...]}``.
+    """
+    errors: list[str] = []
+    invalid_groups: list[dict] = []
     pipeline = cfg.get("pipeline", {})
     inp = cfg.get("input", {})
+
+    def _collect_invalid(dir_value: str):
+        scan = scan_directory(Path(dir_value))
+        invalid = [
+            r for r in (scan["fasta_results"] + scan["yaml_results"]) if not r["valid"]
+        ]
+        if invalid:
+            invalid_groups.append({
+                "dir": dir_value,
+                "scan_result": scan,
+                "invalid": invalid,
+                "valid_count": scan["valid_count"],
+            })
+        return scan
+
     if not pipeline.get("msa", False):
         # MSA off. ESMC/ESMFold2 can run straight from a FASTA (or YAML) dir;
         # Boltz/OpenFold3 can't build an MSA themselves, so they need prebuilt
@@ -101,6 +131,8 @@ def validate_launch_inputs(cfg: dict) -> list[str]:
         needs_yaml = pipeline.get("boltz") or pipeline.get("openfold")
         needs_seq = pipeline.get("esmc") or pipeline.get("esmfold")
         yaml_dir_value = inp.get("yaml_dir", "")
+        fasta_dir_value = inp.get("fasta_dir", "")
+        scanned: set[str] = set()
         if needs_yaml:
             if not yaml_dir_value:
                 errors.append(
@@ -109,42 +141,60 @@ def validate_launch_inputs(cfg: dict) -> list[str]:
                 )
             elif not Path(yaml_dir_value).is_dir():
                 errors.append(f"YAML input directory does not exist: {yaml_dir_value}")
-        if needs_seq and not (inp.get("fasta_dir") or yaml_dir_value):
-            errors.append(
-                "ESMC/ESMFold2 are enabled with MSA off, but neither "
-                "input.fasta_dir nor input.yaml_dir is set."
-            )
-        return errors
+            else:
+                _collect_invalid(yaml_dir_value)
+                scanned.add(yaml_dir_value)
+        if needs_seq:
+            # esmc/esmfold precedence: explicit yaml_dir, else the FASTA dir.
+            seq_src = yaml_dir_value or fasta_dir_value
+            if not seq_src:
+                errors.append(
+                    "ESMC/ESMFold2 are enabled with MSA off, but neither "
+                    "input.fasta_dir nor input.yaml_dir is set."
+                )
+            elif not Path(seq_src).is_dir():
+                errors.append(f"Input directory does not exist: {seq_src}")
+            elif seq_src not in scanned:
+                _collect_invalid(seq_src)
+        return {"errors": errors, "invalid_groups": invalid_groups}
 
-    fasta_dir_value = cfg.get("input", {}).get("fasta_dir", "")
+    fasta_dir_value = inp.get("fasta_dir", "")
     if not fasta_dir_value:
         errors.append("MSA is enabled but input.fasta_dir is not set.")
-        return errors
+        return {"errors": errors, "invalid_groups": invalid_groups}
 
     fasta_dir = Path(fasta_dir_value)
     if not fasta_dir.is_dir():
         errors.append(f"MSA input directory does not exist: {fasta_dir}")
-        return errors
+        return {"errors": errors, "invalid_groups": invalid_groups}
 
     scan_result = scan_directory(fasta_dir)
     if scan_result["file_type"] == "none":
         errors.append(f"No FASTA files found in {fasta_dir}.")
-        return errors
+        return {"errors": errors, "invalid_groups": invalid_groups}
 
     if scan_result["file_type"] != "fasta":
         errors.append(f"MSA input directory must contain only FASTA files: {fasta_dir}")
-        return errors
+        return {"errors": errors, "invalid_groups": invalid_groups}
 
     invalid_fastas = [r for r in scan_result["fasta_results"] if not r["valid"]]
     if invalid_fastas:
-        first = invalid_fastas[0]
-        for err in first["errors"]:
-            errors.append(f"{first['filename']}: {err}")
-        extra = len(invalid_fastas) - 1
-        if extra > 0:
-            errors.append(f"{extra} more FASTA file(s) failed validation.")
+        invalid_groups.append({
+            "dir": fasta_dir_value,
+            "scan_result": scan_result,
+            "invalid": invalid_fastas,
+            "valid_count": scan_result["valid_count"],
+        })
+    if scan_result["valid_count"] == 0:
+        # Every file failed — excluding them would leave nothing to run.
+        errors.append(f"No valid FASTA files in {fasta_dir} (all failed validation).")
 
-    return errors
+    return {"errors": errors, "invalid_groups": invalid_groups}
+
+
+def validate_launch_inputs(cfg: dict) -> list[str]:
+    """Fatal launch blockers only — back-compat wrapper over check_launch_inputs."""
+    return check_launch_inputs(cfg)["errors"]
 
 
 def snakemake_status(session: Session) -> tuple[bool, int | None, str | None]:

@@ -7,11 +7,16 @@ from pathlib import Path
 
 import yaml
 
-VALID_AAS = set("ACDEFGHIKLMNPQRSTVWY")
+# The 20 canonical amino acids plus U (selenocysteine). U is in the ESM-C /
+# ESMFold2 tokenizers and is accepted by Boltz/OpenFold/ColabFold, so the
+# pipeline can process it at every stage — allow it through the validator.
+VALID_AAS = set("ACDEFGHIKLMNPQRSTVWYU")
 # Only lowercase — the pipeline (chunk_fastas.py) only accepts lowercase extensions
 FASTA_EXTENSIONS = {".fasta", ".fa"}
 YAML_EXTENSIONS = {".yaml", ".yml"}
 MAX_SAFE_FASTA_HEADER_LEN = 180
+# Suffix appended to invalid input files so the Snakemake chunkers skip them.
+INVALID_SUFFIX = ".invalid"
 
 
 def fasta_header_rename_error(header: str) -> str | None:
@@ -276,3 +281,34 @@ def copy_valid_files(scan_result: dict, dest_dir: Path) -> int:
                 shutil.copy2(src, dest_dir / src.name)
                 copied += 1
     return copied
+
+
+def exclude_invalid_files(scan_result: dict) -> list[str]:
+    """Neutralize invalid input files in place so the pipeline skips them.
+
+    The Snakemake chunkers discover inputs by globbing for *.fasta/*.fa
+    (chunk_fastas, non-recursive) and *.yaml/*.yml/*.fasta/*.fa
+    (prepare_boltz_chunks / chunk_yamls_for_esm, recursive via rglob). Appending
+    INVALID_SUFFIX changes a file's extension so none of those globs match it,
+    while leaving it next to the valid inputs for inspection. Renaming in place
+    (rather than moving to a subdir) is the only safe option, because the YAML
+    chunkers recurse and would otherwise pick the file back up.
+
+    Returns the list of renamed paths.
+    """
+    renamed: list[str] = []
+    for results in (scan_result["fasta_results"], scan_result["yaml_results"]):
+        for r in results:
+            if r["valid"]:
+                continue
+            src = Path(r["path"])
+            if not src.exists():
+                continue
+            dest = src.with_name(src.name + INVALID_SUFFIX)
+            try:
+                src.rename(dest)
+                renamed.append(str(dest))
+            except OSError:
+                # Read-only source dir or a race — skip; caller reports the count.
+                pass
+    return renamed

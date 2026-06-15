@@ -12,10 +12,11 @@ from pipeline_ops import (
     load_config,
     run_cmd,
     launch_snakemake,
-    validate_launch_inputs,
+    check_launch_inputs,
     snakemake_status,
     stop_snakemake,
 )
+from validate import exclude_invalid_files
 from monitoring import format_elapsed, read_log_tail
 
 
@@ -86,11 +87,58 @@ def render_run_tab(session: Session):
 
     # Launch / Rerun buttons
     st.subheader("Launch Pipeline")
-    launch_errors = validate_launch_inputs(cfg)
+    check = check_launch_inputs(cfg)
+    launch_errors = check["errors"]
+    invalid_groups = check["invalid_groups"]
     if launch_errors:
         st.error("Launch blocked by input validation:")
         for err in launch_errors:
             st.text(f"- {err}")
+
+    # Spot per-file validation failures. These would crash the chunkers, so the
+    # launch stays blocked until they're excluded — but one click neutralizes
+    # them (renamed with .invalid) and lets the valid remainder run.
+    if invalid_groups:
+        total_invalid = sum(len(g["invalid"]) for g in invalid_groups)
+        total_valid = sum(g["valid_count"] for g in invalid_groups)
+        st.warning(
+            f"{total_invalid} input file(s) failed validation and would crash the "
+            f"pipeline. Exclude them to process only the {total_valid} valid file(s)."
+        )
+        for g in invalid_groups:
+            with st.expander(
+                f"{len(g['invalid'])} invalid file(s) in `{g['dir']}` "
+                f"— {g['valid_count']} valid",
+                expanded=True,
+            ):
+                rows = [{
+                    "File": r["filename"],
+                    "Errors": "; ".join(r["errors"]) if r["errors"] else "",
+                } for r in g["invalid"]]
+                st.dataframe(rows, width="stretch", hide_index=True)
+        if st.button(
+            f"Exclude {total_invalid} invalid file(s) and continue",
+            type="secondary",
+            width="stretch",
+            key="exclude_invalid",
+        ):
+            renamed = 0
+            for g in invalid_groups:
+                renamed += len(exclude_invalid_files(g["scan_result"]))
+            skipped = total_invalid - renamed
+            msg = (
+                f"Excluded {renamed} file(s) (renamed with a .invalid suffix); "
+                "they will be skipped by the pipeline."
+            )
+            if skipped:
+                msg += (
+                    f" {skipped} could not be renamed (read-only directory?) — "
+                    "remove them manually."
+                )
+            st.success(msg)
+            st.rerun()
+
+    block_launch = bool(launch_errors) or bool(invalid_groups)
     if running:
         st.warning("Snakemake is already running. Stop it above before launching a new run.")
     else:
@@ -100,7 +148,7 @@ def render_run_tab(session: Session):
             if st.button(
                 "Launch",
                 type="primary",
-                disabled=(not confirm) or bool(launch_errors),
+                disabled=(not confirm) or block_launch,
                 width="stretch",
             ):
                 new_pid = launch_snakemake(session)
@@ -110,7 +158,7 @@ def render_run_tab(session: Session):
             confirm_rerun = st.checkbox("Resume incomplete jobs")
             if st.button(
                 "Rerun Incomplete",
-                disabled=(not confirm_rerun) or bool(launch_errors),
+                disabled=(not confirm_rerun) or block_launch,
                 width="stretch",
             ):
                 new_pid = launch_snakemake(session, ["--rerun-incomplete"])
