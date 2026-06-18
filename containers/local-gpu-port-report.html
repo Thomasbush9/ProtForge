@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProtForge — Porting to Personal GPUs (Review &amp; Plan)</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7eaf0; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#6ea8fe; --green:#5fd08a; --amber:#f0c36d; --red:#f08a8a;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 28px 120px;}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px;}
+  h1{font-size:30px;margin:0 0 8px;letter-spacing:-.3px;}
+  .sub{color:var(--muted);font-size:15px;margin:0;}
+  .meta{margin-top:14px;color:var(--muted);font-size:13px;}
+  h2{font-size:22px;margin:46px 0 12px;padding-top:10px;letter-spacing:-.2px;}
+  h3{font-size:17px;margin:26px 0 8px;color:#cdd5e2;}
+  p{margin:10px 0;}
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  code{font-family:var(--mono);font-size:13.5px;background:#23283340;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#cfe0ff;}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;color:#d7dee9;}
+  pre code{background:none;border:none;padding:0;color:inherit;}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;}
+  .tldr{background:linear-gradient(180deg,#1a2230,#171a21);border:1px solid #2c3a52;}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px;}
+  tr:last-child td{border-bottom:none;}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;
+    letter-spacing:.3px;vertical-align:middle;}
+  .b-ok{background:#163a26;color:var(--green);border:1px solid #245c3c;}
+  .b-warn{background:#3a3216;color:var(--amber);border:1px solid #5c4f24;}
+  .b-block{background:#3a1616;color:var(--red);border:1px solid #5c2424;}
+  .b-info{background:#16293a;color:var(--accent);border:1px solid #24435c;}
+  ul,ol{margin:10px 0;padding-left:22px;}
+  li{margin:5px 0;}
+  .toc{columns:2;column-gap:30px;font-size:14.5px;}
+  .toc a{display:block;padding:3px 0;color:#bcc6d6;}
+  .fileref{font-family:var(--mono);font-size:12.5px;color:var(--amber);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:720px){.grid,.toc{grid-template-columns:1fr;columns:1;}}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0;}
+  .kpi .card{flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:14px;}
+  .kpi .n{font-size:24px;font-weight:700;}
+  .kpi .l{font-size:12.5px;color:var(--muted);}
+  hr{border:none;border-top:1px solid var(--line);margin:40px 0;}
+  .small{font-size:13px;color:var(--muted);}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  blockquote{border-left:3px solid var(--accent);margin:14px 0;padding:4px 16px;color:#c6cfdd;background:#1a1e27;border-radius:0 8px 8px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>ProtForge → Personal GPU</h1>
+  <p class="sub">Review of the current SLURM-coupled, container-based pipeline and a concrete plan to make it run on a personal NVIDIA GPU machine.</p>
+  <p class="meta">Branch <code>singularity</code> · scope: <code>containers/</code> + Snakemake orchestration + webapp · generated 2026-06-15</p>
+</header>
+
+<div class="panel tldr">
+  <h2 style="margin-top:0">TL;DR — the verdict</h2>
+  <p><strong>Good news: the hard part is already done.</strong> Every GPU stage already runs <em>inside a container</em> via <code>singularity exec --nv … &lt;image&gt;</code>, and those shell commands are <strong>executor-agnostic</strong> — they do not care whether Snakemake submits them through SLURM or runs them as plain local processes. You are roughly <strong>80% of the way</strong> to a personal-GPU build.</p>
+  <p>What actually ties the pipeline to a cluster is a thin, well-localized layer: (1) the <em>only</em> Snakemake profile is <code>profiles/slurm/</code>; (2) every GPU rule hardcodes <code>CUDA_VISIBLE_DEVICES=0</code>, which is correct only because SLURM hands each job an isolated single-GPU cgroup; (3) the webapp hardcodes <code>--profile profiles/slurm/</code>; and (4) the data model assumes cluster-shared storage for a <strong>~700&nbsp;GB MSA database</strong>.</p>
+  <p>None of these are deep. The two items that take real thought are <strong>multi-GPU scheduling</strong> (SLURM was doing your GPU allocation for free) and the <strong>700&nbsp;GB MSA DB</strong> (the answer for personal machines is to use the remote ColabFold MSA server instead of hosting it).</p>
+  <div class="kpi">
+    <div class="card"><div class="n">6</div><div class="l">stages already containerized (.def files)</div></div>
+    <div class="card"><div class="n">1</div><div class="l">new Snakemake profile needed (<code>profiles/local/</code>)</div></div>
+    <div class="card"><div class="n">5</div><div class="l">rules hardcoding <code>CUDA_VISIBLE_DEVICES=0</code></div></div>
+    <div class="card"><div class="n">~1 day</div><div class="l">to a working single-GPU run (MVP)</div></div>
+  </div>
+</div>
+
+<h2 id="toc">Contents</h2>
+<div class="toc panel">
+  <a href="#how">1 · How the pipeline works today</a>
+  <a href="#portable">2 · What's already portable</a>
+  <a href="#coupling">3 · What couples it to SLURM</a>
+  <a href="#stages">4 · Per-stage container status</a>
+  <a href="#data">5 · The data &amp; weights problem</a>
+  <a href="#runtime">6 · Container runtime: Apptainer vs Docker</a>
+  <a href="#gpu">7 · GPU scheduling without SLURM</a>
+  <a href="#gaps">8 · Doc/build gaps found in review</a>
+  <a href="#plan">9 · The work plan (phased)</a>
+  <a href="#risks">10 · Risks &amp; open questions</a>
+</div>
+
+<h2 id="how">1 · How the pipeline works today</h2>
+<p>ProtForge is a Snakemake workflow that chains protein-prediction stages: <strong>MSA</strong> (ColabFold/MMseqs2) → <strong>Boltz</strong> (structure), with <strong>ESM-C</strong> (embeddings), <strong>ESMFold2</strong>, and <strong>OpenFold3</strong> running in parallel off the same inputs. Each GPU stage is a <code>.smk</code> rule whose shell block wraps the stage's tool in a container call. A representative example (ESM-C, <span class="fileref">workflow/rules/esmc.smk:160</span>):</p>
+<pre><code>{params.runtime} exec --nv --cleanenv \
+    --env HF_HOME=/models/hf  --env HF_HUB_OFFLINE=1 \
+    -B {params.cache_dir}:/models/hf:ro \
+    -B {input.chunk_dir}:{input.chunk_dir}:ro \
+    -B {params.output_dir}:{params.output_dir} \
+    {params.sif} \
+    python /opt/run_batch_esmc.py --cache /models/hf --size {wildcards.size} …</code></pre>
+<p>The image path comes from config (<code>containers.esmc</code>, or the shared <code>containers.gpu</code> fallback) via <code>container_sif()</code> in the <span class="fileref">Snakefile:160</span>. Model weights and databases are <strong>never baked into the image</strong> — they are bind-mounted at runtime. Job submission goes through the SLURM executor profile (<span class="fileref">profiles/slurm/config.yaml</span>), and the webapp shells out to <code>snakemake --profile profiles/slurm/</code>.</p>
+
+<h2 id="portable">2 · What's already portable <span class="badge b-ok">low effort</span></h2>
+<p>These design choices mean a local port reuses most of the existing machinery untouched:</p>
+<table>
+  <tr><th>Already done</th><th>Why it transfers to a personal GPU</th></tr>
+  <tr><td>All 6 stages have container recipes</td><td>The same images run anywhere an OCI/Apptainer runtime + NVIDIA driver exist — no per-stage reinstall.</td></tr>
+  <tr><td>Container call is in the rule's shell block</td><td><code>singularity exec --nv</code> is identical under the SLURM executor and the local executor. The rule body needs <strong>no change</strong>.</td></tr>
+  <tr><td>Runtime is configurable</td><td><code>containers.runtime: auto|singularity|apptainer</code> already exists (<span class="fileref">Snakefile:142</span>). A <code>docker</code> option would slot in here.</td></tr>
+  <tr><td>Weights/DBs are bind-mounted, not baked</td><td>Point the same binds at a local disk instead of <code>/n/holylfs06/…</code>. Pure config.</td></tr>
+  <tr><td>Stage toggles, chunking, binning, sentinels</td><td>All pure-Python / Snakemake graph logic — executor-independent.</td></tr>
+  <tr><td>Offline HF cache pattern (<code>HF_HUB_OFFLINE=1</code>)</td><td>Same <code>scripts/download_models.py</code> populates a local cache once, then runs offline.</td></tr>
+</table>
+
+<h2 id="coupling">3 · What couples it to SLURM</h2>
+<p>Four things, each narrow:</p>
+
+<h3>3.1 · Only a SLURM execution profile exists <span class="badge b-warn">core change</span></h3>
+<p><span class="fileref">profiles/slurm/config.yaml:6</span> sets <code>executor: slurm</code> and <code>jobs: 100</code>. There is no <code>profiles/local/</code> — the README explicitly lists it under <em>"Not yet covered (deferred)."</em> The good news: the per-rule <code>slurm_partition</code> / <code>slurm_account</code> / <code>slurm_extra</code> resource fields are <strong>silently ignored</strong> by Snakemake's local executor, so adding a local profile needs <em>almost no rule edits</em>.</p>
+
+<h3>3.2 · Every GPU rule hardcodes <code>CUDA_VISIBLE_DEVICES=0</code> <span class="badge b-block">multi-GPU blocker</span></h3>
+<p>Present in <span class="fileref">msa.smk:95</span>, <span class="fileref">boltz.smk:160</span>, <span class="fileref">esmc.smk:141</span>, <span class="fileref">esmc_sae.smk:126</span>, <span class="fileref">esmfold.smk:126</span>. Under SLURM this is correct: each job runs in a cgroup that exposes <em>exactly one</em> GPU, so "device 0" means "the GPU SLURM gave me." On a personal multi-GPU box with no cgroup isolation, <strong>every concurrent job sees all GPUs and pins to device 0</strong> — they pile onto one card (OOM / serialization) while the others sit idle. On a <em>single-GPU</em> machine this is a non-issue and works as-is. See §7 for the fix.</p>
+
+<h3>3.3 · The webapp hardcodes the SLURM profile <span class="badge b-warn">webapp change</span></h3>
+<p><code>launch_snakemake()</code> at <span class="fileref">webapp/pipeline_ops.py:70</span> and the dry-run button at <span class="fileref">webapp/run_tab.py:77</span> both hardcode <code>--profile profiles/slurm/</code>. Monitoring reads <code>.snakemake/slurm_logs/</code> and uses <code>squeue</code> (<span class="fileref">webapp/monitoring.py:124</span>). The webapp needs a profile-selection knob and a local (non-<code>squeue</code>) monitoring path.</p>
+
+<h3>3.4 · Data model assumes cluster shared storage <span class="badge b-block">data blocker</span></h3>
+<p>The default binds point at <code>/n/holylfs06/LABS/kempner_shared/…</code> — a ~700&nbsp;GB ColabFold DB, ~5&nbsp;GB Boltz weights, HF caches. The bind <em>mechanism</em> ports trivially; the <strong>700&nbsp;GB MSA database</strong> is the real obstacle for personal hardware. See §5.</p>
+
+<h2 id="stages">4 · Per-stage container status</h2>
+<p>Current state is <strong>per-stage images</strong> (not the single fat image the README describes — see §8). Each is a separate <code>.def</code>:</p>
+<table>
+  <tr><th>Stage / def</th><th>Base image</th><th>GPU</th><th>Heavy data dependency</th><th>Local-port note</th></tr>
+  <tr>
+    <td><code>boltz.def</code></td><td>python:3.12-slim + torch cu128</td>
+    <td><span class="badge b-info">yes</span></td><td>Boltz weights ~5&nbsp;GB</td>
+    <td><span class="badge b-ok">easy</span> small weights; can use remote MSA server.</td>
+  </tr>
+  <tr>
+    <td><code>msa.def</code></td><td>python:3.12-slim + mmseqs-linux-gpu + ColabFold</td>
+    <td><span class="badge b-info">yes</span></td><td><strong>ColabFold DB ~700&nbsp;GB</strong></td>
+    <td><span class="badge b-block">hard</span> DB is the blocker → switch to remote MSA (§5).</td>
+  </tr>
+  <tr>
+    <td><code>esmfold_cu.def</code><br><span class="small">(serves ESM-C + ESMFold2)</span></td>
+    <td>nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04</td>
+    <td><span class="badge b-info">yes</span></td><td>HF cache (ESM-C / ESMFold2 weights)</td>
+    <td><span class="badge b-warn">medium</span> pinned torch 2.9.1 + FA 2.8.3 + xformers — needs a host driver new enough for CUDA 12.8.</td>
+  </tr>
+  <tr>
+    <td><code>openfold.def</code></td><td>openfoldconsortium/openfold3:stable</td>
+    <td><span class="badge b-info">multi</span></td><td>OpenFold weights + CCD cache</td>
+    <td><span class="badge b-warn">medium</span> already does multi-GPU via Lightning, but currently driven by <code>--gpus-per-node</code> (SLURM).</td>
+  </tr>
+  <tr>
+    <td><code>template.def</code></td><td>ubuntu:22.04</td><td>—</td><td>—</td>
+    <td>skeleton only; not a real stage.</td>
+  </tr>
+</table>
+<p class="small">Driver requirement: the ESM/ESMFold image targets <strong>CUDA 12.8</strong>. A personal box needs an NVIDIA driver ≥ R535-ish (CUDA 12.8 runtime via the torch wheel + driver injected by <code>--nv</code>). Older laptop GPUs / old drivers will fail at step 2 of the smoke test.</p>
+
+<h2 id="data">5 · The data &amp; weights problem</h2>
+<p>This is the most consequential design decision for personal use. Sizes:</p>
+<table>
+  <tr><th>Asset</th><th>Size</th><th>Personal-machine strategy</th></tr>
+  <tr><td>ColabFold MSA DB</td><td><strong>~700&nbsp;GB</strong></td><td><span class="badge b-block">don't host it</span> Use the <em>remote</em> ColabFold MSA server (<code>--use-msa-server</code> / Boltz's MSA-server mode). Public MMseqs2 API does the alignment; you keep only inputs. This single switch removes the largest barrier.</td></tr>
+  <tr><td>Boltz weights</td><td>~5&nbsp;GB</td><td><span class="badge b-ok">download once</span> to local disk, bind-mount as today.</td></tr>
+  <tr><td>ESM-C / ESMFold2 HF cache</td><td>~2–30&nbsp;GB (size-dependent; 6B is large)</td><td><span class="badge b-ok">existing path works</span> <code>scripts/download_models.py</code> + <code>containers/download_scripts/esm_models.sh</code> already populate an offline cache. Recommend 600M/300M on personal GPUs; 6B needs ≥40&nbsp;GB VRAM.</td></tr>
+  <tr><td>OpenFold weights + CCD</td><td>few GB</td><td><span class="badge b-ok">download once</span>, bind-mount.</td></tr>
+</table>
+<blockquote>Recommendation: ship a <strong>"local / remote-MSA" config preset</strong> where MSA runs against the public server and only Boltz/ESM weights are downloaded locally (a few GB total). That turns "need a 700&nbsp;GB filesystem" into "need ~10&nbsp;GB and an internet connection."</blockquote>
+
+<h2 id="runtime">6 · Container runtime: Apptainer vs Docker</h2>
+<p>The repo is <strong>Singularity/Apptainer-only</strong> (every rule emits <code>singularity exec --nv … -B host:ctr:ro</code>). Personal GPU users split into two camps:</p>
+<div class="grid">
+  <div class="panel">
+    <h3 style="margin-top:0">Path A — install Apptainer <span class="badge b-ok">least code</span></h3>
+    <p>On Linux, Apptainer is a one-line install and the existing rules work unchanged. SIFs are single files, no daemon, rootless. <strong>Recommended default</strong> for a research library — zero code change, just a docs page and prebuilt SIFs to <code>pull</code>.</p>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Path B — add a Docker dispatch <span class="badge b-warn">more reach</span></h3>
+    <p>Most personal GPU users already have Docker + nvidia-container-toolkit. Adding a <code>docker</code> runtime means translating <code>exec --nv -B a:b:ro</code> → <code>run --gpus all -v a:b:ro</code>. Localized to one helper, but every rule's bind/exec string is hand-rolled today, so it touches all 6 rules unless refactored behind a <code>container_cmd()</code> helper first.</p>
+  </div>
+</div>
+<p><strong>Platform reality check:</strong> these are CUDA images. "Personal GPU" effectively means <strong>a Linux machine with an NVIDIA card</strong> (or a cloud GPU box). macOS / Apple Silicon cannot run them at all — no CUDA. Worth stating loudly in the local quickstart so Mac users don't burn a day.</p>
+
+<h2 id="gpu">7 · GPU scheduling without SLURM</h2>
+<p>SLURM was silently doing your GPU allocation. Replacing it has a tiered answer:</p>
+<table>
+  <tr><th>Target machine</th><th>Approach</th><th>Effort</th></tr>
+  <tr>
+    <td><strong>Single GPU</strong></td>
+    <td>Works as-is. <code>CUDA_VISIBLE_DEVICES=0</code> is the one card. Just cap Snakemake to one GPU job at a time so two jobs don't share VRAM: set a <code>gpu=1</code> resource on GPU rules and run with <code>--resources gpu=1</code>.</td>
+    <td><span class="badge b-ok">trivial</span></td>
+  </tr>
+  <tr>
+    <td><strong>Multi-GPU, simple</strong></td>
+    <td>Serialize GPU work to one card (waste the rest) by capping <code>--resources gpu=1</code>. Correct, just not fast. Good enough for an MVP.</td>
+    <td><span class="badge b-ok">trivial</span></td>
+  </tr>
+  <tr>
+    <td><strong>Multi-GPU, parallel</strong></td>
+    <td>Parametrize the device: replace <code>export CUDA_VISIBLE_DEVICES=0</code> with a value resolved per-job. Snakemake has no native GPU-ID assignment, so use a tiny wrapper that claims a free device (lockfile / round-robin on a <code>gpu</code> resource of size N), then exports it before the <code>exec --nv</code>. Each rule changes one line.</td>
+    <td><span class="badge b-warn">~1–2 days</span></td>
+  </tr>
+</table>
+<p class="small">OpenFold is the exception — it already batches across GPUs via Lightning DDP using <code>gpus_per_job</code>, but it's wired to <code>--gpus-per-node</code> (SLURM). For local multi-GPU it would instead just set <code>CUDA_VISIBLE_DEVICES</code> to the device list and let Lightning use them.</p>
+
+<h2 id="gaps">8 · Doc/build gaps found during review</h2>
+<p>Two things the docs claim that the repo doesn't currently deliver — worth reconciling before shipping, since they'll bite a first-time external user immediately:</p>
+<ul>
+  <li><span class="badge b-warn">stale</span> <code>build.sh</code> builds from <code>containers/protforge-gpu.def</code> (<span class="fileref">build.sh:44</span>), and the README describes a <em>"single Singularity image bundling all GPU-stage tools."</em> <strong>That combined def does not exist</strong> — only the per-stage defs (<code>boltz/msa/esmfold_cu/openfold</code>) are present. So <code>bash containers/build.sh</code> (default mode) fails today. The real, working artifacts are the per-stage <code>test/*_test_image.sh</code> scripts.</li>
+  <li><span class="badge b-warn">stale</span> README + TESTING reference <code>containers/test/smoke.sh</code> as the post-build check; <strong>that file is absent</strong> (only <code>smoke.fasta</code> and per-stage test scripts exist).</li>
+</ul>
+<blockquote>Decide the image story before the local port: either (a) build the single <code>protforge-gpu.def</code> the docs assume, or (b) embrace per-stage images and update <code>build.sh</code>/README to match. For a <em>shippable library</em>, (b) + <strong>publishing prebuilt images to a registry (GHCR)</strong> so users <code>pull</code> instead of building a ~15&nbsp;GB image is the friendlier path.</blockquote>
+
+<h2 id="plan">9 · The work plan (phased)</h2>
+
+<h3>Phase 0 — Single-GPU proof of life <span class="badge b-ok">~1 day</span></h3>
+<ol>
+  <li>Add <code>profiles/local/config.yaml</code>: drop <code>executor: slurm</code>, set <code>jobs</code> to local cores, <code>default-resources</code> without SLURM fields, and a <code>gpu</code> resource cap.</li>
+  <li>Add a <strong>local config preset</strong> that sets MSA to the <em>remote</em> server (<code>--use-msa-server</code>), dodging the 700&nbsp;GB DB, and points <code>boltz.cache_dir</code> / <code>esmc.cache_dir</code> at local disk.</li>
+  <li>Build or pull the Boltz + ESM images on the Linux GPU box (install Apptainer).</li>
+  <li>Run the ubiquitin E2E (TESTING.md §2) with <code>--profile profiles/local/</code>. <strong>Exit criterion:</strong> MSA→Boltz→ESM-C→ESMFold on one sequence, zero SLURM.</li>
+</ol>
+
+<h3>Phase 1 — Multi-GPU + robustness <span class="badge b-warn">~2–3 days</span></h3>
+<ol>
+  <li>Parametrize <code>CUDA_VISIBLE_DEVICES</code> across the 5 GPU rules (§7) + add the device-claim wrapper and a <code>gpu</code> resource.</li>
+  <li>Reconcile the image build (§8): pick per-stage vs combined, fix <code>build.sh</code>, restore/author <code>smoke.sh</code>.</li>
+  <li>Local fallback for OpenFold's <code>--gpus-per-node</code> path.</li>
+</ol>
+
+<h3>Phase 2 — UX &amp; distribution (ship as a library) <span class="badge b-info">~1 week</span></h3>
+<ol>
+  <li>Make the webapp profile-selectable (<span class="fileref">pipeline_ops.py:70</span>, <span class="fileref">run_tab.py:77</span>) + a local monitoring path that doesn't call <code>squeue</code> (<span class="fileref">monitoring.py:124</span>).</li>
+  <li>Optional <code>docker</code> runtime in <code>container_cmd()</code> for the no-Apptainer crowd (§6 Path B).</li>
+  <li>Publish prebuilt images to GHCR + CI; users <code>pull</code> instead of build.</li>
+  <li>A <code>docs/LOCAL_QUICKSTART.md</code>: Linux+NVIDIA requirement, driver/CUDA-12.8 check, remote-MSA preset, ~10&nbsp;GB weight download, one command to run.</li>
+</ol>
+
+<h2 id="risks">10 · Risks &amp; open questions</h2>
+<ul>
+  <li><strong>Driver/CUDA floor.</strong> The ESM image needs CUDA 12.8 → a reasonably new NVIDIA driver. Old GPUs (e.g. pre-Ampere, &lt;16&nbsp;GB VRAM) will struggle with ESMFold2/Boltz at production settings. Document a minimum (suggest ≥ RTX 3090 / 24&nbsp;GB; 6B model needs ≥ 40&nbsp;GB).</li>
+  <li><strong>Remote MSA privacy/throughput.</strong> The public MMseqs2 server is rate-limited and sends sequences off-box. Fine for academic/public work; for proprietary sequences, a personal user still needs a local DB (or a smaller UniRef subset).</li>
+  <li><strong>Snakemake GPU semantics.</strong> Snakemake doesn't assign GPU IDs natively — the device-claim wrapper is custom code and the part most likely to have edge cases (crashed-job lock cleanup, etc.).</li>
+  <li><strong>Boltz remote-MSA parity.</strong> Confirm Boltz's MSA-server mode produces equivalent inputs to the local ColabFold path your current configs assume (header/format differences — note the repo already ships <code>scripts/fix_a3m_headers.py</code> / <code>fix_yaml_msa_paths.py</code>, a hint this is fiddly).</li>
+  <li><strong>macOS users.</strong> No CUDA path at all. The honest answer for Mac is "use a cloud Linux GPU box" — set expectations up front.</li>
+</ul>
+
+<hr>
+<p class="small">Sources reviewed: <code>containers/{README,TESTING}.md</code>, <code>containers/build.sh</code>, all 5 <code>.def</code> files, <code>Snakefile</code>, <code>profiles/slurm/config.yaml</code>, <code>config.template.yaml</code>, <code>workflow/rules/*.smk</code>, <code>workflow/scripts/snake_helpers.py</code>, and the webapp dispatch (<code>pipeline_ops.py</code>, <code>run_tab.py</code>, <code>monitoring.py</code>). Line references are to the working tree on branch <code>singularity</code> as of 2026-06-15.</p>
+
+</div>
+</body>
+</html>

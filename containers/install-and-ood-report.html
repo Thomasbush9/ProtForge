@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProtForge — Easier Install &amp; Open OnDemand (Review &amp; Options)</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7eaf0; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#6ea8fe; --green:#5fd08a; --amber:#f0c36d; --red:#f08a8a;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 28px 120px;}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px;}
+  h1{font-size:30px;margin:0 0 8px;letter-spacing:-.3px;}
+  .sub{color:var(--muted);font-size:15px;margin:0;}
+  .meta{margin-top:14px;color:var(--muted);font-size:13px;}
+  h2{font-size:22px;margin:46px 0 12px;padding-top:10px;letter-spacing:-.2px;}
+  h3{font-size:17px;margin:26px 0 8px;color:#cdd5e2;}
+  p{margin:10px 0;}
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  code{font-family:var(--mono);font-size:13.5px;background:#23283340;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#cfe0ff;}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;color:#d7dee9;}
+  pre code{background:none;border:none;padding:0;color:inherit;}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;}
+  .tldr{background:linear-gradient(180deg,#1a2230,#171a21);border:1px solid #2c3a52;}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px;}
+  tr:last-child td{border-bottom:none;}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;
+    letter-spacing:.3px;vertical-align:middle;}
+  .b-ok{background:#163a26;color:var(--green);border:1px solid #245c3c;}
+  .b-warn{background:#3a3216;color:var(--amber);border:1px solid #5c4f24;}
+  .b-block{background:#3a1616;color:var(--red);border:1px solid #5c2424;}
+  .b-info{background:#16293a;color:var(--accent);border:1px solid #24435c;}
+  ul,ol{margin:10px 0;padding-left:22px;}
+  li{margin:5px 0;}
+  .toc{columns:2;column-gap:30px;font-size:14.5px;}
+  .toc a{display:block;padding:3px 0;color:#bcc6d6;}
+  .fileref{font-family:var(--mono);font-size:12.5px;color:var(--amber);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:720px){.grid,.toc{grid-template-columns:1fr;columns:1;}}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0;}
+  .kpi .card{flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:14px;}
+  .kpi .n{font-size:24px;font-weight:700;}
+  .kpi .l{font-size:12.5px;color:var(--muted);}
+  hr{border:none;border-top:1px solid var(--line);margin:40px 0;}
+  .small{font-size:13px;color:var(--muted);}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  blockquote{border-left:3px solid var(--accent);margin:14px 0;padding:4px 16px;color:#c6cfdd;background:#1a1e27;border-radius:0 8px 8px 0;}
+  .rec{border-left:3px solid var(--green);background:#15241b;}
+  .num{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;
+    background:#24435c;color:#cfe0ff;font-weight:700;font-size:13px;margin-right:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Easier installation &amp; Open OnDemand for ProtForge</h1>
+  <p class="sub">Review of the current container / install model, options for consolidation, and a concrete plan for an Open OnDemand front door on the Kempner / FASRC cluster.</p>
+  <div class="meta">
+    Reviewed branch <code>singularity</code> @ <code>943666c</code> &middot; cross-checked <code>origin/containers</code> &middot; 2026-06-16<br>
+    Sources: <span class="fileref">containers/build.sh</span>, <span class="fileref">containers/*.def</span>, <span class="fileref">docs/CLUSTER_SETUP.md</span>, <span class="fileref">docs/CONTAINERS.md</span>, <span class="fileref">docs/WEBAPP.md</span>, <span class="fileref">config.template.yaml</span>, <span class="fileref">origin/containers:setup.sh</span>
+  </div>
+</header>
+
+<div class="panel tldr">
+  <h3 style="margin-top:0">TL;DR</h3>
+  <p class="small" style="margin-top:0"><b>Decision (made):</b> per-stage containers stay. Modularity — updating or swapping one model/module without touching the rest — is the explicit goal, and it's the right call. The consolidated SIF is <i>not</i> the target; this report is about making the many-container install easy without giving that modularity up.</p>
+  <ul>
+    <li><b>Per-stage is the correct design here, and the repo already proves why.</b> The old consolidated <code>protforge-gpu.def</code> had to force <code>numpy&gt;=2.0.2,&lt;2.1</code> to satisfy colabfold vs numba vs boltz <i>simultaneously</i>, plus hand-pin a cuequivariance wheel. That cross-tool constraint-solving is exactly the coupling you avoid by keeping one image per stage. <span class="badge b-ok">decision validated</span></li>
+    <li><b>The real blocker is drift, not container shape.</b> The code on <code>singularity</code> is per-stage (<code>msa.def</code>, <code>boltz.def</code>, <code>esmfold_cu.def</code>, <code>openfold.def</code>), but <code>build.sh</code> + <code>docs/CLUSTER_SETUP.md</code> + <code>README.md</code> still describe the old single-SIF (<code>protforge-gpu.def</code>, deleted in <code>a38fa71</code>). So <code>bash containers/build.sh</code> fails today. Fix the docs/build to match the per-stage reality. <span class="badge b-block">drift</span></li>
+    <li><b>"Easy install" for many containers = tooling around them, not merging them.</b> A <code>build_all.sh</code> that loops the def files, GHCR per-image pulls, and one <code>install.sh</code> wrapper. Optional shared base layer to cut the duplicated torch/CUDA GB — but only if you accept that a base bump rebuilds children (mild coupling).</li>
+    <li><b>"One install.sh" is still the right front door</b> — it just orchestrates N per-stage builds/pulls + weights + host venv + config, instead of one. Most pieces exist (<code>build.sh</code>, <code>download_models.py</code>, <code>requirements-host.txt</code>, smoke test).</li>
+    <li><b>Open OnDemand:</b> <code>docs/WEBAPP.md</code> documents it well, but <b>no OOD app exists yet</b>. Deliverable is a ~5-file OOD "interactive app" that allocates a node and runs <code>streamlit run webapp/app.py</code> — one click, no SSH tunnel. ~1 day; needs the FASRC sandbox path. Independent of the container shape.</li>
+  </ul>
+</div>
+
+<div class="panel">
+  <div class="toc">
+    <a href="#state">1. Current state (what's actually there)</a>
+    <a href="#drift">2. The branch-drift problem</a>
+    <a href="#combine">3. Can we combine the containers?</a>
+    <a href="#install">4. One install.sh — proposal</a>
+    <a href="#ood">5. Open OnDemand integration</a>
+    <a href="#risks">6. Risks &amp; open questions</a>
+    <a href="#next">7. Recommended next steps</a>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="state">1. Current state — what's actually there</h2>
+
+<p>ProtForge runs a 4-stage GPU pipeline (MSA → Boltz → ESM/ESMFold → ES) orchestrated by Snakemake, with a Streamlit webapp as the front-end. The design splits cleanly into two layers:</p>
+
+<div class="grid">
+  <div class="panel">
+    <h3 style="margin-top:0">Host (orchestrator)</h3>
+    <p class="small">Small Python venv from <code>requirements-host.txt</code>. Runs Snakemake + the SLURM executor plugin + the Streamlit webapp. Calls <code>sbatch</code>/<code>squeue</code>/<code>sacct</code> natively. <b>Not</b> containerized — by design.</p>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Compute (per stage)</h3>
+    <p class="small">Each SLURM job runs <code>singularity exec --nv … &lt;sif&gt; python &lt;stage_script&gt;</code>. Big databases and model weights are <b>bind-mounted at runtime</b>, never baked into the image.</p>
+  </div>
+</div>
+
+<p>The "orchestrator on host, compute in container" split is deliberate and correct — binding the Munge socket / <code>libslurm</code> / <code>/etc/slurm</code> into a container to run <code>sbatch</code> is the brittle path everyone avoids (GATK / Nextflow / Snakemake-on-HPC all do orchestrator-on-host). <b>Keep this.</b> The install pain is entirely on the compute-container + weights side.</p>
+
+<h3>What gets bind-mounted (not in any image)</h3>
+<table>
+  <tr><th>Asset</th><th>Size</th><th>Mount point</th></tr>
+  <tr><td>ColabFold MSA databases</td><td>~700 GB</td><td><code>/data/colabfold_db</code></td></tr>
+  <tr><td>Boltz checkpoint</td><td>~5 GB</td><td><code>/data/boltz_db</code></td></tr>
+  <tr><td>ESM-C / ESMFold HF cache</td><td>~10 GB</td><td><code>/models/hf</code></td></tr>
+</table>
+<p class="small">These are shared on Kempner already, so users never download the 700 GB. Good. This is why the images themselves are "just tooling" and stay relatively small.</p>
+
+<!-- ============================================================= -->
+<h2 id="drift">2. The branch-drift problem <span class="badge b-block">blocker</span></h2>
+
+<p>This is the single biggest thing standing between you and "easy install." The <b>code</b> is per-stage (your chosen design); the <b>docs and build script</b> still describe the abandoned single-SIF. The fix is one-directional: bring the prose and <code>build.sh</code> in line with the per-stage code — <i>not</i> resurrect the single SIF.</p>
+
+<table>
+  <tr><th>&nbsp;</th><th><code>origin/containers</code> (older, 2026-05-29)</th><th><code>singularity</code> (current, 2026-06-15)</th></tr>
+  <tr><td><b>Container model</b></td><td>Single consolidated SIF</td><td>Per-stage SIFs</td></tr>
+  <tr><td><b>Def files</b></td><td><code>protforge-gpu.def</code> (one)</td><td><code>msa.def</code>, <code>boltz.def</code>, <code>esmfold_cu.def</code>, <code>openfold.def</code></td></tr>
+  <tr><td><b>CUDA / torch</b></td><td>ubuntu:22.04 + torch <code>cu126</code></td><td>mixed: <code>cu128</code>, torch 2.9.1, ubuntu 24.04, vendor openfold3 base</td></tr>
+  <tr><td><b>OpenFold3</b></td><td>not included</td><td>added (<code>openfold.def</code>)</td></tr>
+  <tr><td><b><code>setup.sh</code></b></td><td>present (conda + config generator)</td><td><b>deleted</b></td></tr>
+  <tr><td><b>Docs (<code>CLUSTER_SETUP.md</code>, <code>README.md</code>)</b></td><td>describe single-SIF</td><td><b>still describe single-SIF</b> (stale)</td></tr>
+  <tr><td><b><code>config.template.yaml</code></b></td><td>—</td><td>5-field per-stage schema (<code>colabfold/boltz/esmc/esmfold/openfold</code>)</td></tr>
+</table>
+
+<p>Concretely, on the branch you're sitting on right now:</p>
+<ul>
+  <li><span class="badge b-block">broken</span> <code>containers/build.sh</code> still defaults to <code>--from-def</code> against <code>containers/protforge-gpu.def</code> — which <b>does not exist on this branch</b>. The default invocation <code>bash containers/build.sh</code> fails immediately.</li>
+  <li><span class="badge b-warn">stale</span> <code>docs/CLUSTER_SETUP.md</code> and <code>containers/README.md</code> walk the user through building a single <code>protforge-gpu.sif</code> and reference <code>setup.sh</code> — both gone here.</li>
+  <li><span class="badge b-warn">stale</span> <code>docs/CONTAINERS.md</code> is explicitly marked SUPERSEDED ("4-image design, do not follow") — yet <code>singularity</code> has effectively gone <i>back</i> to a per-image design, so that warning is now misleading.</li>
+  <li><span class="badge b-info">noted</span> The per-stage def files use <b>inconsistent bases</b>: <code>msa.def</code> is <code>python:3.12-slim</code> (CPU), <code>boltz.def</code> is slim + <code>cu128</code>, <code>esmfold_cu.def</code> is <code>nvidia/cuda:12.8.1-...-ubuntu24.04</code>, <code>openfold.def</code> is the vendor image. Four images each re-download torch+CUDA (~3-5 GB apiece of duplicated libraries).</li>
+</ul>
+
+<blockquote>The user-facing symptom of all this: a new lab member follows <code>CLUSTER_SETUP.md</code>, runs <code>build.sh</code>, and hits a missing-file error on line one. <b>That is the install difficulty.</b> It isn't fundamentally a containers problem — it's a "the repo can't decide which design it's on" problem.</blockquote>
+
+<!-- ============================================================= -->
+<h2 id="combine">3. Keep per-stage — make the many-container install easy</h2>
+
+<p>Per-stage stays. The goal isn't fewer images; it's that installing N images feels like installing one. Each independent def file (<code>msa.def</code>, <code>boltz.def</code>, <code>esmfold_cu.def</code>, <code>openfold.def</code>, + a future <code>es.def</code>) lets you bump Boltz, swap an ESM size, or update OpenFold3 and rebuild/revalidate <b>only that image</b> — no cross-tool constraint solving, no risk to the other stages. That's worth the disk and the extra files. Below is how to remove the friction <i>without</i> touching that property.</p>
+
+<h3><span class="num">1</span>A <code>build_all.sh</code> that loops the def files</h3>
+<p>One driver over the existing <code>build.sh</code> machinery (cache/tmp handling, fakeroot, logging are already solid there). It iterates a manifest of <code>(stage → def → output sif)</code>, builds or pulls each, and skips ones already present. Adding a model later = drop in one def + one manifest line. Modularity preserved, single command.</p>
+<pre><code># manifest: stage  def              sif
+msa       msa.def         protforge-msa.sif
+boltz     boltz.def       protforge-boltz.sif
+esmc      esmfold_cu.def  protforge-esmc.sif
+openfold  openfold.def    protforge-openfold.sif
+
+bash containers/build_all.sh                 # build all missing
+bash containers/build_all.sh boltz           # rebuild just one  ← the modularity payoff
+bash containers/build_all.sh --from-docker   # pull all from GHCR</code></pre>
+
+<h3><span class="num">2</span>Publish per-image to GHCR <span class="badge b-info">highest leverage</span></h3>
+<p>The single biggest friction reducer, and it <i>fits</i> per-stage perfectly: a CI matrix builds one image per def on change and pushes <code>ghcr.io/&lt;org&gt;/protforge-&lt;stage&gt;:&lt;tag&gt;</code>. Users then <code>pull</code> instead of running a ~30-min <code>--fakeroot</code> build (which may not even be permitted on their partition). Because images are independent, CI only rebuilds the stage whose def changed — modular builds end-to-end. Tag per-image (e.g. <code>protforge-boltz:2.2.1</code>) so a model bump is a visible, revertable version.</p>
+
+<h3><span class="num">3</span>Optional: shared base layer to kill the duplication</h3>
+<p>The honest cost of per-stage is repeated torch+CUDA (~3-5 GB each, ×4). If that matters, build one <code>protforge-base.sif</code> (ubuntu + torch + CUDA runtime) and have the stage defs <code>Bootstrap: localimage</code> from it. <b>Tradeoff to weigh against your modularity goal:</b> a base rebuild forces all children to rebuild, and it re-couples the torch/CUDA version across stages — which is partly what you went per-stage to escape (note <code>boltz.def</code> and <code>esmfold_cu.def</code> currently sit on different torch/CUDA: <code>cu128</code> + torch 2.9.1 vs slim+<code>cu128</code>). <span class="badge b-warn">recommend: skip unless disk is actually a problem</span> — full independence is cheap in dollars and is the thing you actually want.</p>
+
+<h3><span class="num">4</span>Fix the config schema to <i>match</i> per-stage <span class="badge b-ok">already close</span></h3>
+<p><code>config.template.yaml</code> already has the right shape — five per-stage fields (<code>colabfold/boltz/esmc/esmfold/openfold</code>) each pointing at its own SIF. This is correct for your design; the "collapse to one field (audit H4)" note in the docs was written for the abandoned single-SIF world and should be <b>dropped</b>, not acted on. Just make the docs stop apologizing for having five fields.</p>
+
+<!-- ============================================================= -->
+<h2 id="install">4. One install.sh — proposal</h2>
+
+<p>The building blocks already exist; they're just not behind one door:</p>
+<table>
+  <tr><th>Piece</th><th>Today</th><th>Role in install.sh</th></tr>
+  <tr><td>Config generation + conda path</td><td><code>setup.sh</code> (on <code>containers</code> branch)</td><td>Prompt for account/email/paths, emit <code>config.yaml</code></td></tr>
+  <tr><td>Image build/pull</td><td><code>containers/build.sh</code></td><td>Build or <code>--from-docker</code> pull the SIF(s)</td></tr>
+  <tr><td>Weights download</td><td><code>scripts/download_models.py</code></td><td>Populate <code>$PROTFORGE_ROOT/models/hf</code></td></tr>
+  <tr><td>Host env</td><td><code>requirements-host.txt</code></td><td><code>python -m venv</code> + pip for Snakemake/webapp</td></tr>
+  <tr><td>Validation</td><td><code>containers/test/smoke.sh</code></td><td>Final "it works" check</td></tr>
+</table>
+
+<p>A single <span class="fileref">install.sh</span> at repo root that runs these in order, with sane defaults and a <code>--mode kempner|custom</code> flag (Kempner mode skips downloads since DBs/weights/envs are shared):</p>
+
+<pre><code>bash install.sh --mode kempner --account kempner_xxx_lab --email you@x.edu
+#  1. resolve $PROTFORGE_ROOT layout, create sifs/ models/ caches
+#  2. host venv  <- requirements-host.txt
+#  3. fetch image(s):  build.sh --from-docker ...   (fallback: --from-def)
+#  4. weights:    download_models.py   (skipped in kempner mode)
+#  5. render config.yaml from template + answers
+#  6. smoke.sh
+#  -> prints: "Edit config.yaml SLURM section, then: streamlit run webapp/app.py"</code></pre>
+
+<p>This is mostly <i>assembly</i> of code you already wrote, plus restoring <code>setup.sh</code>'s logic. The hard 80% (image build, weights, config schema) is done. <span class="badge b-ok">low risk</span></p>
+
+<blockquote>Decision needed: do you keep two install paths (container + conda), or commit to containers as the only supported path and let conda bit-rot? Maintaining both doubles the test surface. Given the webapp + Snakemake are host-side anyway, I'd <b>make container the only documented path</b> and keep conda as an undocumented escape hatch.</blockquote>
+
+<!-- ============================================================= -->
+<h2 id="ood">5. Open OnDemand integration</h2>
+
+<p><code>docs/WEBAPP.md</code> already lays out the three access options (SSH <code>-L</code>, VS Code Remote-SSH, Open OnDemand) and correctly recommends OOD for tunnel-free / shared / compute-node use. <b>What's missing is the actual OOD app</b> — the docs describe it as a thing to "ask FASRC for," but nothing is built.</p>
+
+<h3>What an OOD interactive app is</h3>
+<p>A small directory of files in your OOD sandbox that renders a web form, then submits a SLURM job running your app on a compute node, and proxies its port back through the OOD portal as a one-click link. For ProtForge it's ~5 files:</p>
+
+<table>
+  <tr><th>File</th><th>Purpose</th></tr>
+  <tr><td><code>manifest.yml</code></td><td>Name, category, icon — what shows in the OOD "Interactive Apps" menu</td></tr>
+  <tr><td><code>form.yml</code></td><td>The form: partition, account, GPUs?, walltime, session dir. (Mostly host-side, so a CPU node is fine.)</td></tr>
+  <tr><td><code>submit.yml.erb</code></td><td>Maps the form to SLURM directives (<code>--account</code>, <code>--partition</code>, time, mem)</td></tr>
+  <tr><td><code>template/script.sh.erb</code></td><td>Activates the host venv and runs <code>streamlit run webapp/app.py --server.port ${port} --server.address 0.0.0.0 --server.headless true</code></td></tr>
+  <tr><td><code>template/before.sh.erb</code> + <code>view.html.erb</code></td><td>Picks a free <code>${port}</code>, then OOD proxies it and renders the "Connect to ProtForge" button</td></tr>
+</table>
+
+<h3>How it fits ProtForge specifically</h3>
+<ul>
+  <li>The webapp is <b>already a launcher</b> (it shells out to <code>sbatch</code> and owns the Snakemake controller), so running it on an OOD-allocated <b>compute node</b> is strictly better than a login node — it survives the controller's full lifetime and respects login-node etiquette. The webapp's tmux advice in <code>WEBAPP.md</code> becomes unnecessary: OOD keeps the session alive.</li>
+  <li>The OOD job needs the <b>host venv</b> only (Snakemake + Streamlit). It does <b>not</b> need a GPU — the GPU work is in the SIFs that Snakemake submits as separate jobs. So the OOD form should default to a small CPU allocation. <span class="badge b-info">cheap session</span></li>
+  <li>Streamlit must bind <code>0.0.0.0</code> (not <code>127.0.0.1</code> as in the current docs) and set <code>--server.baseUrlPath</code>/<code>enableCORS=false</code> so it works behind OOD's node proxy. Minor flag changes from the documented invocation.</li>
+  <li>Sessions already live in <code>.sessions/&lt;id&gt;/</code>, so multiple OOD launches won't collide on config.</li>
+</ul>
+
+<h3>Two tiers of effort</h3>
+<ol>
+  <li><b>Zero-build (today):</b> launch an OOD <i>Remote Desktop</i> or <i>Jupyter</i> session, open a terminal, run the documented <code>streamlit</code> command, browse <code>localhost:${port}</code> inside it. Works now, no FASRC ask. Document this as the interim path.</li>
+  <li><b>Custom app (the real deliverable, ~1 day):</b> the 5-file app above → a one-click "ProtForge" button for you and labmates, no tunnel, on a compute node. Requires the FASRC interactive-app sandbox path (e.g. <code>~/ondemand/dev/protforge</code>) — <b>this is the one external dependency: ask Kempner/FASRC support for sandbox enablement.</b></li>
+</ol>
+
+<div class="panel">
+  <p style="margin:0" class="small">Keep the existing guidance to <b>avoid public tunnels (ngrok/cloudflared)</b> — they expose an unauthenticated Streamlit app to the internet and violate cluster AUP. OOD is the sanctioned answer.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="risks">6. Risks &amp; open questions</h2>
+<table>
+  <tr><th>Item</th><th>Status</th><th>Note</th></tr>
+  <tr><td>Docs/build describe single-SIF; code is per-stage</td><td><span class="badge b-block">blocker</span></td><td>Rewrite docs + <code>build.sh</code> to match per-stage; no design decision left</td></tr>
+  <tr><td><code>build.sh</code> references missing <code>protforge-gpu.def</code> on <code>singularity</code></td><td><span class="badge b-block">broken</span></td><td>Default invocation fails today</td></tr>
+  <tr><td>Torch/CUDA duplicated across 4 images</td><td><span class="badge b-info">accepted</span></td><td>Cost of modularity; shared base optional, re-couples versions</td></tr>
+  <tr><td>Inconsistent torch/CUDA between stage defs</td><td><span class="badge b-warn">tidy-up</span></td><td>Fine per-stage, but worth a deliberate per-image pin policy</td></tr>
+  <tr><td>5-field container schema (audit H4 note)</td><td><span class="badge b-ok">keep</span></td><td>Correct for per-stage; drop the "collapse" note from docs</td></tr>
+  <tr><td>Container path "late beta, not E2E validated"</td><td><span class="badge b-warn">open</span></td><td>Per <code>CLUSTER_SETUP.md</code> + <code>TESTING.md</code> Step 2</td></tr>
+  <tr><td>ES/PDAnalysis MPI image</td><td><span class="badge b-info">deferred</span></td><td>Not built; ES runs on conda for now</td></tr>
+  <tr><td>No GHCR-published image / CI</td><td><span class="badge b-info">opportunity</span></td><td>Biggest single install-friction reducer</td></tr>
+  <tr><td>OOD sandbox access</td><td><span class="badge b-info">external</span></td><td>Need FASRC/Kempner support to enable</td></tr>
+  <tr><td><code>--fakeroot</code> may not be permitted on all partitions</td><td><span class="badge b-info">env</span></td><td>Argues for the GHCR pull path</td></tr>
+</table>
+
+<!-- ============================================================= -->
+<h2 id="next">7. Recommended next steps</h2>
+
+<div class="panel rec">
+<ol>
+  <li><b>De-drift to per-stage.</b> Point <code>build.sh</code> at the per-stage defs (or wrap them in <code>build_all.sh</code>), and rewrite <code>CLUSTER_SETUP.md</code> / <code>README.md</code> / <code>CONTAINERS.md</code> to describe the many-container design as the intended one. Delete the single-SIF references and the "collapse to one field" (H4) note. This unblocks everything and is pure cleanup — no design decision left to make.</li>
+  <li><b>Add <code>build_all.sh</code> + one top-level <code>install.sh</code></b> wrapping per-stage build/pull + <code>download_models.py</code> + host venv + smoke test, emitting a ready-to-edit <code>config.yaml</code>. Low risk — assembly of existing pieces.</li>
+  <li><b>Publish per-image to GHCR with a CI matrix</b> (one job per def, rebuild only the changed stage) so users <code>pull</code> instead of <code>build --fakeroot</code>. Highest leverage per hour, and it keeps builds modular.</li>
+  <li><b>Build the OOD interactive app</b> (~5 files, ~1 day) once the host-venv install is stable. Ask FASRC for the sandbox path in parallel — the only external dependency. Document the zero-build Remote-Desktop fallback as interim.</li>
+  <li><b>Finish per-stage E2E validation</b> (<code>TESTING.md</code> Step 2) and make container the single documented install path; demote conda to an escape hatch.</li>
+</ol>
+</div>
+
+<p class="small">Sequencing: 1 → 2/3 (parallel) → 4 → 5. Step 1 is now pure cleanup (no decision pending) since the per-stage design is settled. The OOD work (4) is independent of the container shape and can start as soon as the host venv install is reliable.</p>
+
+<hr>
+<p class="small">Generated for decision-making, not as a spec. Per-stage containers are the settled design; the prerequisite is just making the repo (docs + <code>build.sh</code>) agree with that. "Easier install" and "Open OnDemand" are both straightforward from there.</p>
+
+</div>
+</body>
+</html>
