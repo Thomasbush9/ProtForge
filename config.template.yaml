@@ -52,7 +52,16 @@ boltz:
 # .esmc_<size>_complete sentinel. Outputs -> sequences/{seq}/esmc/{size}/.
 esmc:
   models: [600M]          # subset of: 6B, 600M, 300M
-  max_files_per_job: 25   # sequences per encode job (also the padded batch size)
+  max_files_per_job: 25   # sequences per chunk (scheduling granularity)
+  # GPU efficiency: chunks served per GPU job. The model is loaded ONCE per job
+  # and serves every chunk in the group, then length-buckets all sequences into
+  # padded micro-batches. 1 = one chunk per job (legacy). Raise it (e.g. 4) to
+  # amortize the weight load — effective batching window = max_files_per_job x
+  # chunks_per_group; scale slurm runtime accordingly.
+  chunks_per_group: 1
+  # token_budget: 32000   # optional: padded-token cap per micro-batch
+  #                       # (rows * max_len). Default per size: 6B 8000,
+  #                       # 600M 32000, 300M 49152. Lower it if a chunk OOMs.
   # HOST HuggingFace cache (contains hub/models--biohub--ESMC-*); bound to
   # /models/hf (ro) in-container. Populate it with:
   #   bash containers/download_scripts/esm_models.sh <cache_dir>
@@ -68,6 +77,7 @@ esmc:
     layers: all           # "all" (every trained layer) or a comma list, e.g. "18,36"
     # sizes: [600M]       # subset of `models` above (default: all of them)
     max_files_per_job: 25
+    chunks_per_group: 1   # see esmc.chunks_per_group (one SAE load per group)
 
 # OpenFold3 structure prediction — runs off the MSA-stage YAMLs, in parallel
 # with Boltz. Each chunk is one query JSON = one SLURM job; a job folds all its
@@ -101,6 +111,15 @@ openfold:
 # Outputs (structure.cif, plddt.npy, metrics.pt) -> sequences/{seq}/esmfold/fast/.
 esmfold:
   max_files_per_job: 25
+  # GPU efficiency: chunks served per GPU job. ESMFold2 fold() is one-complex-
+  # per-call (no real batching is possible — multiple proteins would fold as one
+  # interacting complex), so grouping amortizes the model load across serial
+  # folds. 1 = one chunk per job (legacy). num_loops / num_sampling_steps are the
+  # quality/throughput dials (lower = faster); the model owns its bf16 precision.
+  chunks_per_group: 1
+  compile: false          # opt-in torch.compile of the resident model
+                          # (dynamic shapes; falls back to eager on failure).
+                          # Only worth it when a group serves many folds.
   cache_dir: /n/home06/<YOUR_USER>/protforge/models/hf  # HOST HF cache (hub/models--biohub--ESMFold2-Fast)
   num_loops: 3
   num_sampling_steps: 50

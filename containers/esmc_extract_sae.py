@@ -49,6 +49,29 @@ def _enable_tf32() -> "torch.dtype | None":
 AUTOCAST_DTYPE: "torch.dtype | None" = None
 
 
+# See run_batch_esmc.py — same length-bucketed micro-batcher (padded cost
+# rows * max_len near budget). SAE forwards add the heavy SAE codebooks on top
+# of the backbone, so the per-size budget is smaller than the embedding runner.
+DEFAULT_TOKEN_BUDGET = {"6B": 6000, "600M": 24000, "300M": 32000}
+
+
+def token_budget_batches(names, seqs, budget):
+    """Yield lists of names grouped so each batch's padded cost (rows * max_len)
+    stays near `budget`. Length-sorted; a single seq longer than budget forms
+    its own batch (never dropped)."""
+    order = sorted(range(len(names)), key=lambda i: len(seqs[i]))
+    batch, max_len = [], 0
+    for i in order:
+        new_max = max(max_len, len(seqs[i]))
+        if batch and (len(batch) + 1) * new_max > budget:
+            yield [names[j] for j in batch]
+            batch, max_len, new_max = [], 0, len(seqs[i])
+        batch.append(i)
+        max_len = new_max
+    if batch:
+        yield [names[j] for j in batch]
+
+
 def resolve_model_repo(size: str, override: str | None) -> str:
     if override:
         return override
@@ -166,38 +189,67 @@ def load_model_with_sae(
     return model, tokenizer
 
 
-def forward_sae(model, tokenizer, sequence: str) -> dict:
-    """Run one sequence through the model and return its SAE activations."""
-    inputs = tokenizer(sequence, return_tensors="pt", padding=True)
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+def forward_sae_batch(model, tokenizer, seqs):
+    """Forward a length-bucketed micro-batch. Returns (sae_outputs, nonpad_counts)
+    where sae_outputs[layer] is a sparse (sum_nonpad, n_features) tensor with rows
+    in (batch, token) row-major order, and nonpad_counts[i] is sequence i's
+    non-pad token count (BOS + residues + EOS). The caller re-splits by walking
+    cumulative offsets and dropping the leading BOS / trailing EOS per segment
+    (modeling_esmc_sae.py:109 flattens layer_states[token_mask] across batch+seq).
+    """
+    enc = tokenizer(seqs, return_tensors="pt", padding=True)
+    inputs = {k: v.to(model.device) for k, v in enc.items()}
     with torch.inference_mode(), torch.autocast(
         "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
     ):
         output = model(**inputs)
-    return output.get("sae_outputs", {})
+    nonpad_counts = enc["attention_mask"].sum(dim=1).tolist()
+    return output.get("sae_outputs", {}), nonpad_counts
 
 
-def save_sae(
-    output_dir: str,
-    name: str,
-    size: str,
-    sae_type: str,
-    sae_outputs: dict,
-    seq_len: int,
-) -> int:
-    """Save per-layer SAE activations under {output_dir}/{name}/{size}/{sae_type}/.
+def split_sae_outputs(sae_outputs: dict, nonpad_counts: list, seq_lens: list) -> list:
+    """Re-split a batched, flattened sparse SAE output into per-sequence dense
+    per-residue activations.
 
-    One forward per sequence, so the batch dim is 1 — drop it and trim to the
-    real sequence length, mirroring run_batch_esmc.py's save_outputs.
+    sae_outputs[layer] is sparse (sum_nonpad, n_features) in (batch, token) order.
+    For sequence i its block is rows [offset_i : offset_i + nonpad_i]; row 0 of
+    the block is BOS and the last is EOS, so the real residues are the inner
+    seq_len rows: [offset_i + 1 : offset_i + 1 + seq_len_i]. Fails loudly on any
+    count mismatch — a silent misalignment would corrupt every saved activation.
+    Returns a list (one dict {layer: dense (seq_len, n_features)} per sequence).
     """
+    dense = {k: (v.to_dense() if v.is_sparse else v).detach().cpu()
+             for k, v in sae_outputs.items() if torch.is_tensor(v)}
+    total = sum(nonpad_counts)
+    for k, t in dense.items():
+        if t.shape[0] != total:
+            raise SystemExit(
+                f"SAE layer {k!r}: {t.shape[0]} flattened rows != summed non-pad "
+                f"tokens {total}. Batch re-split would be misaligned; refusing to "
+                "save corrupt activations.")
+    per_seq = []
+    offset = 0
+    for nonpad, seq_len in zip(nonpad_counts, seq_lens):
+        if nonpad != seq_len + 2:
+            raise SystemExit(
+                f"SAE re-split: non-pad tokens {nonpad} != seq_len+2 "
+                f"({seq_len}+2). Expected exactly one BOS + one EOS per sequence; "
+                "token layout changed — fix before trusting activations.")
+        lo, hi = offset + 1, offset + 1 + seq_len   # drop BOS (row 0) and EOS
+        per_seq.append({k: t[lo:hi] for k, t in dense.items()})
+        offset += nonpad
+    return per_seq
+
+
+def save_sae(output_dir: str, name: str, size: str, sae_type: str,
+             layer_acts: dict) -> int:
+    """Save one sequence's per-layer per-residue activations under
+    {output_dir}/{name}/{size}/{sae_type}/. layer_acts is {layer: (seq_len, D)}
+    already re-split + densified by split_sae_outputs."""
     out_dir = Path(output_dir) / name / size / sae_type
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
-    for key, tensor in sae_outputs.items():
-        if torch.is_tensor(tensor):
-            tensor = tensor.detach().cpu()
-            if tensor.dim() >= 2 and tensor.shape[0] == 1:
-                tensor = tensor[0, :seq_len]
+    for key, tensor in layer_acts.items():
         safe = str(key).replace("/", "_")
         torch.save(
             {"activations": tensor, "layer": key, "name": name,
@@ -222,21 +274,27 @@ if __name__ == "__main__":
                         help="Override HF SAE repo (default: derived from --size and --sae)")
     parser.add_argument("--layers", type=str, default=None,
                         help="Comma-separated SAE layer indices, or 'all' (default: per-size defaults)")
-    # Batch mode (directory of YAMLs -> saved activations) vs single-sequence
-    # debug mode (--yaml / --sequence, prints shapes). Exactly one is required.
-    parser.add_argument("--input-dir", type=str, default=None,
-                        help="Directory of Boltz YAMLs to encode in batch")
-    parser.add_argument("--output-dir", type=str, default=None,
-                        help="Output root for batch mode (required with --input-dir)")
+    # Batch mode: one process loads model+SAE ONCE and serves every chunk in
+    # --input-dirs (parallel to --output-dirs) — group persistence. Debug mode
+    # (--yaml / --sequence) prints per-residue shapes for one sequence.
+    parser.add_argument("--input-dirs", nargs="+", default=None,
+                        help="Chunk directories of YAMLs to encode (group)")
+    parser.add_argument("--output-dirs", nargs="+", default=None,
+                        help="Per-chunk output roots, parallel to --input-dirs")
+    parser.add_argument("--token-budget", type=int, default=None,
+                        help="Padded-token budget per micro-batch (rows * max_len). "
+                             "Default: per-size DEFAULT_TOKEN_BUDGET.")
     parser.add_argument("--sequence", type=str, default=None, help="Raw sequence (single, debug)")
     parser.add_argument("--yaml", type=str, default=None, help="Single Boltz YAML (debug)")
     args = parser.parse_args()
 
-    modes = [bool(args.input_dir), bool(args.sequence), bool(args.yaml)]
+    modes = [bool(args.input_dirs), bool(args.sequence), bool(args.yaml)]
     if sum(modes) != 1:
-        parser.error("provide exactly one of --input-dir, --sequence, --yaml")
-    if args.input_dir and not args.output_dir:
-        parser.error("--input-dir requires --output-dir")
+        parser.error("provide exactly one of --input-dirs, --sequence, --yaml")
+    if args.input_dirs and not args.output_dirs:
+        parser.error("--input-dirs requires --output-dirs")
+    if args.input_dirs and len(args.input_dirs) != len(args.output_dirs):
+        parser.error("--input-dirs and --output-dirs must be equal length")
 
     hub_cache = _enforce_offline(args.cache)
     model_repo = resolve_model_repo(args.size, args.model)
@@ -253,20 +311,37 @@ if __name__ == "__main__":
         hub_cache=hub_cache, layer_ids=layer_ids,
     )
 
-    if args.input_dir:
-        seq_by_name = parse_inputs(args.input_dir)
-        for name, sequence in seq_by_name.items():
-            print(f"Extracting SAE for {name} ({len(sequence)} aa)...", flush=True)
-            sae_outputs = forward_sae(model, tokenizer, sequence)
+    if args.input_dirs:
+        budget = args.token_budget or DEFAULT_TOKEN_BUDGET.get(args.size, 12000)
+        # Flatten the group, tagging each seq by chunk index so identical stems
+        # in different chunks never collide; carry each chunk's output dir.
+        tags, seqs, out_by_tag, name_by_tag, len_by_tag = [], [], {}, {}, {}
+        for ci, in_dir in enumerate(args.input_dirs):
+            for name, sequence in parse_inputs(in_dir).items():
+                tag = f"{ci}/{name}"
+                tags.append(tag); seqs.append(sequence)
+                out_by_tag[tag] = args.output_dirs[ci]
+                name_by_tag[tag] = name; len_by_tag[tag] = len(sequence)
+        seq_by_tag = dict(zip(tags, seqs))
+        for batch_tags in token_budget_batches(tags, seqs, budget):
+            batch_seqs = [seq_by_tag[t] for t in batch_tags]
+            seq_lens = [len_by_tag[t] for t in batch_tags]
+            print(f"Extracting SAE for {len(batch_tags)} seq(s) "
+                  f"(max {max(seq_lens)} aa)...", flush=True)
+            sae_outputs, nonpad = forward_sae_batch(model, tokenizer, batch_seqs)
             if not sae_outputs:
-                raise RuntimeError(f"No sae_outputs for {name}")
-            n = save_sae(args.output_dir, name, args.size, args.sae_type,
-                         sae_outputs, len(sequence))
-            print(f"  saved {n} layer file(s)", flush=True)
+                raise RuntimeError(f"No sae_outputs for batch {batch_tags}")
+            per_seq = split_sae_outputs(sae_outputs, nonpad, seq_lens)
+            for tag, layer_acts in zip(batch_tags, per_seq):
+                n = save_sae(out_by_tag[tag], name_by_tag[tag], args.size,
+                             args.sae_type, layer_acts)
+            print(f"  saved {n} layer file(s) x {len(batch_tags)} seq(s)", flush=True)
     else:
         sequence = (args.sequence or sequence_from_yaml(args.yaml)).strip()
-        sae_outputs = forward_sae(model, tokenizer, sequence)
+        sae_outputs, nonpad = forward_sae_batch(model, tokenizer, [sequence])
         if not sae_outputs:
             raise RuntimeError("No sae_outputs in model forward pass")
-        for key, tensor in sorted(sae_outputs.items()):
-            print(f"sae_outputs[{key!r}].shape = {tuple(tensor.shape)}", flush=True)
+        per_seq = split_sae_outputs(sae_outputs, nonpad, [len(sequence)])
+        for key, tensor in sorted(per_seq[0].items()):
+            print(f"sae_outputs[{key!r}] per-residue shape = "
+                  f"{tuple(tensor.shape)}", flush=True)

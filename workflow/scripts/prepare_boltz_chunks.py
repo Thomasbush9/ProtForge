@@ -101,6 +101,26 @@ def write_chunk_stats(output_dir: Path, chunks: list[tuple[int, list[Path]]]) ->
     return stats_path
 
 
+def write_groups(output_dir: Path, chunk_dirs: list[Path], chunks_per_group: int) -> Path:
+    """Write groups.tsv: group_id<TAB>chunk_id,chunk_id,... Consecutive chunks
+    (in numeric id order) are packed `chunks_per_group` per group so one GPU job
+    loads the model once and serves the whole group (load-once-serve-many).
+    chunks_per_group<=1 yields one chunk per group — exact pre-grouping behaviour.
+    """
+    g = max(1, int(chunks_per_group))
+    ids = sorted(
+        (cd.name.removeprefix("chunk_") for cd in chunk_dirs),
+        key=lambda x: int(x) if x.isdigit() else x,
+    )
+    path = output_dir / "groups.tsv"
+    with open(path, "w") as f:
+        f.write("group_id\tchunk_ids\n")
+        for gi, start in enumerate(range(0, len(ids), g)):
+            members = ids[start:start + g]
+            f.write(f"{gi}\t{','.join(members)}\n")
+    return path
+
+
 def create_chunks(yaml_files: list[Path], output_dir: str, max_files_per_job: int):
     """
     Create chunk directories with symlinked YAML files.
@@ -197,6 +217,9 @@ def main():
     parser.add_argument("--include_fasta", action="store_true",
                         help="Also chunk .fasta/.fa files (sequence-only stages "
                              "like ESMC/ESMFold2 that don't need an MSA).")
+    parser.add_argument("--chunks_per_group", type=int, default=1,
+                        help="Chunks served per GPU job (one model load per "
+                             "group). 1 = one chunk per job (default).")
     add_binning_argparse(parser)
     args = parser.parse_args()
 
@@ -245,6 +268,8 @@ def main():
             for cd in chunk_dirs:
                 mf.write(f"{cd.resolve()}\n")
 
+        write_groups(output_path, chunk_dirs, args.chunks_per_group)
+
         # chunk_stats.tsv expected by calibrate analyzer (numeric IDs)
         legacy_chunks = [(c.chunk_id, [p for p, _ in c.items]) for c in chunks]
         stats_path = write_chunk_stats(output_path, legacy_chunks)
@@ -257,9 +282,10 @@ def main():
         print(f"chunks.tsv:  {chunks_tsv}")
         return
 
-    create_chunks(
+    chunk_dirs = create_chunks(
         [p for p, _ in surviving_pairs], args.output_dir, args.max_files_per_job
     )
+    write_groups(output_path, chunk_dirs, args.chunks_per_group)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,9 @@ ESMC_SAE_CHUNKS = f"{OUTPUT}/esmc_sae_chunks"
 ESMC_SAE_SIZES  = ESMC_SAE_CFG.get("sizes") or config.get("esmc", {}).get("models", ["6B"])
 ESMC_SAE_TYPE   = ESMC_SAE_CFG.get("sae_type", "all-layers")
 ESMC_SAE_LAYERS = str(ESMC_SAE_CFG.get("layers", "all"))
+# Group persistence: chunks served per GPU job (one model load per group).
+ESMC_SAE_CHUNKS_PER_GROUP = max(1, int(ESMC_SAE_CFG.get("chunks_per_group", 1)))
+ESMC_SAE_GROUPS = f"{ESMC_SAE_CHUNKS}/groups.tsv"
 
 # YAML source: user-provided yaml_dir, or the per-sequence YAMLs from MSA.
 _sae_yaml_override = config["input"].get("yaml_dir", "")
@@ -70,13 +73,15 @@ checkpoint chunk_yamls_for_sae:
     params:
         yaml_dir = ESMC_SAE_YAML_SOURCE,
         max_files = ESMC_SAE_CFG.get("max_files_per_job", 25),
+        chunks_per_group = ESMC_SAE_CHUNKS_PER_GROUP,
     localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
             --yaml_dir {params.yaml_dir} \
             --output_dir {ESMC_SAE_CHUNKS} \
-            --max_files_per_job {params.max_files}
+            --max_files_per_job {params.max_files} \
+            --chunks_per_group {params.chunks_per_group}
         """
 
 
@@ -88,21 +93,57 @@ def get_esmc_sae_chunk_ids(wildcards):
     return [d.rstrip("/").split("/")[-1].replace("chunk_", "") for d in dirs]
 
 
+def _read_groups(groups_tsv):
+    """Parse groups.tsv -> {group_id: [chunk_id, ...]}."""
+    out = {}
+    with open(groups_tsv) as f:
+        next(f, None)  # header
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            gid, cids = line.split("\t")
+            out[gid] = cids.split(",")
+    return out
+
+
+def get_esmc_sae_group_ids(wildcards):
+    """Group IDs from groups.tsv after the checkpoint (one GPU job per group)."""
+    checkpoints.chunk_yamls_for_sae.get()
+    return list(_read_groups(ESMC_SAE_GROUPS).keys())
+
+
+def esmc_sae_group_chunk_ids(group_id):
+    """Chunk IDs belonging to one group."""
+    return _read_groups(ESMC_SAE_GROUPS)[str(group_id)]
+
+
+def esmc_sae_group_chunk_dirs(wildcards):
+    """Input: every chunk dir in the group (the job folds them all in one load)."""
+    return [f"{ESMC_SAE_CHUNKS}/chunk_{cid}"
+            for cid in esmc_sae_group_chunk_ids(wildcards.group_id)]
+
+
 rule run_esmc_sae:
-    """Extract SAE activations for a chunk with one ESMC model size, in the ESM container."""
+    """Extract SAE activations for a GROUP of chunks with one ESMC model size in
+    a single GPU job. The model + SAE are loaded ONCE and serve every chunk in
+    the group (persistence); the extractor length-buckets all sequences across
+    the group into padded micro-batches. One group sentinel drives the matching
+    per-group organize_esmc_sae."""
     wildcard_constraints:
         size = _ESMC_SAE_SIZE_RE,
-        chunk_id = r"\d+",
+        group_id = r"\d+",
     input:
-        chunk_dir = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}",
+        chunk_dirs = esmc_sae_group_chunk_dirs,
     output:
-        done = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output/.done",
+        done = f"{ESMC_SAE_CHUNKS}/group_{{group_id}}_{{size}}/.done",
     benchmark:
-        f"{OUTPUT}/benchmarks/esmc_sae/extract_{{chunk_id}}_{{size}}.tsv"
+        f"{OUTPUT}/benchmarks/esmc_sae/extract_group{{group_id}}_{{size}}.tsv"
     log:
-        f"{OUTPUT}/logs/esmc_sae/extract_{{chunk_id}}_{{size}}.log"
+        f"{OUTPUT}/logs/esmc_sae/extract_group{{group_id}}_{{size}}.log"
     params:
-        output_dir = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output",
+        chunks_root = ESMC_SAE_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmc_sae_group_chunk_ids(wc.group_id)),
         cache_dir = config.get("esmc", {}).get("cache_dir", ""),
         yaml_src = ESMC_SAE_YAML_SOURCE,
         runner = ESMC_SAE_RUNNER,
@@ -136,66 +177,78 @@ rule run_esmc_sae:
             exit 1
         fi
 
-        mkdir -p {params.output_dir}
+        # Build the parallel --input-dirs / --output-dirs lists for this group.
+        in_dirs=""; out_dirs=""
+        for cid in {params.chunk_ids}; do
+            in_dirs="$in_dirs {params.chunks_root}/chunk_${{cid}}"
+            od="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
+            out_dirs="$out_dirs $od"
+            mkdir -p "$od"
+        done
 
-        # Container-only: run the SAE extractor inside the ESM image.
-        # Mirrors containers/test/test_esmc_extract_sae.sh — HF cache -> /models/hf
-        # (ro); chunk dir + sequences/ bound same-path so the symlinked YAMLs
-        # resolve; runner bound to /opt; --cleanenv + offline HF flags.
+        # Bind the whole chunks_root once (covers every chunk dir + output dir);
+        # sequences/ bound same-path so symlinked YAMLs resolve; runner -> /opt.
         {params.runtime} exec --nv --cleanenv \
             --env HF_HOME=/models/hf \
             --env HF_HUB_OFFLINE=1 \
             --env TRANSFORMERS_OFFLINE=1 \
             --env SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
             -B {params.cache_dir}:/models/hf:ro \
-            -B {input.chunk_dir}:{input.chunk_dir}:ro \
+            -B {params.chunks_root}:{params.chunks_root} \
             -B {params.yaml_src}:{params.yaml_src}:ro \
-            -B {params.output_dir}:{params.output_dir} \
             -B {params.runner}:/opt/esmc_extract_sae.py:ro \
             {params.sif} \
             python /opt/esmc_extract_sae.py \
                 --cache /models/hf \
-                --input-dir {input.chunk_dir} \
-                --output-dir {params.output_dir} \
+                --input-dirs $in_dirs \
+                --output-dirs $out_dirs \
                 --size {wildcards.size} \
                 --sae {params.sae_type} \
                 --layers {params.layers}
 
+        mkdir -p "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
         touch {output.done}
         """
 
 
 rule organize_esmc_sae:
-    """Move SAE outputs to sequences/{seq}/sae/{size}/ then drop the scratch dir."""
+    """Move a group's SAE outputs to sequences/{seq}/sae/{size}/, then drop the
+    per-chunk scratch dirs. One organize job per group mirrors the one
+    run_esmc_sae job per group."""
     wildcard_constraints:
         size = _ESMC_SAE_SIZE_RE,
-        chunk_id = r"\d+",
+        group_id = r"\d+",
     input:
-        done = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output/.done",
+        done = f"{ESMC_SAE_CHUNKS}/group_{{group_id}}_{{size}}/.done",
     output:
-        organized = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}.organized",
+        organized = f"{ESMC_SAE_CHUNKS}/group_{{group_id}}_{{size}}.organized",
     params:
-        scratch = f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output",
+        chunks_root = ESMC_SAE_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmc_sae_group_chunk_ids(wc.group_id)),
         sequences_dir = SEQUENCES_DIR,
     localrule: True
     shell:
         """
-        python workflow/scripts/organize_encoder_outputs.py \
-            --scratch_dir {params.scratch} \
-            --sequences_dir {params.sequences_dir} \
-            --stage sae
-
-        rm -rf {params.scratch}
+        set -euo pipefail
+        for cid in {params.chunk_ids}; do
+            scratch="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
+            python workflow/scripts/organize_encoder_outputs.py \
+                --scratch_dir "$scratch" \
+                --sequences_dir {params.sequences_dir} \
+                --stage sae
+            rm -rf "$scratch"
+        done
+        rm -rf "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
         touch {output.organized}
         """
 
 
 def aggregate_esmc_sae_organized(wildcards):
-    """Collect all .organized sentinels for one model size across chunks."""
-    chunk_ids = get_esmc_sae_chunk_ids(wildcards)
+    """Collect all .organized sentinels for one model size across groups."""
+    group_ids = get_esmc_sae_group_ids(wildcards)
     return expand(
-        f"{ESMC_SAE_CHUNKS}/chunk_{{chunk_id}}_{{size}}.organized",
-        chunk_id=chunk_ids, size=wildcards.size,
+        f"{ESMC_SAE_CHUNKS}/group_{{group_id}}_{{size}}.organized",
+        group_id=group_ids, size=wildcards.size,
     )
 
 

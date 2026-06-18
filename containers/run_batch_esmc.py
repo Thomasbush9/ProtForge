@@ -3,7 +3,6 @@ import os
 import time
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import torch
@@ -45,6 +44,31 @@ def _enable_tf32() -> "torch.dtype | None":
 
 
 AUTOCAST_DTYPE: "torch.dtype | None" = None
+
+
+# Per-model padded-token budget for one micro-batch. ESM-C-6B is far heavier per
+# token than 300M, so its budget is smaller to bound peak activation memory.
+# budget ~= rows * padded_len; tune against the per-size slurm mem_mb if needed.
+DEFAULT_TOKEN_BUDGET = {"6B": 8000, "600M": 32000, "300M": 49152}
+
+
+def token_budget_batches(names, seqs, budget):
+    """Yield lists of names grouped so each batch's PADDED cost (rows * max_len)
+    stays near `budget`. Length-sorted so padding waste is minimal; a single
+    sequence longer than `budget` forms its own batch (never dropped). Replaces
+    the old chunk-wide single pad, where one long outlier inflated every row.
+    """
+    order = sorted(range(len(names)), key=lambda i: len(seqs[i]))
+    batch, max_len = [], 0
+    for i in order:
+        new_max = max(max_len, len(seqs[i]))
+        if batch and (len(batch) + 1) * new_max > budget:
+            yield [names[j] for j in batch]
+            batch, max_len, new_max = [], 0, len(seqs[i])
+        batch.append(i)
+        max_len = new_max
+    if batch:
+        yield [names[j] for j in batch]
 
 
 def _seq_from_yaml(path: Path) -> str:
@@ -97,31 +121,36 @@ def parse_inputs(input_dir: str) -> dict[str, str]:
     return out
 
 
-def save_outputs(output_dir: str, name: str, size: str, model_output, idx: int, seq_len: int) -> None:
+def save_outputs(output_dir: str, name: str, size: str, hidden: "torch.Tensor") -> None:
+    """Persist one sequence's per-residue embeddings (already sliced to its real
+    length and moved to CPU by the batched caller)."""
     out_dir = Path(output_dir) / name / size
     out_dir.mkdir(parents=True, exist_ok=True)
-    hidden = model_output.last_hidden_state[idx, :seq_len].cpu()
     torch.save(
         {"last_hidden_state": hidden, "name": name, "size": size},
         out_dir / "outputs.pt",
     )
 
 
-def encode_sequences(sequences: List, model_name, hub_cache):
+def load_embed_model(model_name, hub_cache):
+    """Load the ESM-C embedding model + tokenizer ONCE; reused across every
+    micro-batch of every chunk in the group (load-once-serve-many)."""
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        cache_dir=hub_cache,
-        local_files_only=True,
+        model_name, cache_dir=hub_cache, local_files_only=True,
     )
     model = ESMCModel.from_pretrained(
-        model_name,
-        cache_dir=hub_cache,
-        local_files_only=True,
+        model_name, cache_dir=hub_cache, local_files_only=True,
     ).cuda().eval()
-    inputs = tokenizer(sequences, return_tensors="pt", padding=True)
+    return model, tokenizer
+
+
+def embed_batch(model, tokenizer, seqs, label):
+    """Forward one length-bucketed micro-batch. Returns last_hidden_state on the
+    device; the caller slices each row to its real length. Padded positions are
+    masked inside ESMCModel (FA2 unpad / sdpa sequence_id), so per-row hidden
+    states are uncontaminated by neighbours in the batch."""
+    inputs = tokenizer(seqs, return_tensors="pt", padding=True)
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    # Time only the forward pass (CUDA-synced) for the stair benchmark's
-    # infer_s column; model load / tokenization are excluded by construction.
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     _t0 = time.perf_counter()
@@ -131,21 +160,17 @@ def encode_sequences(sequences: List, model_name, hub_cache):
         outputs = model(**inputs)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
-    print(f"BENCH_INFER_S {model_name} {time.perf_counter() - _t0:.4f}", flush=True)
-    return outputs
+    print(f"BENCH_INFER_S {label} rows={len(seqs)} "
+          f"{time.perf_counter() - _t0:.4f}", flush=True)
+    return outputs.last_hidden_state
 
 
-def encode_for_logits(sequences: List, model_name, hub_cache):
-    """Forward pass with the LM-head model to get per-residue vocab logits.
+def load_logits_model(model_name, hub_cache):
+    """Load the LM-head model + tokenizer ONCE for the whole group.
 
-    The base ESMCModel has no LM head and cannot produce logits, so we load
-    AutoModelForMaskedLM (the released biohub/ESMC-* checkpoints ship the head;
-    EvolutionaryScale document it for zero-shot variant scoring). We request a
-    special-tokens mask so real residue positions can be selected exactly —
-    never assume a fixed BOS/EOS offset.
-
-    Returns (logits, special_tokens_mask, attention_mask, aa_token_ids) with
-    logits as a CPU float32 numpy array of shape (batch, tokens, vocab).
+    The base ESMCModel has no LM head, so we load AutoModelForMaskedLM (the
+    released biohub/ESMC-* checkpoints ship the head; EvolutionaryScale document
+    it for zero-shot variant scoring). Returns (model, tokenizer, aa_token_ids).
     """
     from transformers import AutoModelForMaskedLM
 
@@ -155,25 +180,41 @@ def encode_for_logits(sequences: List, model_name, hub_cache):
     model = AutoModelForMaskedLM.from_pretrained(
         model_name, cache_dir=hub_cache, local_files_only=True,
     ).cuda().eval()
-    enc = tokenizer(
-        sequences, return_tensors="pt", padding=True,
-        return_special_tokens_mask=True,
-    )
-    inputs = {k: v.to(model.device)
-              for k, v in enc.items() if k in ("input_ids", "attention_mask")}
-    with torch.inference_mode(), torch.autocast(
-        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
-    ):
-        outputs = model(**inputs)
     aa_token_ids = {
         aa: int(tid) for aa, tid in
         zip(CANONICAL_AAS, tokenizer.convert_tokens_to_ids(list(CANONICAL_AAS)))
     }
+    return model, tokenizer, aa_token_ids
+
+
+def logits_batch(model, tokenizer, seqs, label):
+    """Forward one length-bucketed micro-batch with the LM head. We request a
+    special-tokens mask so real residue positions can be selected exactly per
+    row — never assume a fixed BOS/EOS offset. Returns CPU float32 numpy arrays
+    (logits, special_tokens_mask, attention_mask) of shape (rows, tokens, *).
+    Logits cast back to fp32 on CPU so downstream LLR math is bf16-independent.
+    """
+    enc = tokenizer(
+        seqs, return_tensors="pt", padding=True,
+        return_special_tokens_mask=True,
+    )
+    inputs = {k: v.to(model.device)
+              for k, v in enc.items() if k in ("input_ids", "attention_mask")}
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    _t0 = time.perf_counter()
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+    ):
+        outputs = model(**inputs)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    print(f"BENCH_INFER_S {label} rows={len(seqs)} "
+          f"{time.perf_counter() - _t0:.4f}", flush=True)
     return (
         outputs.logits.float().cpu().numpy(),
         enc["special_tokens_mask"].cpu().numpy(),
         enc["attention_mask"].cpu().numpy(),
-        aa_token_ids,
     )
 
 
@@ -208,12 +249,35 @@ def _real_residue_logits(logits, special_mask, attn_mask, idx, seq_len, name):
     return rows
 
 
+def _gather_group(input_dirs, output_dirs):
+    """Flatten a group of (chunk_dir, output_dir) into parallel lists keyed by a
+    unique tag per sequence. The tag namespaces by chunk index so identical
+    stems in different chunks never collide, and carries the chunk's own output
+    dir so each result is scattered back to its origin chunk."""
+    tags, seqs, out_by_tag, name_by_tag, len_by_tag = [], [], {}, {}, {}
+    for ci, (in_dir, out_dir) in enumerate(zip(input_dirs, output_dirs)):
+        for name, seq in parse_inputs(in_dir).items():
+            tag = f"{ci}/{name}"
+            tags.append(tag)
+            seqs.append(seq)
+            out_by_tag[tag] = out_dir
+            name_by_tag[tag] = name
+            len_by_tag[tag] = len(seq)
+    return tags, seqs, out_by_tag, name_by_tag, len_by_tag
+
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--cache", type=str, required=True)
-    parser.add_argument("--input-dir", type=str, required=True)
-    parser.add_argument("--output-dir", type=str, required=True)
+    # Group persistence: one process loads the model ONCE and serves every
+    # chunk in --input-dirs (parallel to --output-dirs). Single-chunk runs pass
+    # one of each, reproducing the pre-grouping behaviour exactly.
+    parser.add_argument("--input-dirs", nargs="+", required=True)
+    parser.add_argument("--output-dirs", nargs="+", required=True)
     parser.add_argument("--size", type=str, default="6B", choices=[*ESMC_MODELS, "all"])
+    parser.add_argument("--token-budget", type=int, default=None,
+                        help="Padded-token budget per micro-batch (rows * max_len). "
+                             "Default: per-size DEFAULT_TOKEN_BUDGET.")
     parser.add_argument(
         "--save-logits", action="store_true",
         help="Produce per-residue vocabulary logits (logits.npy + "
@@ -221,26 +285,37 @@ if __name__ == "__main__":
              "embeddings. Loads the LM-head model (AutoModelForMaskedLM).",
     )
     args = parser.parse_args()
+    if len(args.input_dirs) != len(args.output_dirs):
+        parser.error("--input-dirs and --output-dirs must be equal length")
     hub_cache = _enforce_offline(args.cache)
     AUTOCAST_DTYPE = _enable_tf32()
 
-    seq_by_name = parse_inputs(args.input_dir)
-    names = list(seq_by_name.keys())
-    sequences = [seq_by_name[n] for n in names]
-    lengths = {n: len(seq_by_name[n]) for n in names}
+    tags, sequences, out_by_tag, name_by_tag, len_by_tag = _gather_group(
+        args.input_dirs, args.output_dirs)
+    seq_by_tag = dict(zip(tags, sequences))
 
     sizes = list(ESMC_MODELS) if args.size == "all" else [args.size]
 
     for size in sizes:
         model_name = ESMC_MODELS[size]
+        budget = args.token_budget or DEFAULT_TOKEN_BUDGET.get(size, 16000)
         if args.save_logits:
-            logits, special_mask, attn_mask, aa_token_ids = encode_for_logits(
-                sequences, model_name, hub_cache)
-            for i, name in enumerate(names):
-                rows = _real_residue_logits(
-                    logits, special_mask, attn_mask, i, lengths[name], name)
-                save_logits_outputs(args.output_dir, name, size, rows, aa_token_ids)
+            model, tokenizer, aa_token_ids = load_logits_model(model_name, hub_cache)
+            for batch_tags in token_budget_batches(tags, sequences, budget):
+                seqs = [seq_by_tag[t] for t in batch_tags]
+                logits, special_mask, attn_mask = logits_batch(
+                    model, tokenizer, seqs, f"{model_name}:{size}")
+                for row, tag in enumerate(batch_tags):
+                    rows = _real_residue_logits(
+                        logits, special_mask, attn_mask, row,
+                        len_by_tag[tag], name_by_tag[tag])
+                    save_logits_outputs(out_by_tag[tag], name_by_tag[tag],
+                                        size, rows, aa_token_ids)
         else:
-            out = encode_sequences(sequences, model_name, hub_cache)
-            for i, name in enumerate(names):
-                save_outputs(args.output_dir, name, size, out, i, lengths[name])
+            model, tokenizer = load_embed_model(model_name, hub_cache)
+            for batch_tags in token_budget_batches(tags, sequences, budget):
+                seqs = [seq_by_tag[t] for t in batch_tags]
+                hidden = embed_batch(model, tokenizer, seqs, f"{model_name}:{size}")
+                for row, tag in enumerate(batch_tags):
+                    h = hidden[row, :len_by_tag[tag]].cpu()
+                    save_outputs(out_by_tag[tag], name_by_tag[tag], size, h)

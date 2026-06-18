@@ -20,6 +20,9 @@ import os as _os
 ESMC_CFG    = config.get("esmc", {})
 ESMC_CHUNKS = f"{OUTPUT}/esmc_chunks"
 ESMC_SIZES  = ESMC_CFG.get("models", ["6B"])
+# Group persistence: chunks served per GPU job (one model load per group).
+ESMC_CHUNKS_PER_GROUP = max(1, int(ESMC_CFG.get("chunks_per_group", 1)))
+ESMC_GROUPS = f"{ESMC_CHUNKS}/groups.tsv"
 
 # Input source precedence: explicit yaml_dir > raw FASTA dir > MSA-stage YAMLs.
 # ESMC only needs the sequence (no MSA), so FASTA wins over the MSA YAMLs even
@@ -84,6 +87,7 @@ checkpoint chunk_yamls_for_esmc:
     params:
         yaml_dir = ESMC_INPUT_SOURCE,
         max_files = ESMC_CFG.get("max_files_per_job", 25),
+        chunks_per_group = ESMC_CHUNKS_PER_GROUP,
         fasta_flag = ESMC_FASTA_FLAG,
     localrule: True
     shell:
@@ -92,6 +96,7 @@ checkpoint chunk_yamls_for_esmc:
             --yaml_dir {params.yaml_dir} \
             --output_dir {ESMC_CHUNKS} \
             --max_files_per_job {params.max_files} \
+            --chunks_per_group {params.chunks_per_group} \
             {params.fasta_flag}
         """
 
@@ -104,21 +109,57 @@ def get_esmc_chunk_ids(wildcards):
     return [d.rstrip("/").split("/")[-1].replace("chunk_", "") for d in dirs]
 
 
+def _read_groups(groups_tsv):
+    """Parse groups.tsv -> {group_id: [chunk_id, ...]}."""
+    out = {}
+    with open(groups_tsv) as f:
+        next(f, None)  # header
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            gid, cids = line.split("\t")
+            out[gid] = cids.split(",")
+    return out
+
+
+def get_esmc_group_ids(wildcards):
+    """Group IDs from groups.tsv after the checkpoint (one GPU job per group)."""
+    checkpoints.chunk_yamls_for_esmc.get()
+    return list(_read_groups(ESMC_GROUPS).keys())
+
+
+def esmc_group_chunk_ids(group_id):
+    """Chunk IDs belonging to one group."""
+    return _read_groups(ESMC_GROUPS)[str(group_id)]
+
+
+def esmc_group_chunk_dirs(wildcards):
+    """Input: every chunk dir in the group (the job folds them all in one load)."""
+    return [f"{ESMC_CHUNKS}/chunk_{cid}"
+            for cid in esmc_group_chunk_ids(wildcards.group_id)]
+
+
 rule run_esmc:
-    """Encode a chunk of sequences with one ESMC model size, inside the ESM container."""
+    """Encode a GROUP of chunks with one ESMC model size in a single GPU job.
+    The model is loaded ONCE and serves every chunk in the group (persistence);
+    the runner length-buckets all sequences across the group into padded
+    micro-batches (intra-forward batching). One group sentinel drives the
+    matching per-group organize_esmc."""
     wildcard_constraints:
         size = _ESMC_SIZE_RE,
-        chunk_id = r"\d+",
+        group_id = r"\d+",
     input:
-        chunk_dir = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}",
+        chunk_dirs = esmc_group_chunk_dirs,
     output:
-        done = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output/.done",
+        done = f"{ESMC_CHUNKS}/group_{{group_id}}_{{size}}/.done",
     benchmark:
-        f"{OUTPUT}/benchmarks/esmc/encode_{{chunk_id}}_{{size}}.tsv"
+        f"{OUTPUT}/benchmarks/esmc/encode_group{{group_id}}_{{size}}.tsv"
     log:
-        f"{OUTPUT}/logs/esmc/encode_{{chunk_id}}_{{size}}.log"
+        f"{OUTPUT}/logs/esmc/encode_group{{group_id}}_{{size}}.log"
     params:
-        output_dir = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output",
+        chunks_root = ESMC_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmc_group_chunk_ids(wc.group_id)),
         cache_dir = ESMC_CFG.get("cache_dir", ""),
         yaml_src = ESMC_INPUT_SOURCE,
         runner = ESMC_RUNNER,
@@ -151,64 +192,76 @@ rule run_esmc:
             exit 1
         fi
 
-        mkdir -p {params.output_dir}
+        # Build the parallel --input-dirs / --output-dirs lists for this group.
+        in_dirs=""; out_dirs=""
+        for cid in {params.chunk_ids}; do
+            in_dirs="$in_dirs {params.chunks_root}/chunk_${{cid}}"
+            od="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
+            out_dirs="$out_dirs $od"
+            mkdir -p "$od"
+        done
 
-        # Container-only: run the ESMC batch encoder inside the ESM image.
-        # Mirrors containers/test/test_batch_esmc.sh — HF cache -> /models/hf
-        # (ro); chunk dir + sequences/ bound same-path so the symlinked YAMLs
-        # resolve; runner bound to /opt; --cleanenv + offline HF flags.
+        # Bind the whole chunks_root once (covers every chunk dir + output dir);
+        # sequences/ bound same-path so symlinked YAMLs resolve; runner -> /opt.
         {params.runtime} exec --nv --cleanenv \
             --env HF_HOME=/models/hf \
             --env HF_HUB_OFFLINE=1 \
             --env TRANSFORMERS_OFFLINE=1 \
             --env SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
             -B {params.cache_dir}:/models/hf:ro \
-            -B {input.chunk_dir}:{input.chunk_dir}:ro \
+            -B {params.chunks_root}:{params.chunks_root} \
             -B {params.yaml_src}:{params.yaml_src}:ro \
-            -B {params.output_dir}:{params.output_dir} \
             -B {params.runner}:/opt/run_batch_esmc.py:ro \
             {params.sif} \
             python /opt/run_batch_esmc.py \
                 --cache /models/hf \
-                --input-dir {input.chunk_dir} \
-                --output-dir {params.output_dir} \
+                --input-dirs $in_dirs \
+                --output-dirs $out_dirs \
                 --size {wildcards.size}
 
+        mkdir -p "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
         touch {output.done}
         """
 
 
 rule organize_esmc:
-    """Move encoder outputs to sequences/{seq}/esmc/{size}/ then drop the scratch dir."""
+    """Move a group's encoder outputs to sequences/{seq}/esmc/{size}/, then drop
+    the per-chunk scratch dirs. One organize job per group mirrors the one
+    run_esmc job per group."""
     wildcard_constraints:
         size = _ESMC_SIZE_RE,
-        chunk_id = r"\d+",
+        group_id = r"\d+",
     input:
-        done = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output/.done",
+        done = f"{ESMC_CHUNKS}/group_{{group_id}}_{{size}}/.done",
     output:
-        organized = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}.organized",
+        organized = f"{ESMC_CHUNKS}/group_{{group_id}}_{{size}}.organized",
     params:
-        scratch = f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}_output",
+        chunks_root = ESMC_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmc_group_chunk_ids(wc.group_id)),
         sequences_dir = SEQUENCES_DIR,
     localrule: True
     shell:
         """
-        python workflow/scripts/organize_encoder_outputs.py \
-            --scratch_dir {params.scratch} \
-            --sequences_dir {params.sequences_dir} \
-            --stage esmc
-
-        rm -rf {params.scratch}
+        set -euo pipefail
+        for cid in {params.chunk_ids}; do
+            scratch="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
+            python workflow/scripts/organize_encoder_outputs.py \
+                --scratch_dir "$scratch" \
+                --sequences_dir {params.sequences_dir} \
+                --stage esmc
+            rm -rf "$scratch"
+        done
+        rm -rf "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
         touch {output.organized}
         """
 
 
 def aggregate_esmc_organized(wildcards):
-    """Collect all .organized sentinels for one model size across chunks."""
-    chunk_ids = get_esmc_chunk_ids(wildcards)
+    """Collect all .organized sentinels for one model size across groups."""
+    group_ids = get_esmc_group_ids(wildcards)
     return expand(
-        f"{ESMC_CHUNKS}/chunk_{{chunk_id}}_{{size}}.organized",
-        chunk_id=chunk_ids, size=wildcards.size,
+        f"{ESMC_CHUNKS}/group_{{group_id}}_{{size}}.organized",
+        group_id=group_ids, size=wildcards.size,
     )
 
 

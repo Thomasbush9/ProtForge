@@ -1,8 +1,8 @@
 """
 ESMFold2 Stage Rules
 ====================
-chunk_yamls_for_esmfold -> run_esmfold (per chunk) ->
-organize_esmfold (per chunk) -> esmfold_complete (aggregate)
+chunk_yamls_for_esmfold -> run_esmfold (per group) ->
+organize_esmfold (per group) -> esmfold_complete (aggregate)
 
 Folds per-sequence inputs with ESMFold2 (biohub "fast" variant) inside the ESM
 container via containers/run_batch_esmfold.py (bound to /opt at run time, never
@@ -16,6 +16,9 @@ import os as _os
 
 ESMFOLD_CFG    = config.get("esmfold", {})
 ESMFOLD_CHUNKS = f"{OUTPUT}/esmfold_chunks"
+# Group persistence: chunks served per GPU job (one model load per group).
+ESMFOLD_CHUNKS_PER_GROUP = max(1, int(ESMFOLD_CFG.get("chunks_per_group", 1)))
+ESMFOLD_GROUPS = f"{ESMFOLD_CHUNKS}/groups.tsv"
 
 # Input source precedence: explicit yaml_dir > raw FASTA dir > MSA-stage YAMLs.
 # ESMFold2 only needs the sequence (no MSA), so FASTA wins over the MSA YAMLs even
@@ -40,6 +43,9 @@ ESMFOLD_ACCOUNT   = SLURM_CFG.get("account", "")
 
 # Absolute path to the in-container batch runner (bound to /opt at run time).
 ESMFOLD_RUNNER = _os.path.abspath("containers/run_batch_esmfold.py")
+
+# Opt-in torch.compile of the resident model (compiled once per group job).
+ESMFOLD_COMPILE = ESMFOLD_CFG.get("compile", False)
 
 
 wildcard_constraints:
@@ -69,6 +75,7 @@ checkpoint chunk_yamls_for_esmfold:
     params:
         yaml_dir = ESMFOLD_INPUT_SOURCE,
         max_files = ESMFOLD_CFG.get("max_files_per_job", 25),
+        chunks_per_group = ESMFOLD_CHUNKS_PER_GROUP,
         fasta_flag = ESMFOLD_FASTA_FLAG,
     localrule: True
     shell:
@@ -77,6 +84,7 @@ checkpoint chunk_yamls_for_esmfold:
             --yaml_dir {params.yaml_dir} \
             --output_dir {ESMFOLD_CHUNKS} \
             --max_files_per_job {params.max_files} \
+            --chunks_per_group {params.chunks_per_group} \
             {params.fasta_flag}
         """
 
@@ -89,24 +97,63 @@ def get_esmfold_chunk_ids(wildcards):
     return [d.rstrip("/").split("/")[-1].replace("chunk_", "") for d in dirs]
 
 
+def _read_groups(groups_tsv):
+    """Parse groups.tsv -> {group_id: [chunk_id, ...]}."""
+    out = {}
+    with open(groups_tsv) as f:
+        next(f, None)  # header
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            gid, cids = line.split("\t")
+            out[gid] = cids.split(",")
+    return out
+
+
+def get_esmfold_group_ids(wildcards):
+    """Group IDs from groups.tsv after the checkpoint (one GPU job per group)."""
+    checkpoints.chunk_yamls_for_esmfold.get()
+    return list(_read_groups(ESMFOLD_GROUPS).keys())
+
+
+def esmfold_group_chunk_ids(group_id):
+    """Chunk IDs belonging to one group."""
+    return _read_groups(ESMFOLD_GROUPS)[str(group_id)]
+
+
+def esmfold_group_chunk_dirs(wildcards):
+    """Input: every chunk dir in the group (the job folds them all in one load)."""
+    return [f"{ESMFOLD_CHUNKS}/chunk_{cid}"
+            for cid in esmfold_group_chunk_ids(wildcards.group_id)]
+
+
 rule run_esmfold:
-    """Fold a chunk of sequences with ESMFold2, inside the ESM container."""
+    """Fold a GROUP of chunks with ESMFold2 in a single GPU job. The model is
+    loaded ONCE and folds every chunk in the group (persistence); folds stay
+    serial (one complex per call) but the model load is amortized across the
+    whole group. One group sentinel drives the matching per-group
+    organize_esmfold."""
+    wildcard_constraints:
+        group_id = r"\d+",
     input:
-        chunk_dir = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}",
+        chunk_dirs = esmfold_group_chunk_dirs,
     output:
-        done = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}_output/.done",
+        done = f"{ESMFOLD_CHUNKS}/group_{{group_id}}/.done",
     benchmark:
-        f"{OUTPUT}/benchmarks/esmfold/fold_{{chunk_id}}.tsv"
+        f"{OUTPUT}/benchmarks/esmfold/fold_group{{group_id}}.tsv"
     log:
-        f"{OUTPUT}/logs/esmfold/fold_{{chunk_id}}.log"
+        f"{OUTPUT}/logs/esmfold/fold_group{{group_id}}.log"
     params:
-        output_dir = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}_output",
+        chunks_root = ESMFOLD_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmfold_group_chunk_ids(wc.group_id)),
         cache_dir = ESMFOLD_CFG.get("cache_dir", ""),
         yaml_src = ESMFOLD_INPUT_SOURCE,
         runner = ESMFOLD_RUNNER,
         num_loops = ESMFOLD_CFG.get("num_loops", 3),
         num_sampling_steps = ESMFOLD_CFG.get("num_sampling_steps", 50),
         seed = ESMFOLD_CFG.get("seed", 0),
+        compile_flag = "--compile" if ESMFOLD_COMPILE else "",
         runtime = CONTAINER_RUNTIME,
         sif = container_sif("esmfold"),
     resources:
@@ -136,65 +183,83 @@ rule run_esmfold:
             exit 1
         fi
 
-        mkdir -p {params.output_dir}
+        # Build the parallel --input-dirs / --output-dirs lists for this group.
+        in_dirs=""; out_dirs=""
+        for cid in {params.chunk_ids}; do
+            in_dirs="$in_dirs {params.chunks_root}/chunk_${{cid}}"
+            od="{params.chunks_root}/chunk_${{cid}}_output"
+            out_dirs="$out_dirs $od"
+            mkdir -p "$od"
+        done
 
         # Container-only: run the ESMFold2 batch runner inside the ESM image.
         # Mirrors containers/test/esmfold2_test_image.sh — HF cache -> /models/hf
-        # (ro); chunk dir + sequences/ bound same-path so the symlinked YAMLs
-        # resolve; runner bound to /opt; --cleanenv + offline HF flags.
+        # (ro); bind the whole chunks_root once (covers every chunk dir + output
+        # dir); sequences/ bound same-path so symlinked YAMLs resolve; runner ->
+        # /opt; --cleanenv + offline HF flags.
         {params.runtime} exec --nv --cleanenv \
             --env HF_HOME=/models/hf \
             --env HF_HUB_OFFLINE=1 \
             --env TRANSFORMERS_OFFLINE=1 \
             --env SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
             -B {params.cache_dir}:/models/hf:ro \
-            -B {input.chunk_dir}:{input.chunk_dir}:ro \
+            -B {params.chunks_root}:{params.chunks_root} \
             -B {params.yaml_src}:{params.yaml_src}:ro \
-            -B {params.output_dir}:{params.output_dir} \
             -B {params.runner}:/opt/run_batch_esmfold.py:ro \
             {params.sif} \
             python /opt/run_batch_esmfold.py \
                 --cache /models/hf \
-                --input-dir {input.chunk_dir} \
-                --output-dir {params.output_dir} \
+                --input-dirs $in_dirs \
+                --output-dirs $out_dirs \
                 --num-loops {params.num_loops} \
                 --num-sampling-steps {params.num_sampling_steps} \
-                --seed {params.seed}
+                --seed {params.seed} \
+                {params.compile_flag}
 
+        mkdir -p "{params.chunks_root}/group_{wildcards.group_id}"
         touch {output.done}
         """
 
 
 rule organize_esmfold:
-    """Move fold outputs to sequences/{seq}/esmfold/fast/ then drop the scratch dir."""
+    """Move a group's fold outputs to sequences/{seq}/esmfold/fast/, then drop the
+    per-chunk scratch dirs. One organize job per group mirrors the one
+    run_esmfold job per group."""
+    wildcard_constraints:
+        group_id = r"\d+",
     input:
-        done = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}_output/.done",
+        done = f"{ESMFOLD_CHUNKS}/group_{{group_id}}/.done",
     output:
-        organized = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}.organized",
+        organized = f"{ESMFOLD_CHUNKS}/group_{{group_id}}.organized",
     params:
-        scratch = f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}_output",
+        chunks_root = ESMFOLD_CHUNKS,
+        chunk_ids = lambda wc: " ".join(esmfold_group_chunk_ids(wc.group_id)),
         sequences_dir = SEQUENCES_DIR,
     localrule: True
     shell:
         """
-        python workflow/scripts/organize_encoder_outputs.py \
-            --scratch_dir {params.scratch} \
-            --sequences_dir {params.sequences_dir} \
-            --stage esmfold
-
-        rm -rf {params.scratch}
+        set -euo pipefail
+        for cid in {params.chunk_ids}; do
+            scratch="{params.chunks_root}/chunk_${{cid}}_output"
+            python workflow/scripts/organize_encoder_outputs.py \
+                --scratch_dir "$scratch" \
+                --sequences_dir {params.sequences_dir} \
+                --stage esmfold
+            rm -rf "$scratch"
+        done
+        rm -rf "{params.chunks_root}/group_{wildcards.group_id}"
         touch {output.organized}
         """
 
 
 def aggregate_esmfold_organized(wildcards):
-    """Collect all .organized sentinels across chunks."""
-    chunk_ids = get_esmfold_chunk_ids(wildcards)
-    return expand(f"{ESMFOLD_CHUNKS}/chunk_{{chunk_id}}.organized", chunk_id=chunk_ids)
+    """Collect all .organized sentinels across groups."""
+    group_ids = get_esmfold_group_ids(wildcards)
+    return expand(f"{ESMFOLD_CHUNKS}/group_{{group_id}}.organized", group_id=group_ids)
 
 
 rule esmfold_complete:
-    """Aggregate sentinel: all ESMFold2 chunks folded + organized."""
+    """Aggregate sentinel: all ESMFold2 groups folded + organized."""
     input:
         aggregate_esmfold_organized,
     output:
