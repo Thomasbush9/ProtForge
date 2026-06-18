@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProtForge — GPU Utilization Review &amp; Optimization Plan</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7eaf0; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#6ea8fe; --green:#5fd08a; --amber:#f0c36d; --red:#f08a8a;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 28px 120px;}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px;}
+  h1{font-size:30px;margin:0 0 8px;letter-spacing:-.3px;}
+  .sub{color:var(--muted);font-size:15px;margin:0;}
+  .meta{margin-top:14px;color:var(--muted);font-size:13px;}
+  h2{font-size:22px;margin:46px 0 12px;padding-top:10px;letter-spacing:-.2px;}
+  h3{font-size:17px;margin:26px 0 8px;color:#cdd5e2;}
+  p{margin:10px 0;}
+  a{color:var(--accent);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  code{font-family:var(--mono);font-size:13.5px;background:#23283340;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#cfe0ff;}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;color:#d7dee9;}
+  pre code{background:none;border:none;padding:0;color:inherit;}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;}
+  .tldr{background:linear-gradient(180deg,#1a2230,#171a21);border:1px solid #2c3a52;}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px;}
+  tr:last-child td{border-bottom:none;}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;
+    letter-spacing:.3px;vertical-align:middle;}
+  .b-ok{background:#163a26;color:var(--green);border:1px solid #245c3c;}
+  .b-warn{background:#3a3216;color:var(--amber);border:1px solid #5c4f24;}
+  .b-block{background:#3a1616;color:var(--red);border:1px solid #5c2424;}
+  .b-info{background:#16293a;color:var(--accent);border:1px solid #24435c;}
+  ul,ol{margin:10px 0;padding-left:22px;}
+  li{margin:5px 0;}
+  .toc{columns:2;column-gap:30px;font-size:14.5px;}
+  .toc a{display:block;padding:3px 0;color:#bcc6d6;}
+  .fileref{font-family:var(--mono);font-size:12.5px;color:var(--amber);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:720px){.grid,.toc{grid-template-columns:1fr;columns:1;}}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0;}
+  .kpi .card{flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:10px;padding:14px;}
+  .kpi .n{font-size:24px;font-weight:700;}
+  .kpi .l{font-size:12.5px;color:var(--muted);}
+  hr{border:none;border-top:1px solid var(--line);margin:40px 0;}
+  .small{font-size:13px;color:var(--muted);}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  blockquote{border-left:3px solid var(--accent);margin:14px 0;padding:4px 16px;color:#c6cfdd;background:#1a1e27;border-radius:0 8px 8px 0;}
+  .lift{color:var(--green);font-weight:700;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>ProtForge — GPU Utilization Review &amp; Optimization Plan</h1>
+  <p class="sub">Where the GPUs idle today, and the concrete changes that close the gap — written from an NVIDIA performance-engineering lens.</p>
+  <p class="meta">Scope: the GPU stages (ESM-C, ESMFold2, ESM-C/SAE, Boltz, OpenFold3) and their SLURM dispatch.
+  Job-level parallelism (dependency graph, chunking, array fan-out) is already solid; this targets <em>per-GPU</em> efficiency.</p>
+</header>
+
+<div class="panel tldr">
+  <h3 style="margin-top:0">TL;DR</h3>
+  <p>The pipeline is well-decomposed at the <em>job</em> level but leaves large amounts of <em>device</em>-level throughput on the table. The dominant losses, in priority order:</p>
+  <ol>
+    <li><strong>No mixed precision / TF32.</strong> Every model loads in fp32 and runs without <code>autocast</code>. On H100 this forfeits the tensor-core path — typically <span class="lift">1.5–3×</span> for free with bf16/TF32.</li>
+    <li><strong>ESMFold2 and SAE run batch=1 in a Python <code>for</code> loop.</strong> The GPU drains between sequences. Real batching (with length bucketing) is the single biggest fold/SAE win.</li>
+    <li><strong>ESM-C pads the whole chunk to the longest sequence.</strong> One 800-aa outlier inflates a 25× batch of 150-aa peptides to 800 columns — most FLOPs are spent on padding.</li>
+    <li><strong>One job → one whole GPU.</strong> 300M/600M ESM-C and ESMFold underfill an H100 (often &lt;30% SM occupancy) yet hold the full card. No MPS/MIG sharing.</li>
+    <li><strong>Cold weight load per chunk.</strong> Each SLURM job reloads weights from shared storage + HtoD copy; for ESM-C-6B that is minutes of GPU idle amortized over only 25 sequences.</li>
+  </ol>
+  <p>Most fixes are localized to the four runner scripts and the SLURM resource block — no architectural change to the Snakemake graph.</p>
+</div>
+
+<div class="kpi">
+  <div class="card"><div class="n">5</div><div class="l">GPU stages reviewed</div></div>
+  <div class="card"><div class="n">4</div><div class="l">runner scripts to touch</div></div>
+  <div class="card"><div class="n">batch=1</div><div class="l">ESMFold2 &amp; SAE today</div></div>
+  <div class="card"><div class="n">fp32</div><div class="l">all forwards today</div></div>
+</div>
+
+<h2>Contents</h2>
+<div class="toc panel">
+  <a href="#method">1 · How I assessed it</a>
+  <a href="#findings">2 · Findings by stage</a>
+  <a href="#tier1">3 · Tier 1 — free wins (precision + load)</a>
+  <a href="#tier2">4 · Tier 2 — batching &amp; padding</a>
+  <a href="#tier3">5 · Tier 3 — device sharing (MPS/MIG)</a>
+  <a href="#tier4">6 · Tier 4 — graph/compile &amp; advanced</a>
+  <a href="#measure">7 · How to measure the wins</a>
+  <a href="#plan">8 · Recommended sequencing</a>
+  <a href="#risks">9 · Risks &amp; non-goals</a>
+</div>
+
+<h2 id="method">1 · How I assessed it</h2>
+<p>I read the GPU dispatch path end to end: the SLURM resource blocks and <code>singularity exec --nv</code> invocations in
+<span class="fileref">workflow/rules/{esmc,esmfold,boltz,openfold}.smk</span>, the <code>slurm_extra()</code> GPU-request helper in
+<span class="fileref">Snakefile</span>, and the actual device work in
+<span class="fileref">containers/run_batch_esmc.py</span>, <span class="fileref">run_batch_esmfold.py</span>, and
+<span class="fileref">esmc_extract_sae.py</span>.</p>
+<p>The lens is standard NVIDIA inference triage: <em>are tensor cores active (precision)?</em> · <em>is the SM array fed (batch/occupancy)?</em> ·
+<em>is the device shared when one model can't fill it (MPS/MIG)?</em> · <em>are we paying kernel-launch / cold-load overhead we could amortize (graphs, persistent workers)?</em></p>
+
+<h2 id="findings">2 · Findings by stage</h2>
+<table>
+  <thead><tr><th>Stage</th><th>Batching today</th><th>Precision</th><th>Device use</th><th>Primary loss</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>ESM-C</strong><br><span class="tag">run_batch_esmc.py</span></td>
+      <td>One padded batch of the whole chunk (<code>padding=True</code>)</td>
+      <td>fp32</td>
+      <td>1 GPU/job</td>
+      <td><span class="badge b-warn">PAD WASTE</span> longest seq inflates all; no TF32/bf16</td>
+    </tr>
+    <tr>
+      <td><strong>ESMFold2</strong><br><span class="tag">run_batch_esmfold.py</span></td>
+      <td><span class="badge b-block">batch=1</span> Python loop, one fold at a time</td>
+      <td>fp32</td>
+      <td>1 GPU/job</td>
+      <td>GPU idles between sequences; no autocast; no compile on the diffusion loops</td>
+    </tr>
+    <tr>
+      <td><strong>ESM-C / SAE</strong><br><span class="tag">esmc_extract_sae.py</span></td>
+      <td><span class="badge b-block">batch=1</span> <code>forward_sae</code> per sequence</td>
+      <td>fp32</td>
+      <td>1 GPU/job</td>
+      <td>Same as ESMFold: serial forwards, GPU starved</td>
+    </tr>
+    <tr>
+      <td><strong>Boltz</strong><br><span class="tag">boltz predict</span></td>
+      <td>Boltz-internal (we pass a chunk dir)</td>
+      <td>Boltz default</td>
+      <td>1 GPU/job (<code>--devices 1</code>)</td>
+      <td><span class="badge b-info">EXTERNAL</span> tune diffusion/recycling &amp; kernels via flags, not code</td>
+    </tr>
+    <tr>
+      <td><strong>OpenFold3</strong><br><span class="tag">run_openfold</span></td>
+      <td>Lightning, batched across <code>gpus_per_job</code></td>
+      <td>OpenFold default</td>
+      <td>1–4 GPU/job</td>
+      <td><span class="badge b-ok">BEST TODAY</span> already multi-GPU + batched; mostly leave alone</td>
+    </tr>
+  </tbody>
+</table>
+
+<blockquote>The two in-house runners that loop one sequence at a time — ESMFold2 and SAE — are where the device sits most idle.
+Boltz/OpenFold delegate to mature engines whose own batching we should tune through flags, not re-implement.</blockquote>
+
+<h2 id="tier1">3 · Tier 1 — free wins (precision + load)</h2>
+<p>These are low-risk, touch only the runners, and apply to every in-house stage. Do these first.</p>
+
+<h3>1.1 Turn on TF32 + bf16 autocast</h3>
+<p>Add a one-time preamble in each runner's <code>__main__</code> before any forward. On H100/A100 this routes matmuls through tensor cores at near-zero accuracy cost for inference embeddings/structure.</p>
+<pre><code>import torch
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cuda.matmul.fp32_precision = "tf32"  # newer torch alias
+
+# wrap the forward:
+with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+    outputs = model(**inputs)</code></pre>
+<p>Applies to <span class="fileref">run_batch_esmc.py:encode_sequences / encode_for_logits</span>,
+<span class="fileref">run_batch_esmfold.py</span> (wrap <code>builder.fold(...)</code>), and
+<span class="fileref">esmc_extract_sae.py:forward_sae</span>.
+For ESMFold/structure, bf16 is safer than fp16 (no loss-scaling, wide dynamic range). Validate pLDDT/pTM parity on the smoke fixture — see §7.</p>
+<p class="small">Note: logits in <code>encode_for_logits</code> already cast back to fp32 on CPU (<code>outputs.logits.float().cpu()</code>), so LLR math downstream is unaffected by an autocast forward.</p>
+
+<h3>1.2 Stop reloading weights cold for every chunk</h3>
+<p>Each chunk is its own SLURM job that runs <code>from_pretrained(...).cuda()</code> from scratch. For ESM-C-6B that is a multi-GB read off shared LFS + HtoD copy, amortized over only <code>max_files_per_job=25</code> sequences. Two levers:</p>
+<ul>
+  <li><strong>Raise <code>max_files_per_job</code> for the small/cheap models</strong> so the fixed load cost is spread over more work. The bin-aware chunker already exists (<code>binning:</code> in config) — extend the recipe so short-sequence bins pack many more per chunk.</li>
+  <li><strong>Persistent in-job server for many-chunk runs:</strong> when one job folds a large input dir, keep the model resident and stream sequences — which is exactly what the batching change in §4 enables. The model is loaded once per job already; the gain is making each job <em>do more forwards</em> before exit.</li>
+</ul>
+<blockquote>Rule of thumb: if model-load time is a double-digit % of job wall-time (check the <code>BENCH_INFER_S</code> lines vs total job time in <span class="fileref">benchmarks/&lt;stage&gt;/*.tsv</span>), the chunk is too small for that model.</blockquote>
+
+<h2 id="tier2">4 · Tier 2 — batching &amp; padding</h2>
+
+<h3>2.1 ESMFold2 &amp; SAE: replace the per-sequence loop with real batches</h3>
+<p>Today:</p>
+<pre><code># run_batch_esmfold.py
+for name, sequence in seq_by_name.items():
+    result = builder.fold(model, spi, ...)   # one sequence, GPU drains after</code></pre>
+<p>ESMFold2 supports multi-chain / multi-sequence input building; SAE is a plain transformer forward that already tokenizes with <code>padding=True</code> — it just never receives more than one sequence. Change both to:</p>
+<ol>
+  <li><strong>Length-sort</strong> the chunk's sequences.</li>
+  <li><strong>Pack into micro-batches</strong> by a token budget (e.g. <code>sum(len) ≤ B</code>), not a fixed count — keeps padding tight and memory bounded.</li>
+  <li>Forward each micro-batch once under autocast; slice per-sequence outputs back out (the SAE saver already trims to <code>seq_len</code>, so the per-row logic is mostly there).</li>
+</ol>
+<p>This is the highest-value change for the two starved stages: it converts a string of tiny kernels into a few large ones, raising SM occupancy and cutting per-sequence launch overhead.</p>
+
+<h3>2.2 ESM-C: length-bucketed batching instead of one chunk-wide pad</h3>
+<p>The single <code>tokenizer(sequences, padding=True)</code> pads to the chunk maximum. With mixed lengths the wasted-FLOP fraction is roughly <code>1 − mean(len)/max(len)</code> — easily 50%+ on heterogeneous chunks. Fix:</p>
+<pre><code>order = sorted(range(len(sequences)), key=lambda i: len(sequences[i]))
+for batch_idx in token_budget_batches(order, sequences, budget=TOKENS):
+    enc = tokenizer([sequences[i] for i in batch_idx], padding=True, return_tensors="pt")
+    with torch.inference_mode(), torch.autocast("cuda", torch.bfloat16):
+        out = model(**enc.to(model.device))
+    # map rows back to original names via batch_idx</code></pre>
+<p>Same primitive as 2.1 — implement <code>token_budget_batches</code> once in a shared helper and reuse across all three runners.</p>
+
+<h3>2.3 Pin host memory + non-blocking copies</h3>
+<p>Tokenized tensors move HtoD with default (pageable) memory. For the batched path, <code>pin_memory()</code> + <code>.to(device, non_blocking=True)</code> overlaps copy with compute. Marginal next to 2.1/2.2 but free once batching exists.</p>
+
+<h2 id="tier3">5 · Tier 3 — device sharing (MPS / MIG)</h2>
+<p>Even after batching, a 300M/600M ESM-C or a single short-protein ESMFold rarely fills an H100. The pipeline currently requests one whole GPU per job (<code>slurm_extra(gpu=...)</code> emits <code>--gpus-per-node=1</code>, runners hardcode <code>CUDA_VISIBLE_DEVICES=0</code>). Two NVIDIA mechanisms reclaim the idle SMs:</p>
+
+<div class="grid">
+  <div class="panel">
+    <h3 style="margin-top:0">CUDA MPS <span class="badge b-info">recommended first</span></h3>
+    <p>Multi-Process Service lets several processes share one GPU context with real concurrent kernel execution. Co-locate N small jobs on one card.</p>
+    <ul>
+      <li>Start <code>nvidia-cuda-mps-control -d</code> in the job prologue (or a wrapper).</li>
+      <li>Pack multiple chunks per GPU via SLURM <code>--gpus-per-task</code> sharing or by launching several runner processes in one job.</li>
+      <li>Best for the embedding/SAE stages where each process is light and memory fits several-fold.</li>
+    </ul>
+    <p class="small">Gate behind a config flag (<code>esmc.mps: true</code>) — not all partitions allow it.</p>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">MIG (A100/H100) <span class="badge b-warn">partition-dependent</span></h3>
+    <p>Hard-partition one physical GPU into isolated slices (e.g. 7× on A100). Each slice is a fully isolated mini-GPU with guaranteed memory.</p>
+    <ul>
+      <li>Cleaner isolation than MPS, better for guaranteed-memory small models.</li>
+      <li>Requires admin-configured MIG profiles on the partition; request a slice via <code>--gres=gpu:1g.10gb:1</code>-style specs.</li>
+      <li>Coordinate with Kempner ops — this is a cluster-config dependency, not a code change.</li>
+    </ul>
+  </div>
+</div>
+<p>The code-side enabler for both: stop hardcoding <code>CUDA_VISIBLE_DEVICES=0</code> in the rule shells and let SLURM/MPS assign the device, plus a small dispatch flag to fold several chunks into one GPU allocation for the cheap stages.</p>
+
+<h2 id="tier4">6 · Tier 4 — graph/compile &amp; advanced</h2>
+<ul>
+  <li><strong><code>torch.compile</code> on the resident model.</strong> ESMFold2's diffusion/recycling loops re-run identical-shape forwards; <code>model = torch.compile(model)</code> (or the structure module) cuts kernel-dispatch overhead and fuses ops. Pays off only when the model is reused across many sequences — i.e. after §4 batching lands. Bucket shapes to limit recompiles.</li>
+  <li><strong>CUDA graphs for the diffusion sampler.</strong> <code>num_sampling_steps=50</code> repeats the same kernel sequence; capturing it as a CUDA graph removes per-step launch latency. Higher effort; revisit if profiling shows launch-bound steps.</li>
+  <li><strong>Boltz flags, not Boltz code.</strong> Boltz already exposes <code>--no_kernels</code>/<code>subsample_msa</code>/<code>use_potentials</code> through <code>boltz.advanced</code>. Profile whether the custom Triton kernels (default on) beat the fallback on the target GPU; tune <code>diffusion_samples</code>/<code>recycling_steps</code> for the throughput/quality point you actually need (25/10 is generous).</li>
+  <li><strong>OpenFold3 is already the model citizen</strong> — Lightning batching across up to 4 GPUs. Leave the dispatch alone; only revisit <code>num_workers</code> if the dataloader is the bottleneck (check GPU util during its jobs).</li>
+</ul>
+
+<h2 id="measure">7 · How to measure the wins</h2>
+<p>Don't trust the changes — measure them. The harness already emits <code>BENCH_INFER_S</code> per forward and Snakemake <code>benchmark:</code> TSVs per job.</p>
+<ul>
+  <li><strong>Before/after on the smoke fixture</strong> (<span class="fileref">containers/test/smoke.fasta</span> + the test scripts): assert structure metrics (pLDDT/pTM) and embedding/logit values match within tolerance — precision &amp; batching must not move results beyond fp tolerance.</li>
+  <li><strong>Device occupancy:</strong> run one job under <code>nvidia-smi dmon -s u</code> or <code>nsys profile</code>; SM% before vs after batching is the headline number.</li>
+  <li><strong>Throughput:</strong> sequences/GPU-hour from the <code>benchmarks/*.tsv</code> wall-times. This is the metric that maps to cluster cost.</li>
+  <li><strong>Load fraction:</strong> compare summed <code>BENCH_INFER_S</code> against job wall-time to quantify the cold-load tax §1.2 targets.</li>
+</ul>
+
+<h2 id="plan">8 · Recommended sequencing</h2>
+<table>
+  <thead><tr><th>#</th><th>Change</th><th>Files</th><th>Effort</th><th>Expected</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>TF32 + bf16 autocast in all runners</td><td><span class="tag">run_batch_esmc.py, run_batch_esmfold.py, esmc_extract_sae.py</span></td><td>S</td><td><span class="lift">1.5–3×</span> per forward</td></tr>
+    <tr><td>2</td><td>Length-sorted token-budget batching helper</td><td><span class="tag">shared util + 3 runners</span></td><td>M</td><td>ESMFold/SAE <span class="lift">large</span>; ESM-C cuts pad waste</td></tr>
+    <tr><td>3</td><td>Right-size chunks via bin recipe for cheap models</td><td><span class="tag">config + binning recipe</span></td><td>S</td><td>Amortize cold load</td></tr>
+    <tr><td>4</td><td>MPS opt-in for small embedding/SAE jobs</td><td><span class="tag">rule shells + Snakefile flag</span></td><td>M</td><td>Reclaim idle SMs</td></tr>
+    <tr><td>5</td><td><code>torch.compile</code> on resident models</td><td><span class="tag">runners (post-batching)</span></td><td>M</td><td>Launch-overhead cut</td></tr>
+    <tr><td>6</td><td>Boltz flag tuning + MIG (ops-dependent)</td><td><span class="tag">config / cluster</span></td><td>S–L</td><td>Situational</td></tr>
+  </tbody>
+</table>
+<p>Steps 1–2 are the bulk of the realizable gain and are pure code in the three runners. Everything below is incremental and gated on profiling.</p>
+
+<h2 id="risks">9 · Risks &amp; non-goals</h2>
+<ul>
+  <li><strong>Numerical parity is the gate.</strong> bf16/batched paths must reproduce the fp32/serial results within tolerance on the smoke fixtures before rollout. The SAE and logit savers already pin output dtype (fp16/fp32 on CPU), so storage format is unchanged — only the compute path moves.</li>
+  <li><strong>OOM from over-batching.</strong> Token-budget batching (not fixed count) bounds peak memory; tune the budget per model size, reusing the existing per-size SLURM <code>mem_mb</code> overrides.</li>
+  <li><strong>MPS/MIG are partition-dependent.</strong> Keep them behind config flags; the default path stays one-GPU-per-job so nothing breaks on partitions without them.</li>
+  <li><strong>Non-goals:</strong> the job graph, chunking dependency logic, and MSA stage are out of scope — they're already efficient and not GPU-bound in the same way. OpenFold3's dispatch is left as-is.</li>
+</ul>
+
+<hr>
+<p class="small">Generated from a static review of the GPU stages on 2026-06-18. No jobs were executed; all throughput figures are engineering estimates pending the §7 measurements. Exact multipliers depend on sequence-length distribution and target GPU.</p>
+
+</div>
+</body>
+</html>

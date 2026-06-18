@@ -27,6 +27,21 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     return f"{cache_dir}/hub"
 
 
+# bf16 tensor-core inference path (see run_batch_esmc.py). TF32 lifts fp32
+# matmuls onto tensor cores; bf16 autocast halves matmul cost with a wide
+# exponent so pLDDT/pTM stay within fp tolerance. Validate parity on the smoke
+# fixture before trusting structures. None on CPU-only hosts (autocast no-op).
+def _enable_tf32() -> "torch.dtype | None":
+    if not torch.cuda.is_available():
+        return None
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    return torch.bfloat16
+
+
+AUTOCAST_DTYPE: "torch.dtype | None" = None
+
+
 def _seq_from_yaml(path: Path) -> str:
     with open(path) as f:
         data = yaml.safe_load(f)
@@ -127,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     hub_cache = _enforce_offline(args.cache)
+    AUTOCAST_DTYPE = _enable_tf32()
 
     seq_by_name = parse_inputs(args.input_dir)
     model = load_model(hub_cache)
@@ -142,14 +158,17 @@ if __name__ == "__main__":
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         _t0 = time.perf_counter()
-        result = builder.fold(
-            model,
-            spi,
-            num_loops=args.num_loops,
-            num_sampling_steps=args.num_sampling_steps,
-            num_diffusion_samples=1,
-            seed=args.seed,
-        )
+        with torch.autocast(
+            "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+        ):
+            result = builder.fold(
+                model,
+                spi,
+                num_loops=args.num_loops,
+                num_sampling_steps=args.num_sampling_steps,
+                num_diffusion_samples=1,
+                seed=args.seed,
+            )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         print(f"BENCH_INFER_S {name} {time.perf_counter() - _t0:.4f}", flush=True)

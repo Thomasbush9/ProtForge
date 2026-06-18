@@ -31,6 +31,22 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     return f"{cache_dir}/hub"
 
 
+# bf16 tensor-core inference path. TF32 lifts fp32 matmuls onto tensor cores
+# (free on Ampere+); bf16 autocast halves the matmul cost again with a wide
+# enough exponent that embeddings/logits stay within fp tolerance. Logit
+# outputs are cast back to fp32 on CPU before saving, so downstream LLR math is
+# unchanged. AUTOCAST_DTYPE is None on CPU-only hosts (autocast becomes a no-op).
+def _enable_tf32() -> "torch.dtype | None":
+    if not torch.cuda.is_available():
+        return None
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    return torch.bfloat16
+
+
+AUTOCAST_DTYPE: "torch.dtype | None" = None
+
+
 def _seq_from_yaml(path: Path) -> str:
     with open(path) as f:
         data = yaml.safe_load(f)
@@ -109,7 +125,9 @@ def encode_sequences(sequences: List, model_name, hub_cache):
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     _t0 = time.perf_counter()
-    with torch.inference_mode():
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+    ):
         outputs = model(**inputs)
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -143,7 +161,9 @@ def encode_for_logits(sequences: List, model_name, hub_cache):
     )
     inputs = {k: v.to(model.device)
               for k, v in enc.items() if k in ("input_ids", "attention_mask")}
-    with torch.inference_mode():
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+    ):
         outputs = model(**inputs)
     aa_token_ids = {
         aa: int(tid) for aa, tid in
@@ -202,6 +222,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     hub_cache = _enforce_offline(args.cache)
+    AUTOCAST_DTYPE = _enable_tf32()
 
     seq_by_name = parse_inputs(args.input_dir)
     names = list(seq_by_name.keys())

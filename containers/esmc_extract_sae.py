@@ -34,6 +34,21 @@ def _enforce_offline(cache_dir: str | None) -> str | None:
     return f"{cache_dir}/hub"
 
 
+# bf16 tensor-core inference path (see run_batch_esmc.py). TF32 lifts fp32
+# matmuls onto tensor cores; bf16 autocast halves matmul cost. SAE activations
+# are detached to fp on CPU before saving, so storage dtype is unchanged.
+# None on CPU-only hosts (autocast becomes a no-op).
+def _enable_tf32() -> "torch.dtype | None":
+    if not torch.cuda.is_available():
+        return None
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    return torch.bfloat16
+
+
+AUTOCAST_DTYPE: "torch.dtype | None" = None
+
+
 def resolve_model_repo(size: str, override: str | None) -> str:
     if override:
         return override
@@ -155,7 +170,9 @@ def forward_sae(model, tokenizer, sequence: str) -> dict:
     """Run one sequence through the model and return its SAE activations."""
     inputs = tokenizer(sequence, return_tensors="pt", padding=True)
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    with torch.inference_mode():
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+    ):
         output = model(**inputs)
     return output.get("sae_outputs", {})
 
@@ -228,6 +245,8 @@ if __name__ == "__main__":
 
     print(f"size={args.size} model={model_repo} sae={sae_repo} "
           f"layers={layer_ids} cache={hub_cache}", flush=True)
+
+    AUTOCAST_DTYPE = _enable_tf32()
 
     model, tokenizer = load_model_with_sae(
         model_repo=model_repo, sae_repo=sae_repo,
