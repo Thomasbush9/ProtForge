@@ -52,23 +52,51 @@ AUTOCAST_DTYPE: "torch.dtype | None" = None
 DEFAULT_TOKEN_BUDGET = {"6B": 8000, "600M": 32000, "300M": 49152}
 
 
-def token_budget_batches(names, seqs, budget):
-    """Yield lists of names grouped so each batch's PADDED cost (rows * max_len)
-    stays near `budget`. Length-sorted so padding waste is minimal; a single
-    sequence longer than `budget` forms its own batch (never dropped). Replaces
-    the old chunk-wide single pad, where one long outlier inflated every row.
+def token_budget_batches(names, seqs, budget, pad_free=False):
+    """Yield lists of names grouped to fit `budget` tokens, length-sorted.
+
+    Cost model depends on the attention backend:
+      * pad_free=False (sdpa/eager): padded cost = rows * max_len, since padded
+        positions are still computed. Length-sorting keeps the pad tight.
+      * pad_free=True (FlashAttention-2): cost = sum(lengths). FA2 unpads the
+        batch (varlen-flat) so padded positions cost ZERO FLOPs/memory; sizing
+        by summed real tokens packs more sequences per batch than the padded
+        model would. Still length-sorted (keeps each batch's varlen segments
+        similar, which helps kernel efficiency).
+    A single sequence longer than `budget` forms its own batch (never dropped).
     """
     order = sorted(range(len(names)), key=lambda i: len(seqs[i]))
-    batch, max_len = [], 0
+    batch, max_len, total = [], 0, 0
     for i in order:
-        new_max = max(max_len, len(seqs[i]))
-        if batch and (len(batch) + 1) * new_max > budget:
+        L = len(seqs[i])
+        new_max = max(max_len, L)
+        cost = (total + L) if pad_free else (len(batch) + 1) * new_max
+        if batch and cost > budget:
             yield [names[j] for j in batch]
-            batch, max_len, new_max = [], 0, len(seqs[i])
+            batch, max_len, total, new_max = [], 0, 0, L
         batch.append(i)
-        max_len = new_max
+        max_len, total = new_max, total + L
     if batch:
         yield [names[j] for j in batch]
+
+
+def _attn_impl():
+    """Prefer FlashAttention-2 for ESM-C: it unpads the batch into a varlen-flat
+    layout (modeling_esmc.py unpad_input/pad_input), so PADDED positions cost
+    ZERO FLOPs — the real fix for batch padding, beyond length bucketing which
+    only shrinks the pad. sdpa/eager mask padding but still COMPUTE it. FA2
+    needs CUDA + the flash_attn package (both present in the ESM SIF) and bf16
+    activations (our autocast provides them). Single-chain inputs only, which is
+    always our case (one protein per file). Falls back to the HF default when
+    flash_attn is unavailable (e.g. CPU host) so the runner still imports.
+    """
+    if not torch.cuda.is_available():
+        return None
+    try:
+        import flash_attn  # noqa: F401
+    except ImportError:
+        return None
+    return "flash_attention_2"
 
 
 def _seq_from_yaml(path: Path) -> str:
@@ -140,6 +168,7 @@ def load_embed_model(model_name, hub_cache):
     )
     model = ESMCModel.from_pretrained(
         model_name, cache_dir=hub_cache, local_files_only=True,
+        attn_implementation=_attn_impl(),
     ).cuda().eval()
     return model, tokenizer
 
@@ -179,6 +208,7 @@ def load_logits_model(model_name, hub_cache):
     )
     model = AutoModelForMaskedLM.from_pretrained(
         model_name, cache_dir=hub_cache, local_files_only=True,
+        attn_implementation=_attn_impl(),
     ).cuda().eval()
     aa_token_ids = {
         aa: int(tid) for aa, tid in
@@ -301,7 +331,8 @@ if __name__ == "__main__":
         budget = args.token_budget or DEFAULT_TOKEN_BUDGET.get(size, 16000)
         if args.save_logits:
             model, tokenizer, aa_token_ids = load_logits_model(model_name, hub_cache)
-            for batch_tags in token_budget_batches(tags, sequences, budget):
+            pad_free = getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
+            for batch_tags in token_budget_batches(tags, sequences, budget, pad_free):
                 seqs = [seq_by_tag[t] for t in batch_tags]
                 logits, special_mask, attn_mask = logits_batch(
                     model, tokenizer, seqs, f"{model_name}:{size}")
@@ -313,7 +344,8 @@ if __name__ == "__main__":
                                         size, rows, aa_token_ids)
         else:
             model, tokenizer = load_embed_model(model_name, hub_cache)
-            for batch_tags in token_budget_batches(tags, sequences, budget):
+            pad_free = getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
+            for batch_tags in token_budget_batches(tags, sequences, budget, pad_free):
                 seqs = [seq_by_tag[t] for t in batch_tags]
                 hidden = embed_batch(model, tokenizer, seqs, f"{model_name}:{size}")
                 for row, tag in enumerate(batch_tags):

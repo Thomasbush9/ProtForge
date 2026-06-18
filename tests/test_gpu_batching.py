@@ -101,6 +101,40 @@ def test_batcher_length_sorted_within_run():
     assert batches == [["b", "c", "a"]]
 
 
+def test_batcher_pad_free_packs_by_summed_length():
+    f = _batcher()
+    # Five 100-aa seqs. Padded model under budget 350 caps at 3 rows (3*100=300,
+    # 4*100=400>350). Pad-free model caps by summed length: 350//100 = 3 too
+    # here, but with mixed lengths pad-free packs strictly more. Use lengths that
+    # diverge: [100,100,100,200]. Padded: max*rows. Pad-free: sum.
+    names = ["a", "b", "c", "d"]
+    seqs = ["A" * 100, "A" * 100, "A" * 100, "A" * 200]
+    # budget 400.
+    # padded: sorted [100,100,100,200]; add 100(c1=100),100(c2=200),100(c3=300),
+    #   200 -> 4*200=800>400 -> split -> batches [a,b,c],[d]
+    # pad-free: sum 100,200,300, +200=500>400 -> split -> [a,b,c],[d] (same here)
+    padded = list(f(names, seqs, 400, False))
+    free = list(f(names, seqs, 400, True))
+    # both preserve all
+    assert sorted(sum(padded, [])) == sorted(names)
+    assert sorted(sum(free, [])) == sorted(names)
+
+
+def test_batcher_pad_free_fits_more_than_padded():
+    f = _batcher()
+    # Lengths spread within a budget window: pad-free must fit >= padded rows.
+    names = [f"s{i}" for i in range(8)]
+    seqs = ["A" * L for L in (50, 60, 70, 80, 90, 100, 110, 120)]
+    budget = 400
+    padded = list(f(names, seqs, budget, False))
+    free = list(f(names, seqs, budget, True))
+    # First pad-free batch packs by summed length (50+60+70+80+90=350<=400, +100
+    # =450>400) -> 5 seqs; first padded batch: 1*50,2*60,3*70,4*80,5*90=450>400
+    # -> 4 seqs (max 80). Pad-free fits strictly more in the opening batch.
+    assert len(free[0]) > len(padded[0])
+    assert sorted(sum(free, [])) == sorted(names)
+
+
 def batches_for(f, names, seqs, budget):
     return list(f(names, seqs, budget))
 

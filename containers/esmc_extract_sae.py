@@ -55,21 +55,40 @@ AUTOCAST_DTYPE: "torch.dtype | None" = None
 DEFAULT_TOKEN_BUDGET = {"6B": 6000, "600M": 24000, "300M": 32000}
 
 
-def token_budget_batches(names, seqs, budget):
-    """Yield lists of names grouped so each batch's padded cost (rows * max_len)
-    stays near `budget`. Length-sorted; a single seq longer than budget forms
-    its own batch (never dropped)."""
+def token_budget_batches(names, seqs, budget, pad_free=False):
+    """Length-sorted batches fitting `budget` tokens. pad_free=False (sdpa/eager)
+    uses padded cost rows*max_len; pad_free=True (FlashAttention-2, which unpads)
+    uses sum(lengths) since padding is free. A seq longer than budget batches
+    alone (never dropped). See run_batch_esmc.py for the full rationale."""
     order = sorted(range(len(names)), key=lambda i: len(seqs[i]))
-    batch, max_len = [], 0
+    batch, max_len, total = [], 0, 0
     for i in order:
-        new_max = max(max_len, len(seqs[i]))
-        if batch and (len(batch) + 1) * new_max > budget:
+        L = len(seqs[i])
+        new_max = max(max_len, L)
+        cost = (total + L) if pad_free else (len(batch) + 1) * new_max
+        if batch and cost > budget:
             yield [names[j] for j in batch]
-            batch, max_len, new_max = [], 0, len(seqs[i])
+            batch, max_len, total, new_max = [], 0, 0, L
         batch.append(i)
-        max_len = new_max
+        max_len, total = new_max, total + L
     if batch:
         yield [names[j] for j in batch]
+
+
+def _attn_impl():
+    """Prefer FlashAttention-2: it unpads the batch (varlen-flat) so padded
+    positions cost zero FLOPs. The SAE hidden states are repadded to [B, L, D]
+    after the transformer stack, so token_mask gathering is unaffected. Needs
+    CUDA + flash_attn (both in the ESM SIF) + bf16 activations (our autocast).
+    Single-chain only (always our case). Falls back to the HF default off-GPU.
+    """
+    if not torch.cuda.is_available():
+        return None
+    try:
+        import flash_attn  # noqa: F401
+    except ImportError:
+        return None
+    return "flash_attention_2"
 
 
 def resolve_model_repo(size: str, override: str | None) -> str:
@@ -168,6 +187,7 @@ def load_model_with_sae(
         model_repo,
         cache_dir=hub_cache,
         local_files_only=bool(hub_cache),
+        attn_implementation=_attn_impl(),
     ).cuda().eval()
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -323,7 +343,8 @@ if __name__ == "__main__":
                 out_by_tag[tag] = args.output_dirs[ci]
                 name_by_tag[tag] = name; len_by_tag[tag] = len(sequence)
         seq_by_tag = dict(zip(tags, seqs))
-        for batch_tags in token_budget_batches(tags, seqs, budget):
+        pad_free = getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
+        for batch_tags in token_budget_batches(tags, seqs, budget, pad_free):
             batch_seqs = [seq_by_tag[t] for t in batch_tags]
             seq_lens = [len_by_tag[t] for t in batch_tags]
             print(f"Extracting SAE for {len(batch_tags)} seq(s) "
