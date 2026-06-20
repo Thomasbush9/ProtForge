@@ -25,7 +25,10 @@ set -uo pipefail
 export LC_ALL=C LANG=C
 
 # ---- args -------------------------------------------------------------------
-STAGE="" RUNG_IDX="" RUN_DIR="" CONFIG="" GPU_TYPE=""
+# --mock: skip the GPU/singularity exec and synthesize a plausible measured row
+# from seq_len. Lets the stair test validate the full setup->bench->collect->plot
+# chain (and the results.csv schema) on a CPU-only host with no cluster/weights.
+STAGE="" RUNG_IDX="" RUN_DIR="" CONFIG="" GPU_TYPE="" MOCK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stage)     STAGE="$2"; shift 2 ;;
@@ -33,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --run-dir)   RUN_DIR="$2"; shift 2 ;;
     --config)    CONFIG="$2"; shift 2 ;;
     --gpu-type)  GPU_TYPE="$2"; shift 2 ;;
+    --mock)      MOCK=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -207,14 +211,40 @@ _run_esm_runner() {  # _run_esm_runner RUNNER.py SIF_KEY CACHE_KEY SIZE_OR_EMPTY
     -B "$cache:/models/hf:ro" -B "$indir:/data/input:ro" -B "$outdir:/data/output" \
     -B "$runner_host:/opt/$runner:ro" \
     "$sif" python "/opt/$runner" \
-      --cache /models/hf --input-dir /data/input --output-dir /data/output $size_flag
+      --cache /models/hf --input-dirs /data/input --output-dirs /data/output $size_flag
 }
 
 # ---- run --------------------------------------------------------------------
 VARIANT="$STAGE"
 case "$STAGE" in esmc_*) VARIANT="${STAGE#esmc_}" ;; esac
 
-echo "[bench_one] stage=$STAGE $RUNG seq_len=$SEQ_LEN gpu=$GPU_TYPE runtime=$RUNTIME" | tee "$LOG"
+echo "[bench_one] stage=$STAGE $RUNG seq_len=$SEQ_LEN gpu=$GPU_TYPE runtime=$RUNTIME mock=$MOCK" | tee "$LOG"
+
+# ---- mock path: synthesize a measured row, skip GPU exec --------------------
+# Length-dependent fake numbers so collect.py + the plotters get realistic,
+# monotonic data. One stage (esmc_6B) fakes an OOM past a threshold to exercise
+# the OOM-drop path end-to-end. This validates wiring + schema, not performance.
+if [[ "$MOCK" == 1 ]]; then
+  L="$SEQ_LEN"; [[ "$L" == NA ]] && L=256
+  read -r m_status m_wall m_infer m_vram m_ram < <(awk -v stage="$STAGE" -v L="$L" 'BEGIN{
+    # per-stage (vram_base, vram_per_L, infer_base, infer_per_L, oom_at)
+    if (stage=="msa")          {vb=0;    vk=0;    ib=90;  ik=0;     oom=0}
+    else if (stage=="boltz")   {vb=16000;vk=70;   ib=52;  ik=0.4;   oom=0}
+    else if (stage=="esmfold") {vb=14000;vk=55;   ib=10;  ik=0.10;  oom=0}
+    else if (stage=="esmc_300M"){vb=2000;vk=8;    ib=2;   ik=0.01;  oom=0}
+    else if (stage=="esmc_600M"){vb=4000;vk=13;   ib=3;   ik=0.02;  oom=0}
+    else if (stage=="esmc_6B") {vb=16000;vk=42;   ib=5;   ik=0.03;  oom=900}
+    else                       {vb=8000; vk=20;   ib=10;  ik=0.05;  oom=0}
+    if (oom>0 && L>=oom) { print "oom NA NA NA NA"; exit }
+    vram=vb+vk*L; infer=ib+ik*L; wall=infer+5; ram=3000+2*L;
+    printf "ok %.2f %.4f %d %d\n", wall, infer, vram, ram
+  }')
+  case "$STAGE" in msa|boltz) m_depth=32 ;; *) m_depth=NA ;; esac
+  append_row "$m_status" "$m_wall" "$m_infer" "$m_vram" "$m_ram" "$m_depth" "$VARIANT"
+  echo "[bench_one] (mock) -> status=$m_status wall=${m_wall}s infer=${m_infer}s vram=${m_vram}MiB" | tee -a "$LOG"
+  exit 0
+fi
+
 start_sampler
 t0=$(date +%s.%N)
 run_exec >>"$LOG" 2>&1
