@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# stair_test.slrm — run the stair pipeline smoke test as a (CPU-only) SLURM job.
+#
+# The test (stair_test.sh) needs NO GPU and NO cluster — it validates that the
+# whole stair chain is wired (setup -> mock bench -> collect -> plot/fit) on a
+# tiny synthetic fixture. You normally just run it on the login node:
+#
+#   bash scripts/calibrate/stair/stair_test.sh
+#
+# This wrapper exists for when you'd rather keep the login node clean or run it
+# under the same scheduler the real sweep uses. It activates a Python env that
+# has pyyaml + numpy + matplotlib (see scripts/calibrate/requirements-calibrate.txt),
+# then runs the test, keeping artifacts in $OUT_DIR.
+#
+# Required: tell it which env to activate via --export (one of):
+#   CALIB_VENV=/path/to/venv            -> sources $CALIB_VENV/bin/activate
+#   CALIB_CONDA=envname                 -> conda activate envname
+# Optional:
+#   OUT_DIR=/path/to/keep/artifacts     -> default: $SLURM_SUBMIT_DIR/stair_test_out
+#
+# Submit (fill partition/account/time, or rely on the headers below):
+#
+#   sbatch --partition=<cpu_part> --account=<acct> --time=10 \
+#          --export=ALL,CALIB_VENV=$HOME/envs/protforge-calibrate \
+#          scripts/calibrate/stair/stair_test.slrm
+#
+# A GPU is intentionally NOT requested.
+#
+#SBATCH --job-name=stair_test
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=4000
+#SBATCH --time=00:10:00
+#SBATCH --partition=        # FILL e.g. sapphire / a cpu partition (or pass --partition)
+#SBATCH --account=          # FILL your account (or pass --account)
+#SBATCH --output=stair_test.%j.out
+set -euo pipefail
+
+# Resolve the repo root from this script's location, independent of CWD.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+cd "$REPO_ROOT"
+
+echo "[stair_test.slrm] job=${SLURM_JOB_ID:-local} node=$(hostname) repo=$REPO_ROOT"
+
+# ---- activate the calibration env ------------------------------------------
+if [[ -n "${CALIB_VENV:-}" ]]; then
+  echo "[stair_test.slrm] activating venv: $CALIB_VENV"
+  # shellcheck disable=SC1091
+  source "$CALIB_VENV/bin/activate"
+elif [[ -n "${CALIB_CONDA:-}" ]]; then
+  echo "[stair_test.slrm] activating conda env: $CALIB_CONDA"
+  # shellcheck disable=SC1091
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate "$CALIB_CONDA"
+else
+  echo "[stair_test.slrm] no CALIB_VENV/CALIB_CONDA set — relying on PATH python" >&2
+fi
+
+# Fail early with a clear message if the deps are missing.
+python -c "import yaml, numpy, matplotlib" 2>/dev/null || {
+  echo "[stair_test.slrm] FAIL: env lacks pyyaml/numpy/matplotlib." >&2
+  echo "  pip install -r scripts/calibrate/requirements-calibrate.txt" >&2
+  exit 1
+}
+
+OUT_DIR="${OUT_DIR:-${SLURM_SUBMIT_DIR:-$REPO_ROOT}/stair_test_out}"
+echo "[stair_test.slrm] artifacts -> $OUT_DIR"
+
+bash scripts/calibrate/stair/stair_test.sh --work-dir "$OUT_DIR" --keep

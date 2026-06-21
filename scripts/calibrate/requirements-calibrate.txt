@@ -1,0 +1,23 @@
+# Host-side environment for the stair calibration tooling (pick_rungs, bench_one,
+# collect, fit_and_plot, plot_stage_scaling) and the stair_test smoke test.
+#
+# This is a LOGIN/CPU-node env — none of it runs inside the GPU SIF. The actual
+# stage inference happens in the container; these packages only read configs,
+# parse results.csv, fit scaling coefficients, and render the plots.
+#
+# Install once (login node or a dedicated env):
+#
+#   python -m venv ~/envs/protforge-calibrate
+#   source ~/envs/protforge-calibrate/bin/activate
+#   pip install -r scripts/calibrate/requirements-calibrate.txt
+#
+# Then run the smoke test (no GPU/SLURM needed):
+#
+#   bash scripts/calibrate/stair/stair_test.sh
+#
+# pyyaml + numpy already ship in requirements-host.txt; matplotlib is the only
+# addition the calibration plots need, but all three are listed here so this
+# env stands alone without requiring the full host env.
+pyyaml>=5.0
+numpy>=1.20
+matplotlib>=3.5
