@@ -126,7 +126,13 @@ def test_chunk_size_caps_at_max():
 
 
 def test_partition_routing_auto_picks_smallest_fitting_gpu():
-    """Small inputs → cheap GPU; huge inputs → bigger card."""
+    """Small inputs → cheap GPU; huge inputs → bigger card.
+
+    Each candidate GPU is evaluated against its OWN coefficients, so a
+    smaller-but-cheaper card isn't picked on the strength of a bigger card's
+    more-efficient projection. At L=4000, ESMC's a100 coefficients project
+    ~55 GB (over the 40 GB cap) so the router must escalate to h100.
+    """
     scaling = load_scaling_models()
     cfg = _config()
 
@@ -136,23 +142,29 @@ def test_partition_routing_auto_picks_smallest_fitting_gpu():
     p_small, gpu_small = pick_partition("esmc", small, cfg, scaling)
     p_huge, gpu_huge = pick_partition("esmc", huge, cfg, scaling)
 
-    # Huge should land on H100 (or higher) since 4000-residue ESMC > 40GB
+    # Huge overflows a100's own projection → escalates to h100 (or larger).
     assert gpu_huge in {"h100", "h200"}
-    # Small should land on something with smaller capacity
+    # Small fits on the cheapest tier; either differs from huge's pick, or the
+    # smallest-fitting tier itself is already ≥ 40 GB (e.g. h100-only stages).
     assert gpu_small != gpu_huge or scaling["gpu_specs"][gpu_small]["mem_gb"] >= 40
 
 
 def test_partition_routing_honors_user_pin():
-    """Pinning a known GPU type forces it through to gpu_type."""
+    """Pinning a known GPU type forces it through to gpu_type.
+
+    Without a pin, ESMC at L=4000 escalates to h100 (a100's coefficients
+    project ~55 GB, over its 40 GB cap). An explicit a100 pin overrides and
+    is honored even though it would OOM in practice.
+    """
     scaling = load_scaling_models()
     cfg = _config()
     stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 4000}] * 3)
-    # Without pin, large p95 routes ESMC to h100 automatically
     e_auto = estimate_stage("esmc", stats, cfg, scaling)
     assert e_auto.gpu_type == "h100"
-    # Explicit pin to a100 should override even though mem may not fit
     e_pinned = estimate_stage("esmc", stats, cfg, scaling, gpu_preference="a100")
     assert e_pinned.gpu_type == "a100"
+    # Pinning to an undersized GPU should surface an OOM-risk note.
+    assert any("OOM" in n or "below" in n for n in e_pinned.notes)
 
 
 def test_boltz_runtime_scales_with_recycling_and_samples():

@@ -245,48 +245,69 @@ def _eval_time_per_chunk(coeffs: dict, *, mean_len: float, chunk_size: int,
 
 
 def _pick_gpu_type(stage_models: dict, requested: str | None,
-                  estimated_mem_gb: float, gpu_specs: dict) -> tuple[str, list[str]]:
+                  stats: InputStats, mem_safety: float,
+                  gpu_specs: dict) -> tuple[str, list[str]]:
     """Choose which GPU type to size against.
 
-    If `requested` is given (and exists in per_gpu), use it.
-    Otherwise: walk `tier` from low to high and pick the first whose
-    mem_gb covers the estimate.
+    If `requested` is given, use it (with an OOM-risk note if its own
+    coefficients project past its mem_gb). Otherwise walk `tier` from low to
+    high and pick the first candidate whose OWN coefficients fit inside its
+    own mem_gb. Evaluating per-candidate avoids the bug where a smaller-GPU
+    pick is justified by a more-efficient bigger-GPU's projection.
     """
     notes: list[str] = []
-    available = list(stage_models.get("per_gpu", {}).keys())
+    per_gpu = stage_models.get("per_gpu", {})
+    available = list(per_gpu.keys())
     if not available:
         return "cpu", notes
 
+    def _own_mem_gb(gpu: str) -> float:
+        """Mem the *gpu's own* coefficients project, with safety margin, in GB."""
+        coeffs = per_gpu.get(gpu)
+        if coeffs is None:
+            return 0.0
+        raw_mb = _eval_mem(
+            coeffs["mem_mb"], p95_len=stats.p95_len, mean_len=stats.mean_len,
+            total_residues=stats.total_residues, count=stats.count,
+        )
+        return raw_mb * mem_safety / 1024
+
     if requested:
         spec = gpu_specs.get(requested, {})
-        if spec and spec.get("mem_gb", 0) < estimated_mem_gb:
-            notes.append(
-                f"Requested {requested} ({spec['mem_gb']}GB) is below estimated "
-                f"need ({estimated_mem_gb:.1f}GB) — risk of OOM."
-            )
-        if requested not in available:
+        cap = spec.get("mem_gb", 0)
+        # If we have coefficients for the pinned GPU, check its own projection
+        # against its own cap. Otherwise we can't tell — emit the no-coeffs note.
+        if requested in per_gpu:
+            req_mem_gb = _own_mem_gb(requested)
+            if cap and req_mem_gb > cap:
+                notes.append(
+                    f"Pinned {requested} ({cap}GB) is below its own projected "
+                    f"need ({req_mem_gb:.1f}GB) — risk of OOM."
+                )
+        else:
             notes.append(
                 f"No calibrated coefficients for {requested}; partition will use "
                 f"{requested} but timing/mem estimate uses a proxy GPU."
             )
         return requested, notes
 
-    # Auto pick: ascend tiers
+    # Auto pick: ascend tiers, evaluating each candidate's OWN coefficients.
     candidates = sorted(
         [(g, gpu_specs.get(g, {}).get("tier", 99), gpu_specs.get(g, {}).get("mem_gb", 0))
          for g in available if g in gpu_specs],
         key=lambda x: x[1],
     )
-    for gpu, _tier, mem_gb in candidates:
-        if mem_gb >= estimated_mem_gb:
+    for gpu, _tier, cap in candidates:
+        if cap >= _own_mem_gb(gpu):
             return gpu, notes
 
     # Nothing fits — return the largest we know
     if candidates:
-        gpu, _, mem_gb = candidates[-1]
+        gpu, _, cap = candidates[-1]
+        own = _own_mem_gb(gpu)
         notes.append(
-            f"Estimated mem {estimated_mem_gb:.1f}GB exceeds largest known GPU "
-            f"({gpu}: {mem_gb}GB) — job may OOM."
+            f"Estimated mem {own:.1f}GB exceeds largest known GPU "
+            f"({gpu}: {cap}GB) — job may OOM."
         )
         return gpu, notes
 
@@ -335,20 +356,13 @@ def estimate_stage(
         gpu_notes: list[str] = []
         coeffs_per_gpu = stage_models["per_gpu"]["cpu"]
     else:
-        # Reasonable "any GPU" coefficients — use h100 if present, else default_gpu
         per_gpu = stage_models["per_gpu"]
-        seed_gpu = "h100" if "h100" in per_gpu else stage_models.get("default_gpu") or next(iter(per_gpu))
-        seed_mem = _eval_mem(
-            per_gpu[seed_gpu]["mem_mb"],
-            p95_len=stats.p95_len, mean_len=stats.mean_len,
-            total_residues=stats.total_residues, count=stats.count,
-        )
-        seed_mem_gb = (seed_mem * mem_safety) / 1024
-        gpu_type, gpu_notes = _pick_gpu_type(stage_models, requested, seed_mem_gb, gpu_specs)
+        gpu_type, gpu_notes = _pick_gpu_type(
+            stage_models, requested, stats, mem_safety, gpu_specs)
         coeffs_per_gpu = per_gpu.get(gpu_type)
         if coeffs_per_gpu is None:
             # Fall back to default_gpu's coefficients but keep the chosen partition
-            fallback_gpu = stage_models.get("default_gpu") or seed_gpu
+            fallback_gpu = stage_models.get("default_gpu") or next(iter(per_gpu))
             coeffs_per_gpu = per_gpu[fallback_gpu]
             gpu_notes.append(
                 f"No per-GPU coefficients for {gpu_type}; using {fallback_gpu} as proxy."
