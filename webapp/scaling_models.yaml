@@ -61,10 +61,12 @@ msa:
       mem_mb:   {base: 256000, per_residue: 0.5, alpha_L2: 0.0}
       runtime_sec_per_chunk: {base: 1500, per_seq: 10, per_residue: 0.02}
     h100:
-      # v3 calibrated (2026-05-05): base ~1270s constant, mostly DB scan amortized
-      # per chunk. per_seq + per_residue carry small safety margin for batches >1.
+      # v4 calibrated (2026-06-22, stair sweep L=200..1982, n=10).
+      # Wall ~1100s constant — colabfold_search is DB-bound; per_seq + per_residue
+      # carry safety margin for batches >1. VRAM peak was flat 40 GB across L
+      # (DB scan footprint), but mem_mb here is host RAM for mmseqs RSS — keep 256G.
       mem_mb:   {base: 256000, per_residue: 0.5, alpha_L2: 0.0}
-      runtime_sec_per_chunk: {base: 1270, per_seq: 10, per_residue: 0.02}
+      runtime_sec_per_chunk: {base: 1100, per_seq: 10, per_residue: 0.02}
   target_chunk_runtime_min: 45
   max_chunk_size: 50
   min_chunk_size: 1
@@ -79,10 +81,14 @@ boltz:
       mem_mb: {base: 8000, per_residue: 0.0, alpha_L2: 0.0010}
       runtime_sec_per_seq: {base: 45, alpha_L2: 0.0009}
     h100:
-      # v3 calibrated (2026-05-05) — recycling=10, samples=25 (250 work units).
-      # estimator scales linearly with the user's recycling*samples settings.
-      mem_mb: {base: 16000, per_residue: 0.0, alpha_L2: 0.0008}
-      runtime_sec_per_seq: {base: 52, alpha_L: 0.17, alpha_L2: 0.00013}
+      # v4 calibrated (2026-06-22, stair sweep L=200..1982, n=10) — recycling=10,
+      # samples=25 (250 work units). Estimator scales linearly with the user's
+      # recycling*samples settings. Negative base clamps at L=0 (irrelevant);
+      # at L=200 mem ≈ 3.4 GB, at L=2000 ≈ 55 GB. MAE 4.7 s.
+      # Note: VRAM also tracks msa_depth (rung 9 at L=1982 used 50 GB with depth
+      # 1840, vs rung 8 at L=1796 with depth 14056 using 58 GB) — not captured.
+      mem_mb: {base: -364, per_residue: 17.8, alpha_L2: 0.00503}
+      runtime_sec_per_seq: {base: 62.6, alpha_L: -0.00814, alpha_L2: 2.95e-05}
   target_chunk_runtime_min: 45
   max_chunk_size: 40
   min_chunk_size: 1
@@ -108,33 +114,25 @@ esmc:
   min_chunk_size: 1
 
 esmfold:
-  # facebook/esmfold_v1 (~3B params). Memory dominated by O(L²) activations on
-  # top of ~14 GB of model weights. v3 calibration (2026-05-05) shows that
-  # un-chunked the model OOMs on H100 80GB above L≈1300aa; with
-  # `model.trunk.set_chunk_size(64)` the same sequences fit (slightly slower).
-  #
-  # The estimator switches between two coefficient sets at `chunk_threshold`:
-  #   - L < chunk_threshold : runtime_sec_per_seq        (fast path, no OOM risk)
-  #   - L >= chunk_threshold: runtime_sec_per_seq_chunked (chunked trunk, ~1.5×)
-  # The esmfold rule's --chunk_size_threshold enables this at runtime.
+  # ESMFold2 (HF transformers.models.esmfold2) via fast_esmfold.sif.
+  # Memory ≈ ~13 GB of model weights + quadratic O(L²) activations.
+  # No trunk-chunking codepath: ESMFold2's diffusion sampler scales smoothly
+  # in both memory and time, so the single-curve fit is sufficient.
   default_gpu: h100
   cpus: 8
   gpus: 1
-  chunk_threshold: 1200
   per_gpu:
     a100:
       mem_mb: {base: 14000, alpha_L2: 0.020}
-      runtime_sec_per_seq:         {base: 5, alpha_L2: 0.00004}
-      runtime_sec_per_seq_chunked: {base: 5, alpha_L: 0.18}
+      runtime_sec_per_seq: {base: 5, alpha_L2: 0.00004}
     h100:
-      # v3 calibrated (2026-05-05).
-      # un-chunked fit on the 12 successful chunks (L ≤ 1159aa, warm cache):
-      #   wall_s ≈ 0.10·L  (very rough; cold-cache noise dominates at short L)
-      # chunked fit on L ≥ 562aa points (model.trunk.set_chunk_size(64)):
-      #   wall_s ≈ -43 + 0.155·L  → ~0.155 s/aa at long L
-      mem_mb: {base: 14000, alpha_L2: 0.018}
-      runtime_sec_per_seq:         {base: 5,  alpha_L: 0.10, alpha_L2: 0.0}
-      runtime_sec_per_seq_chunked: {base: 10, alpha_L: 0.155, alpha_L2: 0.0}
+      # v4 calibrated (2026-06-22, stair sweep L=200..1796, n=9 ok + 1 OOM).
+      # OOM ceiling on H100 80GB: L≈1900aa — at L=1982 a cuSOLVER SVD allocation
+      # in _weighted_rigid_align fails (downstream OOM symptom at 81 GB peak).
+      # At L=1796 the model fits at 69.3 GB.
+      # Mem MAE not computed; time MAE 2.7 s.
+      mem_mb: {base: 12790, per_residue: 5.08, alpha_L2: 0.0147}
+      runtime_sec_per_seq: {base: 28.3, alpha_L: -0.0959, alpha_L2: 0.000118}
   target_chunk_runtime_min: 45
   max_chunk_size: 200
   min_chunk_size: 1
