@@ -48,8 +48,8 @@ export CUDA_VISIBLE_DEVICES=0
   "$SIF" \
   python /opt/run_batch_esmc.py \
     --cache /models/hf \
-    --input-dir "$INPUT" \
-    --output-dir "$OUTPUT" \
+    --input-dirs "$INPUT" \
+    --output-dirs "$OUTPUT" \
     --save-logits \
     --size "$SIZE"
 

@@ -73,7 +73,7 @@ If it bails, fix and re-run — `--force` overwrites partial SIFs.
 ```bash
 # Smoke test (5 min, needs a GPU node)
 salloc -p kempner_h100 --account=<your_account> --gres=gpu:1 -t 30 --mem=32G
-bash containers/test/smoke.sh
+bash containers/test/smoke.sh   # if absent, run the per-stage containers/test/*_test_image.sh
 # Expect: "=== ALL SMOKE TESTS PASSED ==="
 ```
 

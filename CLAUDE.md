@@ -85,10 +85,13 @@ Input CSV formats:
 - **Mutations mode**: CSV with `aaMutations` column (e.g., `SA123G:SB456T`)
 - **Sequences mode**: CSV with `name` and `sequence` columns
 
-### Install tools (Boltz, ESM, ES)
+### Install tools (container image + model weights)
 ```bash
-bash download_tools.sh [--cache-dir DIR] [--config config.yaml] boltz esm es
+# Build (or pull) the GPU container, then download ESM-C / ESMFold weights:
+bash containers/build.sh                                  # or: --from-docker docker://...
+python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
 ```
+See `docs/CLUSTER_SETUP.md` for the full first-time setup.
 
 ### Check for errors and retry failed jobs
 ```bash
@@ -177,9 +180,11 @@ slurm:
 
 Python dependencies for data generation: `requirements-data.txt` (pandas, numpy, PyYAML, tqdm)
 
-External tools installed via `download_tools.sh`:
+External tools are provided by the GPU container image (built or pulled via
+`containers/build.sh`); model weights are fetched separately with
+`scripts/download_models.py --cache-dir <HF_CACHE>`:
 - Boltz (structure prediction)
-- ESM (embeddings via fair-esm)
+- ESM-C / ESMFold (embeddings, logits, structure prediction)
 - PDAnalysis (ES analysis)
 
 ## Cluster Setup

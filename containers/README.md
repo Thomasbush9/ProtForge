@@ -131,6 +131,8 @@ After a build, on a GPU node (`salloc -p kempner_h100 --gres=gpu:1 -t 30 --mem=3
 ```bash
 bash containers/test/smoke.sh                  # image: PROTFORGE_SIF_DIR, else PROTFORGE_ROOT/sifs, else ~/sifs
 bash containers/test/smoke.sh -i /path/to/sif
+# If smoke.sh is not present in your checkout, run the per-stage scripts instead:
+#   containers/test/*_test_image.sh  (e.g. esmfold2_test_image.sh, boltz_test_image.sh)
 ```
 
 Validates: GPU visible, PyTorch+CUDA work, all tools importable, mounted

@@ -78,7 +78,7 @@ Run:
 
 ```bash
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/test/smoke.sh
+bash containers/test/smoke.sh   # if absent, run the per-stage containers/test/*_test_image.sh
 ```
 
 Pass criterion: prints `=== ALL SMOKE TESTS PASSED ===` at the end.
