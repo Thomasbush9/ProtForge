@@ -5,7 +5,7 @@ __pychace__/*
 
 # Webapp runtime files
 .snakemake_run.json
-snakemake_run.log
+*.log
 .config_backups/
 .sessions/
 *.cpython
