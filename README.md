@@ -1,73 +1,115 @@
 # ProtForge
 
-A protein structure and function prediction pipeline for SLURM clusters. Orchestrates four ML stages — MSA, Boltz, ESM, and ES — via Snakemake, with automatic chunking, parallel execution, and retry logic.
+A protein structure and function prediction pipeline for SLURM clusters.
+Orchestrates several ML stages via Snakemake, with automatic chunking, parallel
+SLURM execution, calibrated resource estimation, and resume-on-failure.
 
-**Pipeline stages:**
-1. **MSA** — Multiple Sequence Alignment (ColabFold/MMseqs2)
-2. **Boltz** — Structure prediction (CIF output)
-3. **ESM** — Sequence embeddings and logits (ESMC 600M)
-4. **ES** — Evolutionary Scale / Effective Strain analysis (PDAnalysis)
+**Pipeline stages** (each toggled on/off independently in `config.yaml`):
+1. **MSA** — Multiple Sequence Alignment (ColabFold / MMseqs2)
+2. **Boltz** — Structure prediction from the MSA (CIF output)
+3. **ESM-C** — Sequence embeddings / logits (300M / 600M / 6B); optional SAE sparse-activation extraction
+4. **ESMFold** — ESMFold2 structure prediction (sequence-only)
+5. **OpenFold** — OpenFold3 structure prediction from the MSA
 
-Each stage can be toggled on/off independently. Stages can be skipped if you already have intermediate outputs.
+ESM-C and ESMFold run straight from sequence (no MSA), in parallel with the
+MSA → Boltz / OpenFold branch. Each GPU stage runs inside a Singularity/Apptainer
+container image.
 
-## Quick Start (Kempner Cluster)
+---
+
+## Easiest path: drive ProtForge with Claude Code
+
+ProtForge ships a suite of [Claude Code](https://claude.com/claude-code) **skills**
+that do the install, sizing, launch, monitoring, and analysis for you — you talk
+to them in plain English instead of memorizing flags. This is the recommended way
+to get started.
+
+### 1. Install Claude Code
+
+```bash
+# Node 18+ required
+npm install -g @anthropic-ai/claude-code
+```
+
+(Alternatively, the native installer: `curl -fsSL https://claude.ai/install.sh | bash`.)
+
+### 2. Launch it in the repo
+
+```bash
+git clone https://github.com/sabatinilab/ProtForge.git
+cd ProtForge
+claude
+```
+
+On first run, `claude` walks you through login. Once inside, the ProtForge skills
+auto-load (they live in `.claude/skills/`).
+
+### 3. Ask for what you want
+
+Type a slash command, or just describe the task and Claude picks the right skill:
+
+| Skill | Invoke with `/<name>` or just ask… | What it does |
+|-------|-----------------------------------|--------------|
+| **setup** | "set up ProtForge" | First-time install: workspace dirs, `config.yaml`, container build, model-weight download, smoke test |
+| **fetch-sequences** | "fetch these UniProt accessions" | Turns an `.xlsx`/`.csv` of accessions into a per-protein FASTA dir |
+| **run-pipeline** | "run the pipeline on these FASTAs" | Sizes SLURM resources from the calibrated models, applies them, dry-runs, submits, monitors |
+| **tune-params** | "best Boltz settings for a fast screen?" | Advises stage parameters for a speed/quality goal |
+| **monitor** | "why did my run fail?" / "what's stuck?" | Read-only status, failure triage, recovery guidance |
+| **results** | "summarize the run" | Per-stage runtime/memory + per-structure confidences (pLDDT/pTM/ipTM) |
+| **satmut** | "saturation-mutagenesis scan of GFP" | Zero-shot ESM-C variant-effect (LLR) scan + heatmap |
+
+A typical first session is just: **"set up ProtForge"** → **"run the pipeline on
+`/path/to/fastas`"** → **"summarize the run"**.
+
+> Prefer to drive it by hand? The manual workflow is below — the skills are a
+> convenience layer over exactly these scripts, not a replacement.
+
+---
+
+## Manual setup (Kempner cluster)
+
+There is no `setup.sh` for the container path. Setup is: build (or reuse) the GPU
+container image, download model weights, and fill `config.yaml`. See the
+[Cluster Setup Guide](docs/CLUSTER_SETUP.md) for the full first-time walkthrough.
 
 ```bash
 # 1. Clone
 git clone https://github.com/sabatinilab/ProtForge.git
 cd ProtForge
 
-# 2. Setup (generates config.yaml, validates shared resources)
-bash setup.sh
+# 2. Build the GPU container (on a compute node — needs --fakeroot), or pull a prebuilt SIF
+bash containers/build.sh
+#   or:  bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:latest
 
-# 3. Prepare input data
-bash bash_scripts/generate_data.sh --data mutations.tsv --original reference.fasta
-# Set input.fasta_dir in config.yaml to the printed path
+# 3. Download ESM-C / ESMFold weights to a host HF cache
+python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
 
-# 4. Run
-snakemake --profile profiles/slurm/ -n    # dry run
-snakemake --profile profiles/slurm/        # launch
+# 4. Create your config and fill in paths
+cp config.template.yaml config.yaml
+#   edit: slurm.{account,partition,email,log_dir}, output.parent_dir,
+#         input.fasta_dir, containers.* (SIF paths), esmc/esmfold cache_dir
 ```
 
-The setup script auto-detects the Kempner cluster and points to shared environments and model weights — no conda installs or downloads needed.
+**Shared resources already on Kempner** (no setup needed — leave the template
+defaults): the MSA databases (`msa.mmseq2_db`, `msa.colabfold_db`) and the Boltz
+checkpoint (`boltz.cache_dir`).
 
-## Quick Start (Other SLURM Clusters)
-
-```bash
-git clone https://github.com/sabatinilab/ProtForge.git
-cd ProtForge
-bash setup.sh --mode custom --shared-base /path/to/shared/dir
-```
-
-Custom mode creates conda environments, downloads ESM model weights, and patches hardcoded model paths. You'll need to provide paths to MMseqs2 databases, ColabFold, and Boltz (see [Cluster Setup Guide](docs/CLUSTER_SETUP.md)).
+> **Container cache paths:** `esmc.cache_dir` / `esmfold.cache_dir` /
+> `openfold.cache_dir` are **host** directories — the rules bind them read-only
+> into the container at `/models/hf` (and `/models/openfold`). Don't set them to
+> the in-container path.
 
 **Requirements:**
-- Snakemake 8+ with SLURM executor plugin
-- conda/mamba
-- SLURM cluster with GPU nodes
+- Snakemake 8+ with the SLURM executor plugin, in a conda/mamba env
+- Singularity/Apptainer + a SLURM cluster with GPU nodes
 
 ```bash
 pip install snakemake snakemake-executor-plugin-slurm
 ```
 
-## Installation
+## Prepare input data
 
-### 1. Clone and setup
-
-```bash
-git clone https://github.com/sabatinilab/ProtForge.git
-cd ProtForge
-bash setup.sh
-```
-
-The setup script will:
-- Detect your cluster (Kempner vs custom)
-- Generate `config.yaml` with correct paths
-- Validate all dependencies exist
-
-### 2. Prepare input data
-
-**From a mutation table** (requires reference sequence):
+**From a mutation table** (requires a reference sequence):
 ```bash
 bash bash_scripts/generate_data.sh --data mutations.tsv --original reference.fasta
 ```
@@ -79,64 +121,87 @@ bash bash_scripts/generate_data.sh --data sequences.csv
 ```
 Input CSV must have `name` and `sequence` columns.
 
+**From a spreadsheet of UniProt accessions:** use the `fetch-sequences` skill, or
+`scripts/uniprot_fetch/fetch_sequences.py` directly (see its README).
+
 **Options:**
 ```bash
---file_type yaml          # Output YAML files (skip MSA, go straight to Boltz)
---subsample N             # Subsample N sequences
---subsample_mode balanced # balanced | fixed | random
+--file_type yaml           # Output YAML files (skip MSA, go straight to Boltz)
+--subsample N              # Subsample N sequences
+--subsample_mode balanced  # balanced | fixed | random
 ```
 
-### 3. Configure
+Set the printed output directory as `input.fasta_dir` (or `input.yaml_dir`) in
+`config.yaml`.
+
+## Configure
 
 Edit `config.yaml` to toggle stages and set parameters:
 
 ```yaml
 pipeline:
-  msa: true       # Generate MSAs from FASTA
-  boltz: true     # Predict structures
-  esm: true       # Generate embeddings/logits
-  es: false       # Effective strain analysis (needs ref structure)
+  msa: true        # Generate MSAs from FASTA
+  boltz: true      # Boltz structure prediction
+  esmc: true       # ESM-C embeddings/logits
+  esmfold: true    # ESMFold2 structure prediction
+  openfold: false  # OpenFold3 structure prediction
 
 input:
-  fasta_dir: /path/to/fastas    # When running MSA
+  fasta_dir: /path/to/fastas    # When running MSA / sequence stages
   # yaml_dir: /path/to/yamls    # When skipping MSA
 
 output:
   parent_dir: /path/to/outputs
 ```
 
-See `config.template.yaml` for all available parameters.
+See [config.template.yaml](config.template.yaml) for every annotated parameter.
+Per-stage SLURM resources (`slurm.resources.*`) are normally written by the
+estimator (`python -m webapp.estimate_cli --config config.yaml --apply`), not by
+hand.
 
-### 4. Run
+## Run
 
 ```bash
-# Full pipeline
-snakemake --profile profiles/slurm/
-
 # Dry run (see what would execute)
 snakemake --profile profiles/slurm/ -n
 
-# Resume after failure
+# Full pipeline
+snakemake --profile profiles/slurm/
+
+# Resume after a failure / preemption (picks up where it left off)
 snakemake --profile profiles/slurm/ --rerun-incomplete
 
 # DAG visualization
 snakemake --profile profiles/slurm/ --dag | dot -Tpng > dag.png
 ```
 
+## Web UI
+
+A Streamlit front-end exposes config editing, the resource estimator, live
+monitoring, results, and saturation-mutagenesis:
+
+```bash
+streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+# then tunnel from your laptop:  ssh -L 8501:localhost:8501 <user>@<login-node>
+```
+
+See the [Web UI guide](docs/WEBAPP.md) for SSH / VS Code / Open OnDemand access.
+
 ## Usage Examples
 
 ### Run only specific stages
 
 ```yaml
-# Already have MSA + Boltz outputs, just need ESM embeddings:
+# Already have MSAs; just want ESM-C embeddings + ESMFold structures:
 pipeline:
   msa: false
   boltz: false
-  esm: true
-  es: false
+  esmc: true
+  esmfold: true
+  openfold: false
 ```
 
-Then run normally — Snakemake picks up existing outputs from `{output}/sequences/`.
+Snakemake picks up existing outputs from `{output}/sequences/`.
 
 ### Multiple Boltz runs per sequence
 
@@ -145,19 +210,17 @@ boltz:
   num_runs: 10    # 10 independent structure predictions per sequence
 ```
 
-Outputs are organized as `sequences/{name}/boltz/run_0/`, `run_1/`, etc.
-
 ### Chunking for large datasets
 
-The pipeline automatically splits inputs into chunks for parallel SLURM jobs:
+The pipeline splits inputs into chunks for parallel SLURM jobs:
 
 ```yaml
 msa:
-  max_files_per_job: 25     # Sequences per MSA job
+  max_files_per_job: 50     # Sequences per MSA job
 boltz:
   max_files_per_job: 25     # YAMLs per Boltz job
-esm:
-  num_chunks: 4             # Split into 4 parallel ESM jobs
+esmc:
+  max_files_per_job: 25     # Sequences per ESM-C job
 ```
 
 ## Output Structure
@@ -166,63 +229,65 @@ esm:
 {output_dir}/
 ├── sequences/
 │   └── {seq_name}/
-│       ├── {seq_name}.yaml       # Boltz input (sequence + MSA path)
-│       ├── msa/                  # MSA output (.a3m files)
-│       ├── boltz/                # Structure predictions (.cif files)
-│       │   ├── run_0/            # (when num_runs > 1)
-│       │   └── run_1/
-│       └── esm/
-│           ├── logits.npy        # Sequence logits
-│           └── embeddings.npy    # Sequence embeddings
-├── es/                           # ES analysis results (per-residue CSVs)
-├── benchmarks/                   # Per-rule timing data
-├── benchmark_summary.txt         # Pipeline timing report
-├── msa_chunks/                   # Intermediate MSA chunks
-├── boltz_chunks/                 # Intermediate Boltz chunks
-└── esm_chunks/                   # Intermediate ESM chunks
+│       ├── {seq_name}.yaml          # Boltz input (sequence + MSA path)
+│       ├── msa/                     # MSA output (.a3m files)
+│       ├── boltz/                   # Boltz structures (.cif) + confidence JSONs
+│       ├── openfold/                # OpenFold3 structures (.cif) + confidence JSONs
+│       ├── esmfold/fast/            # ESMFold2 structure.cif, plddt.npy, metrics.pt
+│       └── esmc/{size}/             # ESM-C embeddings/logits (+ sae/{size}/ if enabled)
+├── benchmarks/                      # Per-rule timing data (TSV)
+├── benchmark_summary.txt            # Pipeline timing report
+├── logs/                            # Per-stage logs
+├── msa_chunks/  boltz_chunks/  esmc_chunks/  esmfold_chunks/  openfold_chunks/
+└── ...                              # Intermediate chunk manifests
 ```
 
 ## Architecture
 
 ```
 Snakefile
-├── workflow/rules/msa.smk     chunk_fastas → colabfold_search → scatter_msa
-├── workflow/rules/boltz.smk   chunk_yamls → boltz_predict → organize_outputs
-├── workflow/rules/esm.smk     chunk_yamls → run_esm (embeddings + logits)
-└── workflow/rules/es.smk      collect_cif_paths → PDAnalysis
+├── workflow/rules/msa.smk        chunk_fastas → colabfold_search → scatter_msa
+├── workflow/rules/boltz.smk      chunk_yamls → boltz_predict → organize_outputs
+├── workflow/rules/esmc.smk       chunk_yamls → run_esm (embeddings + logits)
+├── workflow/rules/esmc_sae.smk   SAE sparse-activation extraction (optional)
+├── workflow/rules/esmfold.smk    chunk_yamls → ESMFold2 fold
+└── workflow/rules/openfold.smk   chunk_yamls → OpenFold3 predict → organize
 ```
 
-**File format flow:** FASTA → (MSA) → A3M → YAML → (Boltz) → CIF + (ESM) → NPY
+**File-format flow:** FASTA → (MSA) → A3M → YAML → (Boltz / OpenFold) → CIF;
+sequence → (ESM-C) → NPY, (ESMFold) → CIF.
 
 **Key design choices:**
 - Snakemake checkpoints for dynamic chunking (chunk count determined at runtime)
 - `snakemake-executor-plugin-slurm` for native SLURM submission
-- Sentinel files (`.msa_complete`, `.boltz_complete`, etc.) for stage dependencies
-- Dual-mode execution: Singularity containers or direct `module load` fallback
+- Sentinel files (`.msa_complete`, `.boltz_complete`, …) for stage dependencies
+- Each GPU stage runs in its own container image (per-stage SIF, with a shared
+  fallback); host caches/DBs are bind-mounted per rule
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Cluster Setup](docs/CLUSTER_SETUP.md) | Environment setup, shared resources, troubleshooting |
-| [Web UI](docs/WEBAPP.md) | Streamlit front-end: install, how to access it (SSH / VS Code / Open OnDemand), usage |
+| [Web UI](docs/WEBAPP.md) | Streamlit front-end: install + access (SSH / VS Code / Open OnDemand) |
 | [Snakemake Guide](docs/SNAKEMAKE_GUIDE.md) | How the Snakemake workflow works, SLURM integration |
-| [Containers](docs/CONTAINERS.md) | Container design and migration plan |
+| [Containers](docs/CONTAINERS.md) | Container design and build/pull instructions |
 | [config.template.yaml](config.template.yaml) | Annotated configuration reference |
 
 ## Project Structure
 
 ```
 ├── Snakefile                    # Main workflow entry point
-├── config.yaml                  # User configuration
-├── config.template.yaml         # Annotated config reference
-├── setup.sh                     # Cluster setup script
+├── config.template.yaml         # Annotated config reference (copy → config.yaml)
+├── containers/                  # Container defs + build.sh + per-stage test scripts
 ├── workflow/
 │   ├── rules/                   # Snakemake rules per stage (.smk)
 │   └── scripts/                 # Python helpers (chunking, organizing)
-├── slurm_scripts/               # Execution scripts (run_esm.py, etc.)
+├── webapp/                      # Streamlit UI + estimator / monitor / results / satmut CLIs
+├── scripts/                     # download_models.py, uniprot_fetch/, calibration
 ├── bash_scripts/                # Data preparation (generate_data.sh)
 ├── utils/                       # Python utilities (mutations, file conversion)
 ├── profiles/slurm/              # Snakemake SLURM executor profile
+├── .claude/skills/              # Claude Code skill suite (setup, run-pipeline, …)
 └── docs/                        # Documentation
 ```

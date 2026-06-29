@@ -1,0 +1,418 @@
+Using profile profiles/slurm/ for setting default command line arguments.
+Config file config.yaml is extended by additional config specified via the command line.
+host: holylogin06.rc.fas.harvard.edu
+Building DAG of jobs...
+Updating checkpoint dependencies.
+SLURM run ID: ffbd6f50-ac53-45f7-839c-4f1d41e62db0
+MinJobAge 600s (>= 120s). 'squeue' should work reliably for status queries.
+Using shell: /usr/bin/bash
+Provided remote nodes: 100
+Job stats:
+job                        count
+-----------------------  -------
+all                            1
+boltz_complete                 1
+openfold_complete              1
+organize_boltz_chunk           5
+organize_openfold_chunk        4
+run_boltz_predict              2
+total                         14
+
+Select jobs to execute...
+Execute 9 jobs...
+
+[Sun Jun 28 15:35:55 2026]
+localrule organize_openfold_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_3_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_3.organized
+    jobid: 48
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_3.organized
+    wildcards: chunk_id=3
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_boltz_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_2_run_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_2_run_0.organized
+    jobid: 26
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_2_run_0.organized
+    wildcards: chunk_id=2, run_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_openfold_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_0.organized
+    jobid: 42
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_0.organized
+    wildcards: chunk_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_openfold_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_2_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_2.organized
+    jobid: 46
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_2.organized
+    wildcards: chunk_id=2
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_openfold_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_4_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_4.organized
+    jobid: 50
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_4.organized
+    wildcards: chunk_id=4
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_boltz_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_1_run_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_1_run_0.organized
+    jobid: 24
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_1_run_0.organized
+    wildcards: chunk_id=1, run_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+localrule organize_boltz_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_3_run_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_3_run_0.organized
+    jobid: 28
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_3_run_0.organized
+    wildcards: chunk_id=3, run_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:55 2026]
+rule run_boltz_predict:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0_output/.done
+    log: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/logs/boltz/predict_4_run_0.log
+    jobid: 31
+    benchmark: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/benchmarks/boltz/predict_4_run_0.tsv
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0_output/.done
+    wildcards: chunk_id=4, run_id=0
+    resources: tmpdir=<TBD>, mem_mb=10509, mem=10.51 GB, mem_mib=10023, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=65, cpus_per_task=8, slurm_extra='--gpus-per-node=1' '--mail-type=END,FAIL' '--mail-user=thomasbush52@gmail.com', boltz_jobs=1, slurm_partition=kempner_h100, slurm_account=kempner_bsabatini_lab
+Job 31 has been submitted with SLURM jobid 25559660 (log: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/ProtForge/.snakemake/slurm_logs/rule_run_boltz_predict/4_0/25559660.log).
+
+[Sun Jun 28 15:35:55 2026]
+rule run_boltz_predict:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0_output/.done
+    log: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/logs/boltz/predict_0_run_0.log
+    jobid: 23
+    benchmark: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/benchmarks/boltz/predict_0_run_0.tsv
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0_output/.done
+    wildcards: chunk_id=0, run_id=0
+    resources: tmpdir=<TBD>, mem_mb=10509, mem=10.51 GB, mem_mib=10023, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=65, cpus_per_task=8, slurm_extra='--gpus-per-node=1' '--mail-type=END,FAIL' '--mail-user=thomasbush52@gmail.com', boltz_jobs=1, slurm_partition=kempner_h100, slurm_account=kempner_bsabatini_lab
+Job 23 has been submitted with SLURM jobid 25559661 (log: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/ProtForge/.snakemake/slurm_logs/rule_run_boltz_predict/0_0/25559661.log).
+Organized SW135V: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SW135V/openfold
+Organized seq_11947: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_11947/openfold
+Organized seq_13431: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_13431/openfold
+Organized seq_15513: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_15513/openfold
+Organized seq_17930: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_17930/openfold
+Organized seq_18277: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_18277/openfold
+Organized seq_19308: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_19308/openfold
+Organized seq_20262: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_20262/openfold
+Organized seq_35810: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_35810/openfold
+Organized seq_38345: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_38345/openfold
+Processed: 10, Skipped: 0
+[Sun Jun 28 15:35:57 2026]
+Finished jobid: 50 (Rule: organize_openfold_chunk)
+1 of 14 steps (7%) done
+Organized SK29T: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK29T/openfold
+Organized SK84A: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK84A/openfold
+Organized SK88E: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK88E/openfold
+Organized SK99I: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK99I/openfold
+Organized SL173H: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL173H/openfold
+Organized SL233R: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL233R/openfold
+Organized SL233S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL233S/openfold
+Organized SL259S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL259S/openfold
+Organized SL260Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL260Y/openfold
+Organized SL277K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL277K/openfold
+Organized SL277Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL277Y/openfold
+Organized SL282N: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL282N/openfold
+Organized SL48A: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL48A/openfold
+Organized SM113F: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113F/openfold
+Organized SM113K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113K/openfold
+Organized SM113Q: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113Q/openfold
+Organized SM113S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113S/openfold
+Organized SM162Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM162Y/openfold
+Organized SM261P: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM261P/openfold
+Organized SN118I: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN118I/openfold
+Organized SN160M: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN160M/openfold
+Organized SN79A: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN79A/openfold
+Organized SP112G: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP112G/openfold
+Organized SP127E: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP127E/openfold
+Organized SP143S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP143S/openfold
+Processed: 25, Skipped: 0
+[Sun Jun 28 15:35:58 2026]
+Finished jobid: 46 (Rule: organize_openfold_chunk)
+2 of 14 steps (14%) done
+Organized 34073: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/34073/openfold
+Organized SA10H: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA10H/openfold
+Organized SA123W: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA123W/openfold
+Organized SA126N: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA126N/openfold
+Organized SA220D: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA220D/openfold
+Organized SA23F: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA23F/openfold
+Organized SA272S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA272S/openfold
+Organized SA57K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA57K/openfold
+Organized SC243G: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SC243G/openfold
+Organized SC243L: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SC243L/openfold
+Organized SD186C: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD186C/openfold
+Organized SD186E: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD186E/openfold
+Organized SD24G: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD24G/openfold
+Organized SD276T: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD276T/openfold
+Organized SD283C: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD283C/openfold
+Organized SD45E: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD45E/openfold
+Organized SD47W: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD47W/openfold
+Organized SD50R: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD50R/openfold
+Organized SD53V: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD53V/openfold
+Organized SD62G: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD62G/openfold
+Organized SE271T: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE271T/openfold
+Organized SE33A: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE33A/openfold
+Organized SE58C: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE58C/openfold
+Organized SE58S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE58S/openfold
+Organized SE59V: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE59V/openfold
+Processed: 25, Skipped: 0
+Organized SP275H: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP275H/openfold
+Organized SP34Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP34Y/openfold
+Organized SP82M: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP82M/openfold
+Organized SQ284G: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SQ284G/openfold
+Organized SQ284S: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SQ284S/openfold
+Organized SR177T: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR177T/openfold
+Organized SR37V: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR37V/openfold
+Organized SR37W: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR37W/openfold
+Organized SR41I: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR41I/openfold
+Organized ST122C: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST122C/openfold
+Organized ST136K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST136K/openfold
+Organized ST136V: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST136V/openfold
+Organized ST235K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST235K/openfold
+Organized ST237M: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST237M/openfold
+Organized ST273K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST273K/openfold
+Organized ST288Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST288Y/openfold
+Organized SV115K: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV115K/openfold
+Organized SV139E: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV139E/openfold
+Organized SV16I: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV16I/openfold
+Organized SV17Q: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV17Q/openfold
+Organized SV217W: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV217W/openfold
+Organized SV217Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV217Y/openfold
+Organized SV249I: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV249I/openfold
+Organized SV249Y: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV249Y/openfold
+Organized SV265L: top 1 sample(s) (3 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV265L/openfold
+Processed: 25, Skipped: 0
+[Sun Jun 28 15:35:59 2026]
+Finished jobid: 42 (Rule: organize_openfold_chunk)
+3 of 14 steps (21%) done
+[Sun Jun 28 15:35:59 2026]
+Finished jobid: 48 (Rule: organize_openfold_chunk)
+4 of 14 steps (29%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Sun Jun 28 15:35:59 2026]
+localrule openfold_complete:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_1.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_2.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_3.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_4.organized
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.openfold_complete
+    jobid: 9
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.openfold_complete; Input files updated by another job: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_3.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_2.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/openfold_chunks/chunk_4.organized
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:35:59 2026]
+Finished jobid: 9 (Rule: openfold_complete)
+5 of 14 steps (36%) done
+Organized SK174S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK174S/boltz
+Organized SK175C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK175C/boltz
+Organized SK182G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK182G/boltz
+Organized SK196F: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK196F/boltz
+Organized SK206C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK206C/boltz
+Organized SK280L: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK280L/boltz
+Organized SK29T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK29T/boltz
+Organized SK84A: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK84A/boltz
+Organized SK88E: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK88E/boltz
+Organized SK99I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK99I/boltz
+Organized SL173H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL173H/boltz
+Organized SL233R: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL233R/boltz
+Organized SL233S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL233S/boltz
+Organized SL259S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL259S/boltz
+Organized SL260Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL260Y/boltz
+Organized SL277K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL277K/boltz
+Organized SL277Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL277Y/boltz
+Organized SL282N: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL282N/boltz
+Organized SL48A: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SL48A/boltz
+Organized SM113F: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113F/boltz
+Organized SM113K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113K/boltz
+Organized SM113Q: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113Q/boltz
+Processed: 22, Skipped: 0
+[Sun Jun 28 15:36:04 2026]
+Finished jobid: 26 (Rule: organize_boltz_chunk)
+6 of 14 steps (43%) done
+Organized SE58C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE58C/boltz
+Organized SE58S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE58S/boltz
+Organized SE59V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE59V/boltz
+Organized SE66F: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE66F/boltz
+Organized SE83V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE83V/boltz
+Organized SE92P: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE92P/boltz
+Organized SF137I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SF137I/boltz
+Organized SF137Q: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SF137Q/boltz
+Organized SF195T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SF195T/boltz
+Organized SG124D: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SG124D/boltz
+Organized SG166P: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SG166P/boltz
+Organized SG205A: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SG205A/boltz
+Organized SH256M: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SH256M/boltz
+Organized SH55Q: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SH55Q/boltz
+Organized SH80G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SH80G/boltz
+Organized SI116H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI116H/boltz
+Organized SI120K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI120K/boltz
+Organized SI149H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI149H/boltz
+Organized SI192F: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI192F/boltz
+Organized SI194H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI194H/boltz
+Organized SI223Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SI223Y/boltz
+Organized SK141T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SK141T/boltz
+Processed: 22, Skipped: 0
+Organized SM113S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM113S/boltz
+Organized SM162Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM162Y/boltz
+Organized SM261P: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SM261P/boltz
+Organized SN118I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN118I/boltz
+Organized SN160M: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN160M/boltz
+Organized SN79A: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SN79A/boltz
+Organized SP112G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP112G/boltz
+Organized SP127E: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP127E/boltz
+Organized SP143S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP143S/boltz
+Organized SP275H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP275H/boltz
+Organized SP34Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP34Y/boltz
+Organized SP82M: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SP82M/boltz
+Organized SQ284G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SQ284G/boltz
+Organized SQ284S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SQ284S/boltz
+Organized SR177T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR177T/boltz
+Organized SR37V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR37V/boltz
+Organized SR37W: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR37W/boltz
+Organized SR41I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SR41I/boltz
+Organized ST122C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST122C/boltz
+Organized ST136K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST136K/boltz
+Organized ST136V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST136V/boltz
+Organized ST235K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST235K/boltz
+Processed: 22, Skipped: 0
+[Sun Jun 28 15:36:07 2026]
+Finished jobid: 24 (Rule: organize_boltz_chunk)
+7 of 14 steps (50%) done
+[Sun Jun 28 15:36:08 2026]
+Finished jobid: 28 (Rule: organize_boltz_chunk)
+8 of 14 steps (57%) done
+[Sun Jun 28 15:52:30 2026]
+Finished jobid: 31 (Rule: run_boltz_predict)
+9 of 14 steps (64%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Sun Jun 28 15:52:30 2026]
+localrule organize_boltz_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0.organized
+    jobid: 30
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0.organized; Input files updated by another job: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0_output/.done
+    wildcards: chunk_id=4, run_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+Organized ST237M: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST237M/boltz
+Organized ST273K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST273K/boltz
+Organized ST288Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/ST288Y/boltz
+Organized SV115K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV115K/boltz
+Organized SV139E: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV139E/boltz
+Organized SV16I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV16I/boltz
+Organized SV17Q: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV17Q/boltz
+Organized SV217W: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV217W/boltz
+Organized SV217Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV217Y/boltz
+Organized SV249I: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV249I/boltz
+Organized SV249Y: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV249Y/boltz
+Organized SV265L: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SV265L/boltz
+Organized SW135V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SW135V/boltz
+Organized seq_11947: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_11947/boltz
+Organized seq_13431: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_13431/boltz
+Organized seq_15513: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_15513/boltz
+Organized seq_17930: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_17930/boltz
+Organized seq_18277: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_18277/boltz
+Organized seq_19308: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_19308/boltz
+Organized seq_20262: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_20262/boltz
+Organized seq_35810: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_35810/boltz
+Organized seq_38345: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/seq_38345/boltz
+Processed: 22, Skipped: 0
+[Sun Jun 28 15:52:39 2026]
+Finished jobid: 30 (Rule: organize_boltz_chunk)
+10 of 14 steps (71%) done
+[Sun Jun 28 15:54:01 2026]
+Finished jobid: 23 (Rule: run_boltz_predict)
+11 of 14 steps (79%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Sun Jun 28 15:54:01 2026]
+localrule organize_boltz_chunk:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0_output/.done
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0.organized
+    jobid: 22
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0.organized; Input files updated by another job: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0_output/.done
+    wildcards: chunk_id=0, run_id=0
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+Organized 34073: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/34073/boltz
+Organized SA10H: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA10H/boltz
+Organized SA123W: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA123W/boltz
+Organized SA126N: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA126N/boltz
+Organized SA220D: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA220D/boltz
+Organized SA23F: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA23F/boltz
+Organized SA272S: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA272S/boltz
+Organized SA57K: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SA57K/boltz
+Organized SC243G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SC243G/boltz
+Organized SC243L: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SC243L/boltz
+Organized SD186C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD186C/boltz
+Organized SD186E: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD186E/boltz
+Organized SD24G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD24G/boltz
+Organized SD276T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD276T/boltz
+Organized SD283C: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD283C/boltz
+Organized SD45E: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD45E/boltz
+Organized SD47W: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD47W/boltz
+Organized SD50R: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD50R/boltz
+Organized SD53V: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD53V/boltz
+Organized SD62G: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SD62G/boltz
+Organized SE271T: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE271T/boltz
+Organized SE33A: model 0 (5 files) -> /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/sequences/SE33A/boltz
+Processed: 22, Skipped: 0
+[Sun Jun 28 15:54:09 2026]
+Finished jobid: 22 (Rule: organize_boltz_chunk)
+12 of 14 steps (86%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Sun Jun 28 15:54:09 2026]
+localrule boltz_complete:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_1_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_2_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_3_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0.organized
+    output: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.boltz_complete
+    jobid: 3
+    reason: Missing output files: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.boltz_complete; Input files updated by another job: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_3_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_1_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_4_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_0_run_0.organized, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/boltz_chunks/chunk_2_run_0.organized
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:54:09 2026]
+Finished jobid: 3 (Rule: boltz_complete)
+13 of 14 steps (93%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Sun Jun 28 15:54:09 2026]
+localrule all:
+    input: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.msa_complete, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.boltz_complete, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.esmc_600M_complete, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.esmfold_complete, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.openfold_complete
+    jobid: 0
+    reason: Input files updated by another job: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.openfold_complete, /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/.boltz_complete
+    resources: tmpdir=/tmp, mem_mb=4000, mem=4 GB, mem_mib=3815, disk_mb=1000, disk=1 GB, disk_mib=954, runtime=1, cpus_per_task=2, slurm_extra=--mail-type=END,FAIL--mail-user=thomasbush52@gmail.com
+[Sun Jun 28 15:54:09 2026]
+Finished jobid: 0 (Rule: all)
+14 of 14 steps (100%) done
+Cleaning up SLURM log files older than 10 day(s).
+Complete log(s): /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/ProtForge/.snakemake/log/2026-06-28T153554.598827.snakemake.log
+ProtForge Pipeline — COMPLETED SUCCESSFULLY
+==================================================
+Total wall-clock time: 0h 18m 46.8s (1126.8s)
+
+Per-stage breakdown (sum of rule wall-clock times):
+--------------------------------------------------
+Stage              Total (s)    # Rules    Avg (s)
+msa                   3656.3          3     1218.8   (1h 0m 56s)
+boltz                 8267.6          5     1653.5   (2h 17m 48s)
+esmc                   187.4          4       46.9   (0h 3m 7s)
+esmfold                519.1          1      519.1   (0h 8m 39s)
+openfold              1501.9          5      300.4   (0h 25m 2s)
+--------------------------------------------------
+Sum rules            14132.3                       (3h 55m 32s)
+
+
+Benchmark summary written to: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/outputs/benchmark_summary.txt

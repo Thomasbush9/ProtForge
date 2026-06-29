@@ -95,10 +95,21 @@ Fill only these **must-fill** fields (Claude edits `config.yaml`):
 - `slurm.account`, `slurm.partition`, `slurm.email`, `slurm.log_dir`
 - `output.parent_dir`
 - `input.fasta_dir`
-- `esmc.cache_dir` and `esmfold.cache_dir` → the HF cache. In container mode
-  these are the **in-container** path `/models/hf` (the bind maps the host
-  cache there); the host cache itself is `$PROTFORGE_ROOT/models/hf`.
-- `containers.*` → set after the build (step 6).
+- `esmc.cache_dir` and `esmfold.cache_dir` → the **HOST** path to the HF cache
+  (the dir that contains `hub/models--biohub--ESMC-*`, `…--ESMFold2-*`). The
+  Snakemake rules bind it read-only into the container themselves
+  (`-B {cache_dir}:/models/hf:ro`), so the container always sees `/models/hf` —
+  do **NOT** set `cache_dir` to `/models/hf`; that is the in-container mount
+  target, not a config value. **Always ASK the user for their host HF model-cache
+  dir** rather than assuming `$PROTFORGE_ROOT/models/hf` (a prior install kept it
+  next to the SIFs, e.g. `…/singularity_dev/images/cache_models`).
+- `openfold.cache_dir` (if running OpenFold) → host dir holding the OpenFold
+  checkpoints (`ckpt_root`, `of3-p2-*.pt`); bound to `/models/openfold` and
+  auto-loaded. It can be the **same** `cache_models` dir as the HF cache.
+- `containers.*` → set after the build (step 6). **Per-stage SIFs are a valid
+  layout**: if the user already has separate `msa.sif`/`boltz.sif`/
+  `fast_esmfold.sif` (serves both esmc + esmfold)/`openfold3.sif`, point each
+  `containers.<stage>` at its own SIF and skip the build (step 4) entirely.
 
 **Leave alone** the shared read-only paths that already work as shipped:
 `msa.mmseq2_db`, `msa.colabfold_db`, `boltz.cache_dir`.
@@ -224,6 +235,16 @@ snakemake --profile profiles/slurm/ -n
 
 ## Notes
 
+- **Skip the heavy steps when assets pre-exist.** If the user already has built
+  SIFs and a populated HF/OpenFold cache (common for returning users), steps 4
+  (build) and 5 (download) are unnecessary — just verify the SIF + cache paths,
+  fill `config.yaml`, and smoke-test. Ask up front what already exists.
+- **`mamba` is a shell function, not on `PATH` after `module load python`.** It
+  is only defined within the activated shell, and this skill's Bash calls do
+  **not** persist shell state between invocations. Chain everything in ONE
+  command: `module load python && mamba activate snakemake && <cmd>`. Running
+  `module load python` and `mamba activate` as separate Bash calls fails with
+  `mamba: command not found`.
 - Lab notes (decisions, calibration, cluster paths) live in the vault under
   `~/Documents/Vault/Notes/Lab/protforge/`, not the repo.
 - `CLAUDE.md` mentions a `download_tools.sh` — it no longer exists. The real

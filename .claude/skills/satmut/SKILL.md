@@ -54,12 +54,12 @@ with the container/cache/SLURM settings (same keys the pipeline uses:
 `containers.esmc`, `esmc.cache_dir`, `slurm.partition/account/log_dir`).
 
 ```bash
-# single sequence
-python -m webapp.satmut_cli submit --config config.smoke.yaml \
+# single sequence  (--config is any config with container/cache/SLURM settings)
+python -m webapp.satmut_cli submit --config config.yaml \
     --seq MSKGEELFTG... --name gfp --size 6B --out-dir /path/scans
 
 # batch: one scan per FASTA in a directory (one sequence per file)
-python -m webapp.satmut_cli submit --config config.smoke.yaml \
+python -m webapp.satmut_cli submit --config config.yaml \
     --fasta-dir /path/wts --size 600M --out-dir /path/scans
 
 # preview the sbatch command without submitting (no cluster needed)
@@ -123,6 +123,17 @@ input/<name>.fasta                       # query written by submit
 
 ## Notes
 
+- **Resource sizing ignores `--size`.** The submit step always reads the
+  `slurm.resources.esmc` block regardless of the model size requested
+  (`webapp/satmut.py` reads `resources.esmc`, not `esmc_<size>`). A config tuned
+  for 600M (e.g. ~13 GB / 20 min) will under-provision a **6B** scan — the ~12 GB
+  weights can OOM during load or time out. For 6B, **copy the config** (e.g.
+  `config.satmut.yaml`) and bump `slurm.resources.esmc` to ~80 GB / 30 min before
+  submitting, so the live pipeline config stays untouched. Always confirm the
+  `--mem`/`--time` in the `--dry-run` sbatch line before a real submit.
+- `--size` defaults to `6B`; the host cache pointed at by `containers.esmc` /
+  `esmc.cache_dir` must actually contain `hub/models--biohub--ESMC-6B` (a cache
+  with only 600M will fail the GPU job).
 - Sizes are per scan: deriving/viewing a `6B` scan and a `300M` scan are separate
   `--size` invocations against the same `--out-dir`.
 - One sequence per FASTA file in `--fasta-dir`; file stem becomes the scan name.

@@ -47,8 +47,9 @@ existing config the user points at:
 - **Stages** — which of `msa`, `boltz`, `esmc`, `esmfold`, `openfold` (and ESM-C
   `sae`)? These map to `pipeline.*` toggles. Note the dependency: Boltz/OpenFold
   consume MSA output; `esmc`/`esmfold`/`sae` run straight from sequence.
-- **Smoke vs production** — a smoke test first (see `config.smoke.yaml`) is the
-  default recommendation before a full run (`config.ga.yaml` is a real example).
+- **Smoke vs production** — recommend a smoke run first (a config pointed at a
+  handful of short sequences, or `--subsample`) before committing to the full
+  set. There is no checked-in example config; copy `config.template.yaml`.
 - **GPU preference** — `auto` (let the estimator pick the cheapest GPU that
   fits) unless the user wants to pin one (e.g. `h100`).
 
@@ -101,6 +102,11 @@ Read the **Notes** section out to the user. In particular:
 - An MSA "exceeds largest known GPU" note is expected and **not** a real GPU
   OOM: MSA's large memory is host RAM for the mmap'd ColabFold DB (~256 GB),
   which the estimator requests as `--mem`. Reassure rather than alarm.
+- **The MSA mem estimate over-requests** (e.g. ~325 GB) — actual MSA memory is
+  roughly **fixed** (the DB mmap footprint, ~135 GB observed) and does not scale
+  the way the estimate implies. After `--apply`, cap it by hand:
+  `slurm.resources.msa.mem_mb: 256000`. 256 GB leaves ample headroom and avoids
+  wasteful requests that can hurt queue time on constrained partitions.
 
 Caveat: the estimator covers `msa`, `boltz`, `esmc`, `esmfold` only. It does
 **not** size `openfold`, per-size ESM-C (`esmc_6B`/`600M`/`300M`), or `sae`
@@ -147,6 +153,24 @@ snakemake --profile profiles/slurm/ --configfile config.<run>.yaml --rerun-incom
 
 On failures, read the SLURM logs under `slurm.log_dir` and report the actual
 error; suggest `--rerun-incomplete` for transient/preemption failures.
+
+**Known failure mode — Boltz `cudaErrorDevicesUnavailable`.** If a Boltz (or
+other GPU) job dies with `torch.AcceleratorError: CUDA error: CUDA-capable
+device(s) is/are busy or unavailable` at `torch.cuda.set_device()`, that is
+**transient GPU contention on a shared partition** (the estimator often places
+Boltz on shared `kempner`/a100), NOT a config/data error — chunks that got clean
+GPUs finish fine. Recovery: set `slurm.boltz.partition: kempner_h100` (dedicated,
+less contended) and resume with `--rerun-incomplete`. The resume redoes only the
+failed chunks + downstream organize/sentinel steps; completed stages are kept.
+Note the rule's `"no Boltz container configured"` guard text appears in the log
+dump even when the container IS set — read the Python traceback for the real
+cause, not that line.
+
+**`mamba` won't be on `PATH` across separate Bash calls** (shell state doesn't
+persist, and `mamba` is a shell function). Chain in one command:
+`module load python && mamba activate snakemake && <cmd>`. The long-running
+orchestrator should be launched in the background (`nohup … &`) so it can keep
+submitting downstream jobs as checkpoints complete.
 
 ## Notes
 
