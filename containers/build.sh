@@ -240,4 +240,19 @@ cd "$REPO_ROOT"
 echo
 echo "Done. Image at: $OUT"
 echo "Size: $(du -h "$OUT" | cut -f1)"
+
+# Record the image digest once, here at build time, as a `<sif>.sha256`
+# sidecar. The per-run provenance manifest (write_run_manifest.py) reads this
+# instead of re-hashing multi-GB SIFs on every pipeline launch. This is what
+# makes a run reproducible/auditable even though the def files build from
+# floating base-image tags.
+if command -v sha256sum >/dev/null 2>&1; then
+  echo "Computing sha256 digest (one-time, may take a moment)…"
+  ( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" )
+  echo "Digest      : $(cut -d' ' -f1 "$OUT.sha256")"
+  echo "Digest file : $OUT.sha256"
+else
+  echo "WARN: sha256sum not found; skipping digest sidecar." >&2
+fi
+
 [[ -n "$LOG_FILE" ]] && echo "Build log saved: $LOG_FILE"

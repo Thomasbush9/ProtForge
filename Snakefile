@@ -266,6 +266,22 @@ def _write_benchmark_summary(status):
     print(f"\nBenchmark summary written to: {report_path}")
 
 
+onstart:
+    # Provenance manifest: record git commit, resolved config, container
+    # digests, and model SHAs so a run can be reproduced/audited later.
+    try:
+        from write_run_manifest import write_manifest as _write_manifest
+        _mpath = _write_manifest(
+            OUTPUT,
+            config,
+            repo_dir=workflow.basedir,
+            runtime=CONTAINER_RUNTIME,
+        )
+        print(f"Wrote run provenance manifest: {_mpath}")
+    except Exception as _e:  # never block a run on provenance
+        _sys.stderr.write(f"WARN: could not write run_manifest.json: {_e}\n")
+
+
 onsuccess:
     _write_benchmark_summary("COMPLETED SUCCESSFULLY")
 

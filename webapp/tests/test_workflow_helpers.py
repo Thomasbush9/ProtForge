@@ -92,7 +92,7 @@ def test_estimator_apply_then_helper_read_roundtrip(tmp_path):
     """The seam that matters: webapp Apply writes config; Snakemake helpers read it."""
     cfg_path = tmp_path / "config.yaml"
     initial = {
-        "pipeline": {"msa": False, "boltz": True, "esm": False, "esmfold": False, "es": True},
+        "pipeline": {"msa": False, "boltz": True, "esmc": False, "esmfold": False},
         "boltz": {"recycling_steps": 10, "diffusion_samples": 25, "num_runs": 1},
         "slurm": {"partition": "kempner_requeue", "account": "test_lab"},
     }
@@ -111,29 +111,11 @@ def test_estimator_apply_then_helper_read_roundtrip(tmp_path):
     boltz_mem = stage_resource(slurm_cfg, "boltz", "mem_mb", 16000)
     assert boltz_mem != 16000, "estimator should have written a custom mem_mb"
 
-    # ES gpus=0 from estimator should disable the GPU request
-    assert stage_uses_gpu(slurm_cfg, "es", True) is False
+    # Boltz is GPU-using, so the estimator should have requested a GPU
+    assert stage_uses_gpu(slurm_cfg, "boltz", False) is True
 
     # An unmentioned stage falls back
     assert stage_resource(slurm_cfg, "msa", "cpus_per_task", 4) == 4
-
-
-def test_apply_writes_gpus_zero_for_es(tmp_path):
-    """ES is CPU-bound — estimator must leave gpus=0 in the YAML."""
-    cfg_path = tmp_path / "config.yaml"
-    initial = {
-        "pipeline": {"es": True, "msa": False, "boltz": False, "esm": False, "esmfold": False},
-        "slurm": {"partition": "kempner_requeue"},
-    }
-    cfg_path.write_text(yaml.safe_dump(initial))
-
-    scaling = load_scaling_models()
-    stats = compute_input_stats(fasta_results=[{"valid": True, "total_residues": 500}] * 10)
-    estimates = estimate_all_stages(stats, initial, scaling)
-    apply_estimate_to_config(cfg_path, estimates, backup=False)
-
-    written = yaml.safe_load(cfg_path.read_text())
-    assert written["slurm"]["resources"]["es"]["gpus"] == 0
 
 
 def test_apply_honors_existing_partition_overrides(tmp_path):
@@ -186,14 +168,14 @@ def test_recalibrate_parses_benchmarks(tmp_path):
     bench = tmp_path / "benchmarks"
     _write_fake_benchmark_tsv(bench / "boltz" / "predict_0_run_0.tsv", runtime_s=120.0, max_rss_mb=8000)
     _write_fake_benchmark_tsv(bench / "boltz" / "predict_1_run_0.tsv", runtime_s=180.0, max_rss_mb=10000)
-    _write_fake_benchmark_tsv(bench / "esm"   / "esm_chunk_0.tsv",     runtime_s=30.0,  max_rss_mb=4000)
+    _write_fake_benchmark_tsv(bench / "esmc"  / "esm_chunk_0.tsv",     runtime_s=30.0,  max_rss_mb=4000)
 
     output = tmp_path / "calibrated.yaml"
     fitted = recalibrate_from_benchmarks(bench, output_path=output)
 
     assert output.exists()
     assert "boltz" in fitted
-    assert "esm" in fitted
+    assert "esmc" in fitted
 
     boltz = fitted["boltz"]["per_gpu"]["_observed"]
     # Mean of [120, 180] = 150

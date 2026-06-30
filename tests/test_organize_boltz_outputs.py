@@ -53,10 +53,14 @@ class TestOrganizeChunk:
 
         boltz_out = seq_dir / "protA" / "boltz"
         output_files = list(boltz_out.iterdir())
-        assert len(output_files) == 2  # .cif + .json for model_0
         names = {f.name for f in output_files}
+        # .cif + confidence .json + the confidence summary sidecar for model_0
         assert "protA_model_0.cif" in names
         assert "protA_confidence_model_0.json" in names
+        assert "model_0.summary.json" in names
+        # only the best model is copied — no model_5 / model_9 files leak through
+        assert not any("model_5" in n or "model_9" in n for n in names)
+        assert len(output_files) == 3
 
     def test_picks_top_n(self, tmp_path):
         """samples_to_save=2 -> copies model_0 and model_5 (lowest two indices)."""

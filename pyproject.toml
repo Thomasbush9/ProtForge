@@ -2,6 +2,8 @@
 name = "protforge"
 version = "0.1.0"
 description = "Protein structure and function prediction pipeline"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
     "pandas>=1.0",
@@ -40,4 +42,9 @@ host = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Both suites run by default. scripts/uniprot_fetch/tests is intentionally
+# excluded — it ships its own venv/deps (see that dir's README).
+testpaths = ["tests", "webapp/tests"]
+# Put the source dirs on sys.path so tests can use bare imports
+# (e.g. `from estimator import ...`) without a manual PYTHONPATH.
+pythonpath = ["webapp", "workflow/scripts"]
