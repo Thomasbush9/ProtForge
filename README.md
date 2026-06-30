@@ -38,6 +38,7 @@ npm install -g @anthropic-ai/claude-code
 ```bash
 git clone https://github.com/sabatinilab/ProtForge.git
 cd ProtForge
+git checkout feat/claude-code-skills
 claude
 ```
 
@@ -76,6 +77,7 @@ container image, download model weights, and fill `config.yaml`. See the
 # 1. Clone
 git clone https://github.com/sabatinilab/ProtForge.git
 cd ProtForge
+git checkout feat/claude-code-skills
 
 # 2. Build the GPU container (on a compute node — needs --fakeroot), or pull a prebuilt SIF
 bash containers/build.sh

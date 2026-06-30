@@ -1,0 +1,81 @@
+pipeline:
+  msa: false
+  boltz: false
+  esmc: true
+  esmfold: false
+  openfold: false
+input:
+  fasta_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/ga_fasta_le5000
+output:
+  parent_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/ga_outputs
+msa:
+  max_files_per_job: 50
+  array_max_concurrency: 10
+  mmseq2_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+boltz:
+  max_files_per_job: 22
+  array_max_concurrency: 10
+  delete_msa_after_processing: false
+  recycling_steps: 10
+  diffusion_samples: 25
+  samples_to_save: 1
+  num_runs: 1
+  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+esmc:
+  models:
+  - 6B
+  max_files_per_job: 100
+  chunks_per_group: 1
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/cache_models
+  sae:
+    enabled: false
+    sae_type: all-layers
+    layers: all
+    max_files_per_job: 25
+    chunks_per_group: 1
+openfold:
+  num_batches: null
+  max_files_per_job: 25
+  gpus_per_job: 1
+  num_workers: 10
+  num_diffusion_samples: 5
+  num_model_seeds: 1
+  samples_to_save: 1
+  structure_format: cif
+  write_full_confidence: true
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/cache_models
+esmfold:
+  max_files_per_job: 200
+  chunks_per_group: 1
+  compile: false
+  cache_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/cache_models
+  num_loops: 3
+  num_sampling_steps: 50
+  seed: 0
+containers:
+  runtime: singularity
+  gpu: ''
+  colabfold: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/msa.sif
+  boltz: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/boltz.sif
+  esmc: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/fast_esmfold.sif
+  esmfold: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/fast_esmfold.sif
+  openfold: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/openfold3.sif
+slurm:
+  log_dir: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/test_protforge/job_logs
+  partition: kempner_h100
+  account: kempner_bsabatini_lab
+  email: thomasbush52@gmail.com
+  resources:
+    # ESM-C 6B is NOT covered by the estimator (its esmc curve is calibrated for
+    # the 600M model). Sized by hand: weights ~24 GB -> needs an H100 80 GB GPU.
+    # The runner self-bounds GPU activation memory with an 8000-token budget +
+    # FlashAttention-2, so host mem only stages weights/container overhead.
+    esmc_6B:
+      mem_mb: 64000
+      runtime: 120
+      cpus_per_task: 16
+      gpus: 1
+  esmc:
+    partition: kempner_h100
