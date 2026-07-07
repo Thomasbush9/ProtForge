@@ -1,32 +1,32 @@
 # ProtForge install guide (Kempner)
 
-From zero to a working pipeline. Two paths — pick one — both run the same
-Snakemake DAG.
+From zero to a working pipeline. ProtForge runs each GPU stage inside its own
+Singularity/Apptainer image; the big MSA/Boltz databases and the model-weight
+caches are bind-mounted at runtime. You only build the images for the stages
+you actually run.
 
-| Path | What you get | When to pick |
-|---|---|---|
-| **A. Container (single SIF)** | One `.sif` with all GPU-stage tools. Bind-mount the big DBs and ESM/ESMFold model cache at runtime. | Reproducible, shareable, no env churn. **Currently in late beta — works but `containers/TESTING.md` Step 2 hasn't been validated end-to-end yet.** |
-| **B. Conda / `module load`** | Shared conda envs + downloaded weights + Kempner `module load` for CUDA. The legacy path. | What's known to work today. Fall back here if path A breaks. |
-
-You can mix-and-match per stage (`containers.boltz: /path/to.sif`, leave
-`containers.esm: ""` to keep ESM on conda). See "Per-stage requirements"
-below to confirm what each stage needs in either mode.
+> **Easiest path — let Claude Code do it.** The repo ships a `setup` skill
+> (`.claude/skills/setup/`). From the repo root run `claude`, then say
+> *"set up ProtForge"* — it interviews you for your workspace/SLURM/storage
+> choices and runs the steps below (workspace dirs, `config.yaml`, image build,
+> weight download, smoke test). The rest of this doc is the same process by
+> hand. See the README's "drive ProtForge with Claude Code" section.
 
 ---
 
-## 0. Prereqs (both paths)
+## 0. Prereqs
 
 ```bash
-# Kempner account + storage. ProtForge needs ~20 GB free on /n/holylfs06
-# for the SIF + cache + outputs. Home dirs are too small.
+# Kempner account + storage. ProtForge needs tens of GB free on /n/holylfs06
+# for the SIFs + model cache + outputs. Home dirs are too small.
 
 # Clone the repo into your workspace (NOT into the SIF output dir — see
-# containers/README.md for layout)
+# containers/README.md for layout).
 WORKSPACE=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
 git clone https://github.com/Thomasbush9/ProtForge.git "$WORKSPACE/ProtForge"
 cd "$WORKSPACE/ProtForge"
 
-# Snakemake (in your personal python env)
+# Snakemake (in your personal python/conda env)
 pip install snakemake snakemake-executor-plugin-slurm
 ```
 
@@ -34,173 +34,134 @@ Copy the config template:
 
 ```bash
 cp config.template.yaml config.yaml
-# Edit config.yaml — see "Filling in config.yaml" below.
+# Edit config.yaml — see "Filling in config.yaml" below. Every config.*.yaml is
+# git-ignored (it holds your paths/account/email); only the template is tracked.
 ```
 
 ---
 
-## Path A — Container
+## 1. Build the stage images (one-time)
 
-### A.1 Build the SIF (one-time, ~30 min on a compute node)
+ProtForge uses one image per GPU stage:
 
-Detailed instructions in `containers/README.md`. Summary:
+| Stage | Def | SIF | Serves |
+|---|---|---|---|
+| MSA | `msa.def` | `msa.sif` | `colabfold_search` + `mmseqs2` |
+| Boltz | `boltz.def` | `boltz.sif` | Boltz structure prediction |
+| ESM | `esmfold_cu.def` | `esm.sif` | ESM-C embeddings + ESMFold2 |
+| OpenFold | `openfold.def` | `openfold.sif` | OpenFold3 |
+
+Build from an **interactive allocation, not a login node**. `PROTFORGE_ROOT`
+is the *parent* of the repo; SIFs land in `$PROTFORGE_ROOT/sifs/`.
 
 ```bash
-# On an interactive node — NOT a login node:
 salloc -p test --account=<your_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
 
-# Workspace layout: $PROTFORGE_ROOT is the *parent* of the repo, with
-# sifs/, model cache, and Singularity cache/tmp dirs as siblings:
 #   $PROTFORGE_ROOT/
 #   ├── ProtForge/        <- repo (cloned in step 0)
 #   ├── sifs/             <- output SIFs land here
 #   ├── models/hf/        <- ESM-C + ESMFold HF cache
+#   ├── models/openfold/  <- OpenFold3 weights + CCD cache
 #   ├── sing_cache/       <- singularity layer cache
 #   └── sing_tmp/         <- build staging
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
-mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf"
+mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf" "$PROTFORGE_ROOT/models/openfold"
 
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/build.sh                  # writes $PROTFORGE_ROOT/sifs/protforge-gpu.sif
+bash containers/build.sh all              # or a subset: bash containers/build.sh boltz esm
 python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
 ```
 
-The script prints `Runtime : ...` and `Done. Image at: ...` on success.
-If it bails, fix and re-run — `--force` overwrites partial SIFs.
+`build.sh` prints `Done. Image at: …` per stage and writes a `.sha256` sidecar
+next to each SIF. If a build bails, fix and re-run — `--force` overwrites
+partial SIFs. If `--fakeroot` is not permitted on your partition, build/push to
+GHCR elsewhere and pull per stage:
+`bash containers/build.sh boltz --from-docker docker://ghcr.io/<owner>/protforge-boltz:latest`.
 
-### A.2 Validate
+Full build details: `containers/README.md`.
+
+### Validate
 
 ```bash
-# Smoke test (5 min, needs a GPU node)
+# On a GPU node:
 salloc -p kempner_h100 --account=<your_account> --gres=gpu:1 -t 30 --mem=32G
-bash containers/test/smoke.sh   # if absent, run the per-stage containers/test/*_test_image.sh
-# Expect: "=== ALL SMOKE TESTS PASSED ==="
+
+# Per-stage smoke tests (edit the path vars at the top of each first):
+bash containers/test/esmfold2_test_image.sh   # ESM image, no DB binds needed
+bash containers/test/boltz_test_image.sh      # Boltz image (needs shared DB binds)
 ```
 
-End-to-end test recipe in `containers/TESTING.md`.
+End-to-end test recipe: `containers/TESTING.md`.
 
-### A.3 Tell `config.yaml` to use the SIF
+### Point config.yaml at the SIFs
 
-Under `containers:` in `config.yaml`, set `containers.gpu` to the SIF:
+Under `containers:` in `config.yaml`:
 
 ```yaml
 containers:
-  runtime: auto             # auto | singularity | apptainer
-  gpu: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
-  pdanalysis: ""            # no MPI image yet; ES stage stays on conda
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db:ro,/n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf:/models/hf:ro,/n/holylfs06,/n/home06"
+  runtime: auto                       # auto | singularity | apptainer
+  colabfold: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/msa.sif
+  boltz:     /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/boltz.sif
+  esmc:      /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif   # esmc + esmfold share the ESM image
+  esmfold:   /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif
+  openfold:  /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/openfold.sif
+  # gpu: ""                           # optional shared fallback if a stage key is empty
 ```
 
-The `host:container:ro` syntax binds the shared DBs read-only at
-predictable in-container paths. The trailing `/n/holylfs06,/n/home06`
-entries are blanket binds for the workspace and user homes — to be
-slimmed (audit item H3).
-
-When using the container path, set the in-container paths in the stage
-sections:
+Each rule binds its own inputs, the shared DBs (read-only), and the model cache
+per stage — no global bind list to maintain. The model caches go in the stage
+sections, as **host** paths the rule maps into the container:
 
 ```yaml
 msa:
-  mmseq2_db:    /data/colabfold_db   # bind-mounted from host above
-  colabfold_db: /data/colabfold_db
-boltz:
-  cache_dir:    /data/boltz_db
-esm:
-  cache_dir:    /models/hf
-esmfold:
-  cache_dir:    /models/hf
-```
-
----
-
-## Path B — Conda / module load (legacy, working today)
-
-### B.1 Automated setup
-
-```bash
-cd "$WORKSPACE/ProtForge"
-bash setup.sh
-```
-
-Prompts for shared base dir, SLURM account, email, FASTA dir, output dir.
-Creates shared envs (`esm`, `es-analysis`), downloads ESM weights, patches
-ESM hardcoded paths, generates `config.yaml`.
-
-### B.2 Manual setup (if setup.sh isn't enough)
-
-| Stage | What you need | How to get it |
-|---|---|---|
-| MSA | `colabfold_search`, `mmseqs2`, MSA DBs | All shared on Kempner — see "Shared resources" table below. No install needed. |
-| Boltz | `boltz` CLI, Boltz weights | Shared conda env + `boltz_db` on Kempner. No install. |
-| ESM | `esm` SDK, `esmc_600m` weights | `setup.sh` creates the env at `{shared_base}/envs/esm` and downloads weights. Then patch `esm/utils/constants/esm3.py` to point at the shared cache (see Troubleshooting). |
-| ESMFold | `transformers>=4.40`, `facebook/esmfold_v1` weights | `python scripts/download_models.py --cache-dir <cache>` populates the HF cache. Create env yourself: `conda create -p {shared_base}/envs/esmfold python=3.12 && pip install transformers accelerate torch`. |
-| ES | `PDAnalysis`, `MDAnalysis` | `setup.sh` clones PDAnalysis + creates env at `{shared_base}/envs/es-analysis`. |
-
-### B.3 `config.yaml` for path B
-
-Leave the `containers:` block fields empty (or omit the block). Set
-`*.env_path` and `*.cache_dir` to your shared paths. Reference values:
-
-```yaml
-msa:
-  mmseq2_db:    /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  mmseq2_db:    /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db   # shared, no changes
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
-  colabfold_bin: /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz/localcolabfold/colabfold-conda/bin
 boltz:
-  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
-  env_path:  /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz
-esm:
-  env_path:  {shared_base}/envs/esm
-  cache_dir: {shared_base}/esm_models_cache
+  cache_dir:    /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db    # shared, no changes
+esmc:
+  cache_dir:    /n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf                # host HF cache → /models/hf
 esmfold:
-  env_path:  {shared_base}/envs/esmfold
-  cache_dir: {shared_base}/esm_models_cache
-es:
-  env_path:     {shared_base}/envs/es-analysis
-  pdanalysis_dir: {shared_base}/PDAnalysis
+  cache_dir:    /n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf
+openfold:
+  cache_dir:    /n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/openfold
 ```
 
 ---
 
 ## Per-stage requirements (derived from `workflow/rules/*.smk`)
 
-This table is the source of truth. If you can satisfy the right column for
-each stage you care about, the pipeline will run.
+If you can satisfy the right column for each stage you care about, the pipeline
+will run. In container mode the tools are baked into the stage SIF; the DBs and
+model caches are bind-mounted.
 
 | Stage | Tools / binaries | Model weights | DBs |
 |---|---|---|---|
 | MSA | `colabfold_search`, `mmseqs2` | — | ColabFold DB (~700 GB), MMseqs2 DB |
 | Boltz | `boltz` CLI, PyTorch + CUDA | Boltz checkpoint (~5 GB) | — |
-| ESM | `esm` SDK (NOT `fair-esm`), PyTorch + CUDA | `esmc_600m` (~2.5 GB) | — |
+| ESM-C | `esm` SDK (NOT `fair-esm`), PyTorch + CUDA | `esmc_600m` (~2.5 GB) | — |
 | ESMFold | `transformers≥4.40`, PyTorch + CUDA | `facebook/esmfold_v1` (~8 GB) | — |
-| ES | PDAnalysis, MDAnalysis, MPI | — | — |
-
-Container path: tools are baked into the SIF; DBs and model caches are
-bind-mounted. Conda path: install tools into per-stage envs, download weights
-to a shared cache, DBs are read directly from the shared paths.
+| OpenFold | OpenFold3, PyTorch + CUDA | OpenFold3 weights | ColabFold MSA (reuses MSA stage) |
 
 ---
 
-## Shared resources (already on Kempner — both paths)
+## Shared resources (already on Kempner — leave the template defaults)
 
 | What | Path |
 |---|---|
 | ColabFold DBs | `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases` |
 | MMseqs2 DB | `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db` |
 | Boltz checkpoint | `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db` |
-| Boltz conda env | `/n/holylfs06/LABS/kempner_shared/Everyone/common_envs/miniconda3/envs/boltz` |
-| Local ColabFold bin | `…/boltz/localcolabfold/colabfold-conda/bin` |
 
 ---
 
-## SLURM section of `config.yaml` (both paths)
+## SLURM section of `config.yaml`
 
 ```yaml
 slurm:
   log_dir: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/job_logs
   partition: kempner_requeue
-  account: <your_slurm_account>
-  email: <you>@example.com
+  account: <your_slurm_account>       # e.g. kempner_<pi>_lab
+  email: <you>@example.com            # SLURM job notifications
 ```
 
 ---
@@ -208,10 +169,10 @@ slurm:
 ## First run
 
 ```bash
-cd "$WORKSPACE/ProtForge"
+cd "$PROTFORGE_ROOT/ProtForge"
 snakemake --profile profiles/slurm/ -n     # dry run: shows the DAG
 snakemake --profile profiles/slurm/        # launch (uses SLURM)
-# resume after a failure: just re-run, or:
+# resume after a failure/preemption: just re-run, or:
 snakemake --profile profiles/slurm/ --rerun-incomplete
 ```
 
@@ -226,37 +187,27 @@ tail -f <log_dir>/*.out
 
 ## Troubleshooting
 
-**`ModuleNotFoundError: No module named 'utils'`** (legacy path) — the rule
-sets `PYTHONPATH` to repo root; if running scripts manually,
-`export PYTHONPATH=$(pwd)`.
+**`bash containers/build.sh` exits "no stage selected"** — pass a stage:
+`bash containers/build.sh all` (or `boltz esm …`). The bare command no longer
+builds anything by design.
 
-**ESM `FileNotFoundError: .../esmc_600m_2024_12_v0.pth`** — ESM library
-hardcodes weight paths in `esm/utils/constants/esm3.py`. Re-run `setup.sh`
-or patch manually to point at your `esm.cache_dir`.
+**`ModuleNotFoundError: No module named 'utils'`** — the rule sets `PYTHONPATH`
+to the repo root; if running a helper script manually, `export PYTHONPATH=$(pwd)`.
 
-**Container `cp: cannot copy a directory into itself`** — `PROTFORGE_ROOT`
-is set to the repo path. It must be the *parent* of the repo. See
-`containers/README.md`.
+**Container `--cleanenv` strips a needed env var** — rules forward host vars
+explicitly (`{container_cmd} --env FOO=$FOO …`, see `boltz.smk`). If you hit
+this in a rule, add the `--env` flag inside that rule rather than dropping
+`--cleanenv`.
 
 **Empty `sifs/` after a "successful" build** — locate the SIF:
-`find "$PROTFORGE_ROOT" -name 'protforge-gpu.sif' -exec ls -lh {} \;` —
-most likely you're `ls`-ing a stale empty dir at the wrong level.
-
-**Container `--cleanenv` strips a needed env var** — rules should forward
-host vars explicitly: `{container_cmd} --env FOO=$FOO ...` (see
-`boltz.smk:156`). If you hit this in a rule we haven't migrated, the fix
-is to add the `--env` flag inside that rule, not to drop `--cleanenv`.
-
-**Container schema confusion (five `containers.*` fields, one SIF)** — set
-all four GPU fields to the same SIF for now. Single-`containers.gpu` field
-is a pending refactor (audit H4).
+`find "$PROTFORGE_ROOT" -name '*.sif' -exec ls -lh {} \;` — most likely you're
+`ls`-ing a stale empty dir at the wrong level.
 
 ---
 
 ## See also
 
-- `containers/README.md` — container build details, env-var setup, sandbox iteration workflow
-- `containers/TESTING.md` — smoke test + end-to-end test recipes on the cluster
+- `containers/README.md` — per-stage container build details, layout, weights
+- `containers/TESTING.md` — smoke + end-to-end test recipes on the cluster
 - `docs/SNAKEMAKE_GUIDE.md` — workflow internals (rules, chunking, retries)
-- `~/Documents/Vault/Notes/Lab/protforge/container-audit.md` — open hardening items for the container path
-- `docs/CONTAINERS.md` — **superseded.** The original per-stage container design predates the single-SIF decision (2026-05-14). Kept for history; do not follow.
+- `docs/WEBAPP.md` — Streamlit UI access (SSH / VS Code / Open OnDemand)

@@ -15,7 +15,7 @@ opens a session via `cclab protforge`, that directory autoloads.
 - `Lab/protforge/data.md` — cluster paths, run IDs
 
 The repo holds code, runtime configs, and operational docs only
-(`docs/SNAKEMAKE_GUIDE.md`, `docs/CLUSTER_SETUP.md`, `docs/CONTAINERS.md`).
+(`docs/SNAKEMAKE_GUIDE.md`, `docs/CLUSTER_SETUP.md`, `containers/README.md`).
 Don't add new long-form `*.md` to the repo — write to the vault instead.
 
 ## Project Overview

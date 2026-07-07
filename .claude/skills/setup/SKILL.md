@@ -13,16 +13,17 @@ description: >-
 
 Drive a brand-new user from a fresh repo clone to a validated, runnable
 pipeline. This skill is the conversational driver over the existing setup
-scripts — `containers/build.sh`, `scripts/download_models.py`, and
-`containers/test/smoke.sh`. The authoritative reference is
-`docs/CLUSTER_SETUP.md`; defer to it and `containers/README.md` when in doubt.
+scripts — `containers/build.sh`, `scripts/download_models.py`, and the
+per-stage `containers/test/*_test_image.sh` checks. The authoritative reference
+is `docs/CLUSTER_SETUP.md`; defer to it and `containers/README.md` when in doubt.
 
 Do **not** reimplement any setup logic. Run the scripts.
 
-This skill targets **Path A (container / single SIF)** — the reproducible path.
-Path B (legacy conda via `setup.sh`) exists as a fallback; only steer there if
-the container build can't work (e.g. `--fakeroot` is denied and there's no
-pre-built image to pull). See `docs/CLUSTER_SETUP.md` "Path B".
+ProtForge runs **one container image per GPU stage** (msa / boltz / esm /
+openfold), not a single mega-SIF. You only build the stages the user will run.
+There is no `setup.sh` and no legacy conda path — the container path is the
+only supported install. If `--fakeroot` is denied on the build partition, pull
+prebuilt images with `--from-docker` instead of building.
 
 ## Shared vs. user — set expectations up front
 
@@ -33,7 +34,7 @@ pre-built image to pull). See `docs/CLUSTER_SETUP.md` "Path B".
   (`/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/...`)
 
 **The user must do** (this skill): pick a workspace, create dirs, fill
-`config.yaml`, build the SIF, download ESM-C/ESMFold weights, smoke-test.
+`config.yaml`, build the per-stage SIFs, download ESM-C/ESMFold weights, smoke-test.
 
 ## Interactive steps run by the user, not by Claude
 
@@ -48,12 +49,11 @@ file edits and dry, non-interactive checks.
 Ask only what you can't read from an existing `config.yaml`:
 
 - **Workspace root `PROTFORGE_ROOT`** — the **parent** of the repo, NOT the repo
-  itself. Layout: `$PROTFORGE_ROOT/{ProtForge/, sifs/, models/hf/, sing_cache/,
-  sing_tmp/}`. **Gotcha:** if `PROTFORGE_ROOT` is the repo path, the build's
-  `sing_tmp/` lands inside the repo and `%files . /opt/protforge` dies with
-  `cp: cannot copy a directory into itself`. Confirm the value is one level
-  above the checkout. Must live on `/n/holylfs06` (or similar lab storage) —
-  home dirs are too small for the ~15 GB SIF + caches.
+  itself. Layout: `$PROTFORGE_ROOT/{ProtForge/, sifs/, models/hf/,
+  models/openfold/, sing_cache/, sing_tmp/}`. Keeping `sing_tmp/` and the SIFs
+  as siblings of the repo (not inside it) also keeps the build cache off the
+  checkout. Must live on `/n/holylfs06` (or similar lab storage) — home dirs
+  are too small for the SIFs + caches.
 - **SLURM** — `account` (e.g. `kempner_yourpi_lab`), `partition`
   (default `kempner_requeue`), and notification `email`.
 - **Output + logs** — `output.parent_dir` and `slurm.log_dir`, both on
@@ -101,15 +101,16 @@ Fill only these **must-fill** fields (Claude edits `config.yaml`):
   (`-B {cache_dir}:/models/hf:ro`), so the container always sees `/models/hf` —
   do **NOT** set `cache_dir` to `/models/hf`; that is the in-container mount
   target, not a config value. **Always ASK the user for their host HF model-cache
-  dir** rather than assuming `$PROTFORGE_ROOT/models/hf` (a prior install kept it
-  next to the SIFs, e.g. `…/singularity_dev/images/cache_models`).
+  dir** rather than assuming `$PROTFORGE_ROOT/models/hf` (some installs keep it
+  elsewhere on lab storage).
 - `openfold.cache_dir` (if running OpenFold) → host dir holding the OpenFold
   checkpoints (`ckpt_root`, `of3-p2-*.pt`); bound to `/models/openfold` and
-  auto-loaded. It can be the **same** `cache_models` dir as the HF cache.
-- `containers.*` → set after the build (step 6). **Per-stage SIFs are a valid
-  layout**: if the user already has separate `msa.sif`/`boltz.sif`/
-  `fast_esmfold.sif` (serves both esmc + esmfold)/`openfold3.sif`, point each
-  `containers.<stage>` at its own SIF and skip the build (step 4) entirely.
+  auto-loaded. It can be the **same** cache dir as the HF cache.
+- `containers.*` → set after the build (step 6). The images are per-stage:
+  `msa.sif` → `containers.colabfold`, `boltz.sif` → `containers.boltz`,
+  `esm.sif` → both `containers.esmc` and `containers.esmfold`, `openfold.sif`
+  → `containers.openfold`. If the user already has these built, point each
+  `containers.<stage>` at its SIF and skip the build (step 4) entirely.
 
 **Leave alone** the shared read-only paths that already work as shipped:
 `msa.mmseq2_db`, `msa.colabfold_db`, `boltz.cache_dir`.
@@ -117,36 +118,38 @@ Fill only these **must-fill** fields (Claude edits `config.yaml`):
 Leave `slurm.resources.*` and per-stage chunk sizes unset — those are sized by
 the `run-pipeline` skill's estimator, not here.
 
-## 4. Build the SIF (compute node — NOT a login node)
+## 4. Build the stage SIFs (compute node — NOT a login node)
 
 The build needs `--fakeroot`, which login nodes lack. The user runs this in an
-interactive allocation. Give them the exact commands to run themselves:
+interactive allocation. Build only the stages they enabled in `config.yaml`
+(`all` builds every stage). Give them the exact commands to run themselves:
 
 ```bash
-# 1) Grab an interactive allocation (user runs this; ~30 min build)
+# 1) Grab an interactive allocation (user runs this)
 salloc -p test --account=<your_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
 
 # 2) Inside the allocation:
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/build.sh          # writes $PROTFORGE_ROOT/sifs/protforge-gpu.sif
+bash containers/build.sh all      # writes $PROTFORGE_ROOT/sifs/{msa,boltz,esm,openfold}.sif
+#   or a subset: bash containers/build.sh boltz esm
 ```
 
-Output-path resolution: `-o/--output` wins, else `PROTFORGE_SIF_DIR/...`, else
-`PROTFORGE_ROOT/sifs/protforge-gpu.sif`. `build.sh` refuses to build if the
-output or tmp dir resolves inside the repo (the self-copy guard above).
+Output-dir resolution: `-o/--output` (single stage) wins, else
+`$PROTFORGE_SIF_DIR`, else `$PROTFORGE_ROOT/sifs`. Each `<stage>.sif` gets a
+`.sha256` sidecar next to it for provenance.
 
 Variants to offer:
 
 ```bash
-bash containers/build.sh --dry-run                                  # print the command, build nothing
-bash containers/build.sh -o /custom/path/protforge-gpu.sif          # explicit output
-bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:latest  # pull instead of build
+bash containers/build.sh all --dry-run                              # print commands, build nothing
+bash containers/build.sh boltz -o /custom/path/boltz.sif            # explicit output (one stage)
+bash containers/build.sh boltz --from-docker docker://ghcr.io/<owner>/protforge-boltz:latest  # pull instead of build
 ```
 
-If `--fakeroot` is denied, fall back to `--from-docker` (or build with Docker
-elsewhere and push to GHCR, then pull). Success prints
-`Done. Image at: ...` and the size; a build log is saved under
+If `--fakeroot` is denied, fall back to `--from-docker` per stage (or build with
+Docker elsewhere and push to GHCR, then pull). Success prints
+`Done. Image at: ...` and the size per stage; a build log is saved under
 `$PROTFORGE_ROOT/build-logs/`. Ask the user to paste it back on failure.
 
 `--from-docker` pulls work from any compute node (no fakeroot needed) and are
@@ -173,55 +176,51 @@ commit SHAs, and the total size. Useful flags:
 If `PROTFORGE_ROOT` is exported, `--cache-dir` defaults to
 `$PROTFORGE_ROOT/models/hf`, so it can be omitted.
 
-## 6. Point config.yaml at the SIF
+## 6. Point config.yaml at the stage SIFs
 
-Once the SIF exists, Claude sets the container paths. Set every GPU-stage field
-to the same SIF (single-image design):
+Once the SIFs exist, Claude sets the per-stage container paths:
 
 ```yaml
 containers:
   runtime: auto      # auto | singularity | apptainer (Kempner binary is `singularity`)
-  gpu: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/protforge-gpu.sif
-  colabfold: ""      # leave "" to fall back to containers.gpu, or set to the same SIF
-  boltz: ""
-  esmc: ""
-  esmfold: ""
-  openfold: ""
+  colabfold: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/msa.sif
+  boltz:     /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/boltz.sif
+  esmc:      /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif   # esm.sif serves esmc + esmfold
+  esmfold:   /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif
+  openfold:  /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/openfold.sif
+  # gpu: ""          # optional shared fallback used only when a per-stage key is empty
 ```
 
-`containers.gpu` is the shared fallback used when a per-stage key is empty, so
-setting just `gpu` covers all stages. Confirm the SIF path matches the build
-output from step 4.
+Only set the keys for stages the user enabled. Confirm each path matches the
+build output from step 4.
 
 ## 7. Smoke test (GPU node)
 
-Validates: GPU visible → PyTorch+CUDA → tools importable → mounted weights load
-→ ESMFold folds a short peptide end-to-end. Needs the model cache from step 5.
-The user runs this in a GPU allocation:
+There is no single smoke script — validate each built image with its per-stage
+test script in `containers/test/`. Each checks: GPU visible → PyTorch+CUDA →
+tools importable → mounted weights load → a tiny fold/predict end-to-end. Needs
+the model cache from step 5. The user runs these in a GPU allocation, after
+editing the path variables at the top of each script:
 
 ```bash
 # user runs:
 salloc -p kempner_h100 --account=<your_account> --gres=gpu:1 -t 30 --mem=32G
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/test/smoke.sh                 # or: -i /path/to/protforge-gpu.sif
+bash containers/test/esmfold2_test_image.sh   # ESM image (esm.sif) — no DB binds
+bash containers/test/test_batch_esmc.sh       # ESM-C batch
+bash containers/test/boltz_test_image.sh      # Boltz image — needs shared DB binds
+bash containers/test/msa_test_image.sh        # MSA image — needs shared DB binds
+bash containers/test/openfold3_test_image.sh  # OpenFold image
 ```
 
-NOTE: `containers/test/smoke.sh` is the entry point named by the docs, but it
-may not be present in every checkout — verify first with `ls containers/test/`.
-If it's missing, fall back to the per-stage scripts that ARE there
-(`containers/test/*_test_image.sh`, e.g. `esmfold2_test_image.sh`,
-`boltz_test_image.sh`) plus `containers/test/test_batch_esmc.sh`. Run the one
-matching the stage you're about to use.
+Run only the ones for stages the user enabled. Pass criterion: each script's own
+success line. On failure, ask the user to paste the failing block — see
+`containers/TESTING.md` for the common causes (no GPU node, CUDA mismatch,
+missing `--nv`, unbound `/models/hf`).
 
-Pass criterion: `=== ALL SMOKE TESTS PASSED ===` (or each per-stage script's own
-success line). Steps print `=== [N/7] ... ===` headers so failures localize. On
-failure, ask the user to paste the failing block — see `containers/TESTING.md`
-for the common causes per step (no GPU node, CUDA mismatch, missing `--nv`,
-unbound `/models/hf`).
-
-The smoke test does **not** exercise MSA or Boltz (those need the big DB binds).
-The fuller MSA→Boltz→ESM→ESMFold end-to-end recipe is in
-`containers/TESTING.md` "Step 2".
+The ESM smoke test does **not** exercise MSA or Boltz (those need the big DB
+binds — use their own test scripts). The fuller MSA→Boltz→ESM→ESMFold
+end-to-end recipe is in `containers/TESTING.md` "Step 2".
 
 ## 8. Confirm ready to run
 
@@ -249,5 +248,6 @@ snakemake --profile profiles/slurm/ -n
   `~/Documents/Vault/Notes/Lab/protforge/`, not the repo.
 - `CLAUDE.md` mentions a `download_tools.sh` — it no longer exists. The real
   setup is `containers/build.sh` + `scripts/download_models.py`.
-- Container path A is in late beta per `docs/CLUSTER_SETUP.md`; if it breaks,
-  the legacy conda Path B (`bash setup.sh`) is the documented fallback.
+- There is no `setup.sh` and no conda fallback: the per-stage container path is
+  the only supported install. If `--fakeroot` is denied, pull prebuilt images
+  with `containers/build.sh <stage> --from-docker docker://...`.

@@ -14,7 +14,8 @@ default-resources:
   mem_mb: 4000
   runtime: 30        # minutes
   cpus_per_task: 2
-  slurm_extra: "'--mail-type=END,FAIL' '--mail-user=thomasbush52@gmail.com'"
+  # Optional SLURM job email notifications — uncomment and set your address:
+  # slurm_extra: "'--mail-type=END,FAIL' '--mail-user=you@example.com'"
 
 # Per-stage concurrency caps. Each GPU rule consumes one <stage>_jobs slot, so a
 # budget here limits that stage to N concurrent SLURM jobs (independent of the

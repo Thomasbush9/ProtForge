@@ -9,17 +9,17 @@
 #SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=01:00:00
 # Log dir from env (caller passes -o)
-#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+#SBATCH --output=%x.%A_%a.out
 
 set -euo pipefail
 
 # define .yaml dir, msa dir, output dir
-INPUT_YAML=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original/original.yaml
-INPUT_MSA=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/protein_rsa/original/sequences/original/msa
-OUTPUT_DIR=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests
+INPUT_YAML=${PROTFORGE_ROOT:?set PROTFORGE_ROOT}/protein_rsa/original/sequences/original/original.yaml
+INPUT_MSA=${PROTFORGE_ROOT:?set PROTFORGE_ROOT}/protein_rsa/original/sequences/original/msa
+OUTPUT_DIR=${PROTFORGE_ROOT:?set PROTFORGE_ROOT}/singularity_dev/images/output_tests
 
 #give path to image
-BOLTZ_IMAGE=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/boltz.sif
+BOLTZ_IMAGE=${PROTFORGE_ROOT:?set PROTFORGE_ROOT}/singularity_dev/images/boltz.sif
 #define cache path for boltz weights:
 CACHE_PATH=/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
 

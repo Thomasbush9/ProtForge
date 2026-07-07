@@ -36,9 +36,8 @@ npm install -g @anthropic-ai/claude-code
 ### 2. Launch it in the repo
 
 ```bash
-git clone https://github.com/sabatinilab/ProtForge.git
+git clone https://github.com/Thomasbush9/ProtForge.git
 cd ProtForge
-git checkout feat/claude-code-skills
 claude
 ```
 
@@ -75,13 +74,15 @@ container image, download model weights, and fill `config.yaml`. See the
 
 ```bash
 # 1. Clone
-git clone https://github.com/sabatinilab/ProtForge.git
+git clone https://github.com/Thomasbush9/ProtForge.git
 cd ProtForge
-git checkout feat/claude-code-skills
 
-# 2. Build the GPU container (on a compute node — needs --fakeroot), or pull a prebuilt SIF
-bash containers/build.sh
-#   or:  bash containers/build.sh --from-docker docker://ghcr.io/<owner>/protforge-gpu:latest
+# 2. Build the per-stage GPU containers (on a compute node — needs --fakeroot).
+#    ProtForge uses one image per stage; `all` builds msa/boltz/esm/openfold.
+export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>   # SIFs land in $PROTFORGE_ROOT/sifs
+bash containers/build.sh all
+#   or build a subset:  bash containers/build.sh boltz esm
+#   or pull one prebuilt image:  bash containers/build.sh boltz --from-docker docker://ghcr.io/<owner>/protforge-boltz:latest
 
 # 3. Download ESM-C / ESMFold weights to a host HF cache
 python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
@@ -273,7 +274,7 @@ sequence → (ESM-C) → NPY, (ESMFold) → CIF.
 | [Cluster Setup](docs/CLUSTER_SETUP.md) | Environment setup, shared resources, troubleshooting |
 | [Web UI](docs/WEBAPP.md) | Streamlit front-end: install + access (SSH / VS Code / Open OnDemand) |
 | [Snakemake Guide](docs/SNAKEMAKE_GUIDE.md) | How the Snakemake workflow works, SLURM integration |
-| [Containers](docs/CONTAINERS.md) | Container design and build/pull instructions |
+| [Containers](containers/README.md) | Per-stage container design and build/pull instructions |
 | [config.template.yaml](config.template.yaml) | Annotated configuration reference |
 
 ## Project Structure

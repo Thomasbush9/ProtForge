@@ -9,7 +9,7 @@
 #SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=01:00:00
 # Log dir from env (caller passes -o)
-#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+#SBATCH --output=%x.%A_%a.out
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ CACHE_DIR="${2:-}"
 [[ -n "$IMAGE_PATH" && -n "$CACHE_DIR" ]] || usage
 
 INPUT_DIR="${3:-fixtures}"
-OUTPUT_DIR="${4:-/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/singularity_dev/images/output_tests/openfold3}"
+OUTPUT_DIR="${4:-${PROTFORGE_ROOT:?set PROTFORGE_ROOT}/singularity_dev/images/output_tests/openfold3}"
 
 CONTAINER_CACHE="/models/openfold"
 CONTAINER_OUTPUT="/data/output"

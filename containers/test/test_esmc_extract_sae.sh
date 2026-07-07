@@ -7,7 +7,7 @@
 #SBATCH --partition=kempner_h100
 #SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=01:00:00
-#SBATCH --output=/n/home06/tbush/job_logs/%x.%A_%a.out
+#SBATCH --output=%x.%A_%a.out
 
 set -euo pipefail
 

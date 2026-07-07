@@ -10,8 +10,11 @@ __pychace__/*
 .sessions/
 *.cpython
 
-# User-specific config (use config.template.yaml as starting point)
+# User-specific configs (use config.template.yaml as starting point).
+# Every config.*.yaml is personal (paths/account/email); only the template ships.
 config.yaml
+config.*.yaml
+!config.template.yaml
 
 # Local virtual environments (e.g. scripts/uniprot_fetch/.venv)
 .venv/

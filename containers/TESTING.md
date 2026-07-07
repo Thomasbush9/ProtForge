@@ -1,67 +1,62 @@
 # Container testing on Kempner
 
-Step-by-step for validating the built `protforge-gpu.sif` on the cluster.
-Assumes you've already run `bash containers/build.sh` successfully (see
-`containers/README.md`).
+Step-by-step for validating the built per-stage SIFs on the cluster. Assumes
+you've already run `bash containers/build.sh all` (or a subset) successfully —
+see `containers/README.md`.
 
 Workspace layout assumed throughout:
 
 ```
-$TBUSH/container/
+$PROTFORGE_ROOT/
 ├── ProtForge/        <- repo (REPO_ROOT)
-├── sifs/             <- built SIFs
+├── sifs/             <- built SIFs (msa.sif, boltz.sif, esm.sif, openfold.sif)
 ├── models/hf/        <- mounted ESM-C + ESMFold HF cache
+├── models/openfold/  <- OpenFold3 weights + CCD cache
 ├── sing_cache/       <- singularity layer cache
-└── sing_tmp/         <- build staging (created on demand)
+└── sing_tmp/         <- build staging
 ```
 
-Set once per shell:
+Set once per shell (substitute your workspace):
 
 ```bash
-export TBUSH=/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush
-export PROTFORGE_ROOT=$TBUSH/container
-export SIF=$PROTFORGE_ROOT/sifs/protforge-gpu.sif
+export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
+export SIF_DIR=$PROTFORGE_ROOT/sifs
 ```
 
 ---
 
-## Step 0 — Sanity-check the build artifact
-
-Before testing anything, confirm the SIF exists and is non-trivially sized.
+## Step 0 — Sanity-check the build artifacts
 
 ```bash
-ls -lh "$SIF"
-# Expect multi-GB, but smaller than the old fat image with baked weights.
-# If missing, find anywhere it might have landed:
-find "$TBUSH" -name 'protforge-gpu.sif' -exec ls -lh {} \;
+ls -lh "$SIF_DIR"/*.sif
+# Expect multi-GB per stage. If missing, find anywhere they might have landed:
+find "$PROTFORGE_ROOT" -name '*.sif' -exec ls -lh {} \;
 ```
 
 Identify the runtime (informational — both work):
 
 ```bash
 singularity --version
-# Apptainer  -> "apptainer version X.Y.Z"
-# SingularityCE -> "singularity-ce version X.Y.Z" or "singularity version X.Y.Z"
-which singularity
-ls -la $(which singularity)   # is it a symlink to apptainer?
+# Apptainer     -> "apptainer version X.Y.Z"
+# SingularityCE -> "singularity-ce version X.Y.Z"
+ls -la "$(which singularity)"   # is it a symlink to apptainer?
 ```
 
-Inspect the image labels:
+Inspect an image:
 
 ```bash
-singularity inspect "$SIF"
-# Expect Author / Version / Description from %labels in the .def file.
+singularity inspect "$SIF_DIR/boltz.sif"
 ```
 
 ---
 
-## Step 1 — Smoke test (model bind only, no DB bind-mounts)
+## Step 1 — Per-stage smoke tests (model bind only, no DB bind-mounts)
 
-Automated check: GPU visible → PyTorch+CUDA → tools importable → mounted
-weights load → ESMFold folds a 49 aa peptide end-to-end. It exercises the
-model-cache bind, but not MSA / Boltz DB binds.
+Each stage image has a test script under `containers/test/`. They exercise the
+model-cache bind and a tiny end-to-end fold/predict, but not the MSA/Boltz DB
+binds. There is no single `smoke.sh` — run the per-stage scripts.
 
-Populate the model cache once before running:
+Populate the model cache once before running the ESM/OpenFold tests:
 
 ```bash
 cd "$PROTFORGE_ROOT/ProtForge"
@@ -74,44 +69,31 @@ Get a GPU node first:
 salloc -p kempner_h100 --account=<your_account> --gres=gpu:1 -t 30 --mem=32G
 ```
 
-Run:
+Edit the path variables at the top of each script (SIF path, input fixture,
+output dir), then run the ones for stages you built:
 
 ```bash
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/test/smoke.sh   # if absent, run the per-stage containers/test/*_test_image.sh
+bash containers/test/esmfold2_test_image.sh    # ESM image — no DB binds needed
+bash containers/test/test_batch_esmc.sh        # ESM-C batch
+bash containers/test/openfold3_test_image.sh   # OpenFold image
+bash containers/test/msa_test_image.sh         # MSA image — needs shared DB binds
+bash containers/test/boltz_test_image.sh       # Boltz image — needs shared DB binds
 ```
 
-Pass criterion: prints `=== ALL SMOKE TESTS PASSED ===` at the end.
-Each step prints a `=== [N/7] ... ===` header, so failures are localized.
-
-Typical runtime: ~3-5 min. ESMFold step dominates (~2 min on H100).
-
-**If it fails**, paste the failing `=== [N/7] ===` block. Common causes:
-- step 1 (`nvidia-smi`): not on a GPU node, or `--nv` not honored.
-- step 2 (`torch.cuda`): CUDA driver/runtime mismatch.
-- step 4 (tools): missing pip install in `%post` (e.g., the httpx case from 2026-05-14).
-- step 5 (weights): mounted HF cache missing or not bound to `/models/hf`.
-- step 6 (ESMFold end-to-end): OOM, bad CUDA, or the model failed to load.
+**If one fails**, common causes:
+- not on a GPU node, or `--nv` not honored (`nvidia-smi` fails in-container).
+- CUDA driver/runtime mismatch (`torch.cuda.is_available()` is False).
+- missing pip install in the def's `%post`.
+- mounted HF cache missing or not bound to `/models/hf`.
 
 ---
 
-## Step 2 — Stage-1 E2E (one real protein, full pipeline)
+## Step 2 — End-to-end (one real protein, full pipeline)
 
-Runs MSA → Boltz → ESM → ESMFold on a single ~76 aa protein through the SIF
-+ bind-mounted ColabFold and Boltz DBs. Validates the runtime path that
-production jobs will use, minus the webapp layer.
-
-**Not yet scripted** — manual recipe for now; will be wrapped in
-`containers/test/e2e.sh` once smoke passes consistently.
-
-### Bind-mount targets
-
-| Host path | Container path | Mode |
-|---|---|---|
-| `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases` | `/data/colabfold_db` | ro |
-| `/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db` | `/data/boltz_db` | ro |
-| `$PROTFORGE_ROOT/models/hf` | `/models/hf` | ro |
-| `$PWD` (working dir) | `$PWD` | rw |
+Runs MSA → Boltz → ESM-C → ESMFold on a single ~76 aa protein through the
+per-stage SIFs + bind-mounted ColabFold and Boltz DBs. Validates the runtime
+path production jobs use, minus the webapp layer.
 
 ### Test sequence
 
@@ -122,34 +104,30 @@ Ubiquitin (76 aa, well-conserved, fast MSA). Save as `containers/test/e2e.fasta`
 MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG
 ```
 
-(Do this once, then `git add` so future runs reuse it.)
+### Config
 
-### Hand-crafted config
-
-Create `containers/test/e2e_config.yaml` (substitute `<ACCT>` for your SLURM
-account):
+Copy `config.template.yaml` to `containers/test/e2e_config.yaml` and set the
+container/SLURM/IO fields (short recycling for speed). The container block uses
+the **per-stage** keys — no single `gpu` SIF, no global `bind_paths`:
 
 ```yaml
 pipeline:
   msa: true
   boltz: true
-  esm: true
+  esmc: true
   esmfold: true
-  es: false
+  openfold: false
 
 input:
   fasta_dir: containers/test/e2e_in
-
 output:
   parent_dir: containers/test/e2e_out
 
 msa:
   max_files_per_job: 1
   array_max_concurrency: 1
-  mmseq2_db: /data/colabfold_db
-  colabfold_db: /data/colabfold_db
-  colabfold_bin: /opt/conda/envs/colabfold/bin  # adjust if path inside SIF differs
-
+  mmseq2_db:    /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 boltz:
   max_files_per_job: 1
   array_max_concurrency: 1
@@ -157,114 +135,86 @@ boltz:
   diffusion_samples: 5     # short test
   samples_to_save: 1
   num_runs: 1
-  cache_dir: /data/boltz_db
-  colabfold_db: /data/colabfold_db
-
-esm:
-  num_chunks: 1
-  array_max_concurrency: 1
+  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
+esmc:
+  models: [600M]
+  max_files_per_job: 1
   cache_dir: /models/hf
-
 esmfold:
-  input_type: yaml
-  num_chunks: 1
-  array_max_concurrency: 1
+  max_files_per_job: 1
   cache_dir: /models/hf
 
 containers:
   runtime: auto
-  gpu: /n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/sifs/protforge-gpu.sif
-  bind_paths: "/n/holylfs06/LABS/kempner_shared/Everyone/workflow/colabfold/databases:/data/colabfold_db:ro,/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db:/data/boltz_db:ro,/n/holylfs06/LABS/bsabatini_lab/Everyone/tbush/container/models/hf:/models/hf:ro,/n/holylfs06,/n/home06"
+  colabfold: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/msa.sif
+  boltz:     /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/boltz.sif
+  esmc:      /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif
+  esmfold:   /n/holylfs06/LABS/<your_lab>/Everyone/<you>/sifs/esm.sif
 
 slurm:
   log_dir: containers/test/e2e_out/job_logs
   partition: kempner_requeue
-  account: <ACCT>
-  email: thomasbush52@gmail.com
+  account: <your_slurm_account>
+  email: <you>@example.com
 ```
 
-Notes:
-- `containers.gpu` points all GPU stages at the same SIF.
-- `containers.bind_paths` uses `host:container:mode` indirection for DBs and
-  model caches.
-- Tiny `recycling_steps` / `diffusion_samples` are for test speed; restore
-  production values for real runs.
+Each rule builds its own bind set (inputs + shared DBs read-only + the host
+`cache_dir` mapped to `/models/hf`); there is no hand-maintained global bind
+list. `esmc.cache_dir` / `esmfold.cache_dir` are the in-container mount point
+(`/models/hf`), populated on the host by `download_models.py`.
 
-### Stage in the test sequence
+### Stage inputs and dry-run
 
 ```bash
 cd "$PROTFORGE_ROOT/ProtForge"
 mkdir -p containers/test/e2e_in containers/test/e2e_out
 cp containers/test/e2e.fasta containers/test/e2e_in/
-```
 
-### Dry-run first
-
-From a login or interactive node (no GPU needed for the DAG check):
-
-```bash
 snakemake --profile profiles/slurm/ \
-    --configfile containers/test/e2e_config.yaml \
-    -n --reason
+    --configfile containers/test/e2e_config.yaml -n --reason
 ```
 
-Pass criterion: prints the DAG without errors, every rule shows `container:`
-or `singularity exec ...` in its shell preview.
+Pass criterion: the DAG prints without errors and each rule's shell preview
+shows a `singularity exec …` invocation.
 
 ### Real run
 
 ```bash
 snakemake --profile profiles/slurm/ \
-    --configfile containers/test/e2e_config.yaml \
-    --rerun-incomplete
-```
+    --configfile containers/test/e2e_config.yaml --rerun-incomplete
 
-Watch progress:
-
-```bash
 squeue -u $USER
 tail -f containers/test/e2e_out/job_logs/*.out
 ```
 
-Expected wall time: ~20-40 min depending on queue. MSA is usually the
-slowest (~10 min for a single sequence against a 700 GB DB).
+Expected wall time: ~20–40 min depending on queue (MSA dominates against the
+700 GB DB).
 
 ### Validate outputs
 
+Outputs land under `{parent_dir}/sequences/{seq}/`:
+
 ```bash
-# 1. MSA (A3M)
-ls -lh containers/test/e2e_out/msa/ubiquitin_test/*.a3m
-wc -l containers/test/e2e_out/msa/ubiquitin_test/*.a3m   # >> 1 line = real MSA
-
-# 2. Boltz structure (CIF)
-find containers/test/e2e_out/boltz -name '*_model_0.cif' -exec ls -lh {} \;
-
-# 3. ESM embeddings (.pt)
-find containers/test/e2e_out/esm -name 'ubiquitin_test*.pt' -exec ls -lh {} \;
-
-# 4. ESMFold structure (PDB)
-find containers/test/e2e_out/esmfold -name 'ubiquitin_test*.pdb' -exec ls -lh {} \;
+O=containers/test/e2e_out/sequences/ubiquitin_test
+ls -lh "$O"/msa/*.a3m                                   # 1. MSA
+find "$O/boltz" -name '*_model_0.cif' -exec ls -lh {} \;   # 2. Boltz structure
+ls -lh "$O"/esmc/600M/                                  # 3. ESM-C embeddings
+ls -lh "$O"/esmfold/fast/structure.cif                  # 4. ESMFold structure
 ```
 
-Pass criterion: all four file globs return non-empty, non-zero-size files.
+Pass criterion: all four return non-empty, non-zero-size files.
 
 ---
 
 ## Step 3 — Webapp path (final integration)
 
-Only attempt this after Step 2 passes. If the webapp fails but Step 2
-passed, the bug is in config generation / job submission / status tracking —
-not the container. That's the bisect property we wanted.
-
-(Webapp testing recipe TBD — depends on which deploy mode you use to point
-the webapp at this SIF.)
+Only attempt after Step 2 passes. If the webapp fails but Step 2 passed, the
+bug is in config generation / job submission / status tracking — not the
+container.
 
 ---
 
 ## Cleanup
-
-Test outputs accumulate under `containers/test/e2e_out/` and `_smoke_out/`.
-Safe to delete between runs:
 
 ```bash
 rm -rf containers/test/e2e_out containers/test/_smoke_out
@@ -275,7 +225,4 @@ rm -rf containers/test/e2e_out containers/test/_smoke_out
 ## See also
 
 - `containers/README.md` — build / pull / env-var setup
-- `~/Documents/Vault/Notes/Lab/protforge/container-audit.md` — open audit
-  items (15 issues from the 2026-05-16 audit)
-- `~/Documents/Vault/Notes/Lab/protforge/log/2026-05-15-build-sh-bugfixes.md` —
-  history of what we've already fixed
+- `docs/CLUSTER_SETUP.md` — full first-time install walkthrough
