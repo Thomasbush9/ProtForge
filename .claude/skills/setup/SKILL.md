@@ -84,11 +84,22 @@ don't have to export them — but the dirs above must exist on big storage.
 ## 3. Create and fill config.yaml
 
 Copy the template, then Claude edits the copy in place — do **not** make the
-user hand-edit:
+user hand-edit. On Kempner prefer the **Kempner template**: the shared DBs,
+partition, container runtime and `${PROTFORGE_ROOT}`-relative SIF/cache paths
+are already correct, so most must-fill fields below are pre-filled and only
+`slurm.account`, `slurm.email` and `input.fasta_dir` are genuinely left to set.
 
 ```bash
-cp config.template.yaml config.yaml
+cp config.kempner.template.yaml config.yaml   # Kempner (preferred)
+# cp config.template.yaml config.yaml         # other clusters / full reference
 ```
+
+The Kempner template keeps `${PROTFORGE_ROOT}` placeholders, which the workflow
+expands from the environment at load time. That means the user **must export
+`PROTFORGE_ROOT` in the shell they run `snakemake` from** — remind them, and add
+it to their shell rc. If it is unset the run aborts with a clear error naming the
+config key. If the user would rather not depend on the env var, resolve the
+placeholders to literal absolute paths when you edit `config.yaml`.
 
 Fill only these **must-fill** fields (Claude edits `config.yaml`):
 

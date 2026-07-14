@@ -9,6 +9,47 @@ The Snakefile thin-wraps these to keep the rule-side call signatures terse
 
 from __future__ import annotations
 
+import os
+import re
+
+# `${VAR}` / `$VAR` left behind by os.path.expandvars means the variable was not
+# set in the environment. We refuse to run rather than silently build a path with
+# a literal "${PROTFORGE_ROOT}" segment in it.
+_UNEXPANDED = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def expand_config(node, _path: str = ""):
+    """Recursively expand ``${VAR}`` / ``$VAR`` / ``~`` in every config string.
+
+    Lets a shipped template refer to the caller's workspace (``${PROTFORGE_ROOT}``)
+    instead of hardcoding one user's absolute paths, so the only thing a new user
+    edits is their SLURM account/email. Non-string leaves pass through untouched,
+    so configs with plain absolute paths behave exactly as before.
+
+    Raises KeyError naming the config key and the missing variable if a
+    placeholder survives expansion — a wrong path should fail at parse time, not
+    as a confusing mid-run "no such file".
+    """
+    if isinstance(node, dict):
+        return {k: expand_config(v, f"{_path}.{k}" if _path else str(k))
+                for k, v in node.items()}
+    if isinstance(node, list):
+        return [expand_config(v, f"{_path}[{i}]") for i, v in enumerate(node)]
+    if not isinstance(node, str):
+        return node
+
+    expanded = os.path.expanduser(os.path.expandvars(node))
+    leftover = _UNEXPANDED.search(expanded)
+    if leftover:
+        raise KeyError(
+            f"config key '{_path}' references environment variable "
+            f"'{leftover.group(1)}', which is not set. Export it before running "
+            f"(e.g. `export {leftover.group(1)}=/n/holylfs06/LABS/<lab>/Everyone/<you>`) "
+            f"or replace the placeholder in config.yaml with a literal path. "
+            f"Raw value: {node!r}"
+        )
+    return expanded
+
 
 def stage_resource(slurm_cfg: dict, stage: str, key: str, default):
     """Read slurm.resources.<stage>.<key> from the SLURM config block.

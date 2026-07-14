@@ -30,13 +30,27 @@ cd "$WORKSPACE/ProtForge"
 pip install snakemake snakemake-executor-plugin-slurm
 ```
 
-Copy the config template:
+Copy the config template. **On Kempner, use the Kempner template** — the shared
+MSA/Boltz databases, partition, container runtime and image/cache layout are
+already filled in, so you only set your account and email:
 
 ```bash
-cp config.template.yaml config.yaml
-# Edit config.yaml — see "Filling in config.yaml" below. Every config.*.yaml is
-# git-ignored (it holds your paths/account/email); only the template is tracked.
+export PROTFORGE_ROOT="$WORKSPACE"      # the PARENT of the repo; see layout below
+cp config.kempner.template.yaml config.yaml
+# Edit exactly three things: slurm.account, slurm.email, input.fasta_dir.
 ```
+
+`config.kempner.template.yaml` refers to your workspace as `${PROTFORGE_ROOT}`;
+the workflow expands that (and `$VAR` / `~`) from your environment at load time.
+Export it in the same shell you run `snakemake` from — if it is unset the run
+stops immediately with an error naming the offending config key, rather than
+building a broken path. Literal absolute paths still work if you prefer them.
+
+`config.template.yaml` remains the cluster-agnostic, fully annotated reference —
+use it if you are not on Kempner or want to see every available parameter.
+
+Every other `config.*.yaml` is git-ignored (it holds your paths/account/email);
+only the two templates are tracked.
 
 ---
 

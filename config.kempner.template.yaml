@@ -1,0 +1,159 @@
+# ProtForge — ready-to-run config for the Kempner cluster (FASRC).
+#
+# Everything that is a *property of the cluster* (shared MSA/Boltz databases,
+# partitions, container runtime, image + cache layout) is already filled in.
+# You only supply the three things that are properties of *you*:
+#
+#   1. export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
+#      (the parent of the repo — see docs/CLUSTER_SETUP.md for the layout)
+#   2. slurm.account  — your kempner_<pi>_lab account
+#   3. slurm.email    — where SLURM sends job notifications
+#
+# ...plus input.fasta_dir when you have data to run.
+#
+# Quick start:
+#
+#   export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
+#   cp config.kempner.template.yaml config.yaml
+#   $EDITOR config.yaml            # set slurm.account, slurm.email, input.fasta_dir
+#   snakemake --profile profiles/slurm/ -n     # dry run
+#   snakemake --profile profiles/slurm/        # go
+#
+# ${PROTFORGE_ROOT} below is expanded from your environment when the workflow
+# loads this file. If it is not exported you get a clear error naming the key,
+# not a broken path. Literal absolute paths work too — substitute freely.
+
+# ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
+# msa + boltz is the classic structure-prediction path and is on by default.
+# esmc / esmfold need only the sequence, so they read straight from
+# input.fasta_dir and run in PARALLEL with MSA (they do not wait for it) —
+# turning them on usually costs little extra wall-clock. openfold runs off the
+# MSA YAMLs in parallel with Boltz, and needs weights download_models.py does
+# NOT fetch (see docs/CLUSTER_SETUP.md), so it is off by default.
+pipeline:
+  msa: true
+  boltz: true
+  esmc: false      # ESM-C embeddings
+  esmfold: false   # ESMFold2 structure prediction
+  openfold: false  # OpenFold3 — requires the OpenFold weight cache, see below
+
+# ---------------------------------------------------------------------------
+# Your data
+# ---------------------------------------------------------------------------
+input:
+  fasta_dir: ${PROTFORGE_ROOT}/data/fastas   # dir of .fasta/.fa, one per sequence
+  # yaml_dir: /path/to/existing/yamls        # instead, when pipeline.msa is false.
+                                             # NOTE: with only yaml_dir and no
+                                             # fasta_dir, esmc/esmfold fall back to
+                                             # waiting on MSA and lose the parallelism.
+
+output:
+  parent_dir: ${PROTFORGE_ROOT}/outputs
+
+# ---------------------------------------------------------------------------
+# SHARED Kempner resources — already on the cluster, read-only. Do not change.
+# ---------------------------------------------------------------------------
+msa:
+  max_files_per_job: 25
+  array_max_concurrency: 10
+  mmseq2_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/mmseq2_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+
+boltz:
+  max_files_per_job: 25
+  array_max_concurrency: 10
+  delete_msa_after_processing: false
+  recycling_steps: 10
+  diffusion_samples: 25
+  samples_to_save: 1        # int (1..diffusion_samples) or "all"; model_0 = best
+  num_runs: 1
+  # max_seq_len: 1500       # optional: skip sequences longer than this
+  # Boltz weights are shared on Kempner — nothing to download.
+  cache_dir: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/boltz_db
+  colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
+
+# ---------------------------------------------------------------------------
+# Model caches — YOU populate these (one-time), see docs/CLUSTER_SETUP.md
+# ---------------------------------------------------------------------------
+#   python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+esmc:
+  models: [600M]           # any subset of: 300M, 600M, 6B
+  max_files_per_job: 25
+  chunks_per_group: 1      # chunks served per GPU job (amortizes the weight load)
+  cache_dir: ${PROTFORGE_ROOT}/models/hf
+  sae:
+    enabled: false
+    sae_type: all-layers
+    layers: all
+    max_files_per_job: 25
+    chunks_per_group: 1
+
+esmfold:
+  max_files_per_job: 25
+  chunks_per_group: 1
+  compile: false
+  cache_dir: ${PROTFORGE_ROOT}/models/hf
+  num_loops: 3
+  num_sampling_steps: 50
+  seed: 0
+
+openfold:
+  num_batches:
+  max_files_per_job: 25
+  gpus_per_job: 1
+  num_workers: 10
+  num_diffusion_samples: 5
+  num_model_seeds: 1
+  samples_to_save: 1
+  structure_format: cif
+  write_full_confidence: true
+  # OpenFold3 weights + CCD cache (holds ckpt_root/ and of3-p2-*.pt). Not fetched
+  # by download_models.py — obtain separately, then point this at the dir.
+  cache_dir: ${PROTFORGE_ROOT}/models/openfold
+
+# ---------------------------------------------------------------------------
+# Containers — built once by `bash containers/build.sh` into $PROTFORGE_ROOT/sifs/
+# ---------------------------------------------------------------------------
+# On Kempner the runtime binary is `singularity`. esmc and esmfold deliberately
+# share one image (esm.sif) — that is not a typo.
+containers:
+  runtime: singularity
+  gpu: ""
+  colabfold: ${PROTFORGE_ROOT}/sifs/msa.sif
+  boltz: ${PROTFORGE_ROOT}/sifs/boltz.sif
+  esmc: ${PROTFORGE_ROOT}/sifs/esm.sif
+  esmfold: ${PROTFORGE_ROOT}/sifs/esm.sif
+  openfold: ${PROTFORGE_ROOT}/sifs/openfold.sif
+
+# ---------------------------------------------------------------------------
+# SLURM — set account + email; the rest is Kempner-correct as shipped
+# ---------------------------------------------------------------------------
+slurm:
+  log_dir: ${PROTFORGE_ROOT}/job_logs
+  # kempner_h100 gives the most reliable GPU availability. kempner_requeue is
+  # cheaper but preemptible; kempner is the general GPU partition. Note the
+  # kempner partitions REJECT jobs that request no GPU, and cap cores per GPU.
+  partition: kempner_h100
+  account: <YOUR_KEMPNER_ACCOUNT>   # e.g. kempner_yourpi_lab  <-- EDIT ME
+  email: <YOUR_EMAIL>               # e.g. you@university.edu   <-- EDIT ME
+  # max_concurrent_jobs: 20   # global cap on simultaneous cluster jobs
+
+  # Per-stage partition overrides (optional) — fall back to slurm.partition.
+  # esmc:
+  #   partition: kempner_h100
+
+  # Per-stage SLURM resource overrides (optional). The Snakefile defaults are
+  # sane for proteins of a few hundred residues; a 110-sequence, ~290aa,
+  # 5-stage run completes on them without a resources: block at all. Override
+  # when sequences get long or a stage OOMs. runtime is in minutes; gpus: 0
+  # disables the GPU request. For ESM-C, `esmc` is the shared default and
+  # `esmc_<size>` targets one model size (6B needs an 80GB H100).
+  # resources:
+  #   msa:      {mem_mb: 48000, runtime: 60,  cpus_per_task: 4,  gpus: 1}
+  #   boltz:    {mem_mb: 16000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
+  #   esmc:     {mem_mb: 32000, runtime: 60,  cpus_per_task: 8,  gpus: 1}
+  #   esmc_6B:  {mem_mb: 64000, runtime: 120, cpus_per_task: 16, gpus: 1}
+  #   esmfold:  {mem_mb: 32000, runtime: 120, cpus_per_task: 8,  gpus: 1}
+  #   openfold: {mem_mb: 64000, runtime: 90,  cpus_per_task: 10, gpus: 1}

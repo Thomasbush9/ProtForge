@@ -17,11 +17,16 @@ from pathlib import Path as _Path
 
 # Make workflow.scripts importable for any rule helpers we factor out.
 _sys.path.insert(0, str(_Path(workflow.basedir) / "workflow" / "scripts"))
+from snake_helpers import expand_config as _expand_config
 from snake_helpers import stage_resource as _stage_resource_impl
 from snake_helpers import stage_uses_gpu as _stage_uses_gpu_impl
 from binning import chunk_resource as _chunk_resource_impl
 
 configfile: "config.yaml"
+
+# Resolve ${PROTFORGE_ROOT}-style placeholders so the shipped cluster templates
+# can point at the caller's workspace. Plain absolute paths are unaffected.
+config.update(_expand_config(dict(config)))
 
 # Pipeline start time (wall-clock)
 _PIPELINE_START = _time.time()

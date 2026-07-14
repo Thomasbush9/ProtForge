@@ -87,10 +87,15 @@ bash containers/build.sh all
 # 3. Download ESM-C / ESMFold weights to a host HF cache
 python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
 
-# 4. Create your config and fill in paths
-cp config.template.yaml config.yaml
-#   edit: slurm.{account,partition,email,log_dir}, output.parent_dir,
-#         input.fasta_dir, containers.* (SIF paths), esmc/esmfold cache_dir
+# 4. Create your config. On Kempner, start from the Kempner template — the shared
+#    DBs, partition, container runtime and $PROTFORGE_ROOT-relative SIF/cache
+#    paths are already filled in.
+cp config.kempner.template.yaml config.yaml
+#   edit only: slurm.account, slurm.email, input.fasta_dir
+#   (keep PROTFORGE_ROOT exported — the config expands ${PROTFORGE_ROOT} at load time)
+#
+#   Not on Kempner, or want the full annotated parameter reference?
+#   cp config.template.yaml config.yaml   # then fill in every path by hand
 ```
 
 **Shared resources already on Kempner** (no setup needed — leave the template
@@ -275,12 +280,14 @@ sequence → (ESM-C) → NPY, (ESMFold) → CIF.
 | [Web UI](docs/WEBAPP.md) | Streamlit front-end: install + access (SSH / VS Code / Open OnDemand) |
 | [Snakemake Guide](docs/SNAKEMAKE_GUIDE.md) | How the Snakemake workflow works, SLURM integration |
 | [Containers](containers/README.md) | Per-stage container design and build/pull instructions |
-| [config.template.yaml](config.template.yaml) | Annotated configuration reference |
+| [config.kempner.template.yaml](config.kempner.template.yaml) | Ready-to-run Kempner config — set account + email and go |
+| [config.template.yaml](config.template.yaml) | Cluster-agnostic annotated configuration reference |
 
 ## Project Structure
 
 ```
 ├── Snakefile                    # Main workflow entry point
+├── config.kempner.template.yaml # Kempner-ready config (copy → config.yaml)
 ├── config.template.yaml         # Annotated config reference (copy → config.yaml)
 ├── containers/                  # Container defs + build.sh + per-stage test scripts
 ├── workflow/
