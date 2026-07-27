@@ -59,6 +59,19 @@ def expand_config(node, _path: str = "", strict: bool = True):
     return expanded
 
 
+def unexpanded_var(value) -> str | None:
+    """Name of the first environment variable `value` still depends on, if any.
+
+    Lets a caller tell "this path is wrong" apart from "this path was never
+    resolved" — a distinction that matters, because the fix for the second is to
+    export a variable, not to spend an hour building container images.
+    """
+    if not isinstance(value, str):
+        return None
+    match = _UNEXPANDED.search(os.path.expandvars(value))
+    return match.group(1) if match else None
+
+
 def slurm_identity_errors(cfg: dict, require_account: bool = True) -> list[str]:
     """Problems with the SLURM identity a run would submit under.
 

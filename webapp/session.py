@@ -67,29 +67,50 @@ def blank_placeholders(node):
     return node
 
 
-def default_seed_config() -> dict:
-    """The config a brand-new session starts from.
+def seed_sources() -> list[Path]:
+    """Candidate files a new session can be seeded from, best first.
 
     A repo-root config.yaml wins when present — that is the user's own file,
     written by the documented `cp config.kempner.template.yaml config.yaml`
-    setup step. Otherwise fall back to the shipped Kempner template so a fresh
-    clone opens on working cluster defaults instead of an empty form.
-
-    `${PROTFORGE_ROOT}` is expanded when it is exported, and left literal when
-    it is not (non-strict) so the field still shows what belongs there. The
-    strict pass in check_launch_inputs() blocks a launch on the leftovers.
+    setup step. Otherwise the shipped Kempner template, so a fresh clone opens
+    on working cluster defaults instead of an empty form.
     """
-    for source in (REPO_ROOT / "config.yaml", KEMPNER_TEMPLATE):
-        if not source.is_file():
-            continue
-        try:
-            cfg = yaml.safe_load(source.read_text()) or {}
-        except yaml.YAMLError:
-            continue
-        if not isinstance(cfg, dict):
-            continue
-        return blank_placeholders(expand_config(cfg, strict=False))
-    return {}
+    return [REPO_ROOT / "config.yaml", KEMPNER_TEMPLATE]
+
+
+def _load_seed(source: Path) -> dict | None:
+    if not source.is_file():
+        return None
+    try:
+        cfg = yaml.safe_load(source.read_text()) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    # `${PROTFORGE_ASSETS}` / `${PROTFORGE_ROOT}` are expanded when exported and
+    # left literal when not (non-strict), so the field still shows what belongs
+    # there. check_launch_inputs() then blocks the launch and names the variable.
+    return blank_placeholders(expand_config(cfg, strict=False))
+
+
+def default_seed_config() -> dict:
+    """The config a brand-new session starts from (see seed_sources)."""
+    cfg, _ = default_seed_config_with_source()
+    return cfg
+
+
+def default_seed_config_with_source() -> tuple[dict, Path | None]:
+    """As default_seed_config, plus which file it came from.
+
+    Seeding silently preferring a months-old repo-root config.yaml over the
+    shipped template is indistinguishable, from the config tab, from seeding
+    correctly — so the source is recorded and shown rather than guessed at.
+    """
+    for source in seed_sources():
+        cfg = _load_seed(source)
+        if cfg is not None:
+            return cfg, source
+    return {}, None
 
 
 def load_registry() -> dict:
@@ -118,7 +139,12 @@ def create_session(name: str, base_config: dict | None = None) -> Session:
     session = Session(session_id)
     session.dir.mkdir(parents=True, exist_ok=True)
 
-    config = default_seed_config() if base_config is None else base_config
+    seeded_from = None
+    if base_config is None:
+        config, source = default_seed_config_with_source()
+        seeded_from = str(source) if source else None
+    else:
+        config = base_config
     session.config_path.write_text(
         yaml.dump(config, default_flow_style=False, sort_keys=False)
     )
@@ -129,6 +155,9 @@ def create_session(name: str, base_config: dict | None = None) -> Session:
         "name": name,
         "created": datetime.now().isoformat(),
         "last_modified": datetime.now().isoformat(),
+        # Which file the defaults came from. A stale repo-root config.yaml and
+        # the shipped template produce configs that look alike but aren't.
+        "seeded_from": seeded_from,
         # Who owns this session. The repo often lives in a shared lab directory,
         # so a session created by someone else must be flagged rather than
         # silently adopted along with their account, email and paths.

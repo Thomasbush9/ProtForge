@@ -21,7 +21,11 @@ from validate import scan_directory
 # Importing session put workflow/scripts on sys.path. Reuse the workflow's own
 # expansion and identity checks so preflight fails on exactly what the Snakefile
 # would reject, rather than drifting into a second set of rules.
-from snake_helpers import expand_config, slurm_identity_errors  # noqa: E402
+from snake_helpers import (  # noqa: E402
+    expand_config,
+    slurm_identity_errors,
+    unexpanded_var,
+)
 
 
 def load_config(session: Session) -> dict:
@@ -133,31 +137,53 @@ def check_stage_assets(cfg: dict) -> list[str]:
     containers = cfg.get("containers", {}) or {}
     shared_gpu = containers.get("gpu", "")
 
+    def _placeholder_error(key: str, raw: str, var: str) -> str:
+        # An unresolved ${VAR} is not a missing asset. Saying "build it" here
+        # would send the user off to rebuild images that already exist.
+        return (
+            f"{key} still contains an unresolved ${{{var}}}: {raw}. The webapp was "
+            f"started without {var} exported, so this session was seeded with "
+            f"placeholders. Export it, restart the app, then use "
+            f"'Re-apply cluster defaults' on the Configuration tab (or create a "
+            f"new session) — the stored config does not pick it up on its own."
+        )
+
     for stage, (container_key, cache_key) in _STAGE_ASSETS.items():
         if not pipeline.get(stage):
             continue
 
         sif = containers.get(container_key, "") or shared_gpu
+        var = unexpanded_var(sif)
         if not sif:
             errors.append(
                 f"{stage} is enabled but containers.{container_key} is not set."
             )
-        elif not Path(sif).exists():
+        elif var:
             errors.append(
-                f"{stage} container image not found: {sif} — build it with "
-                f"`bash containers/build.sh` (see docs/CLUSTER_SETUP.md)."
+                _placeholder_error(f"containers.{container_key}", sif, var)
+            )
+        elif not Path(os.path.expandvars(sif)).exists():
+            # Report where we actually looked, not the raw ${VAR} form.
+            errors.append(
+                f"{stage} container image not found: {os.path.expandvars(sif)} — "
+                f"build it with `bash containers/build.sh` "
+                f"(see docs/CLUSTER_SETUP.md)."
             )
 
         if cache_key:
             cache = cfg.get(cache_key[0], {}).get(cache_key[1], "")
+            cache_var = unexpanded_var(cache)
+            key_name = f"{cache_key[0]}.{cache_key[1]}"
             if not cache:
+                errors.append(f"{stage} is enabled but {key_name} is not set.")
+            elif cache_var:
+                errors.append(_placeholder_error(key_name, cache, cache_var))
+            elif not Path(os.path.expandvars(cache)).is_dir():
+                resolved = os.path.expandvars(cache)
                 errors.append(
-                    f"{stage} is enabled but {cache_key[0]}.{cache_key[1]} is not set."
-                )
-            elif not Path(cache).is_dir():
-                errors.append(
-                    f"{stage} model cache not found: {cache} — download weights "
-                    f"with `python scripts/download_models.py --cache-dir {cache}`."
+                    f"{stage} model cache not found: {resolved} — download "
+                    f"weights with `python scripts/download_models.py "
+                    f"--cache-dir {resolved}`."
                 )
 
     return errors
