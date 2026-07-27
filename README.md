@@ -184,6 +184,18 @@ Input CSV must have `name` and `sequence` columns.
 **From a spreadsheet of UniProt accessions:** use the `fetch-sequences` skill, or
 `scripts/uniprot_fetch/fetch_sequences.py` directly (see its README).
 
+**Every single-point mutant of one sequence** (saturation mutagenesis input):
+```bash
+bash bash_scripts/generate_satmut.sh --input wt.fasta --output-dir muts/ --dry-run
+bash bash_scripts/generate_satmut.sh --input wt.fasta --output-dir muts/
+```
+Writes `L x 19` FASTAs — 4522 for a 238-residue protein — plus an `index.csv`
+mapping each file to its mutation. Run `--dry-run` first to see the count;
+`--positions '1-50'` restricts it to a region. Use this when you want a real
+embedding or structure *per mutant*: the Saturation Mutagenesis tab scores every
+substitution from a single forward pass on the wild type and never embeds the
+mutants themselves.
+
 **Options:**
 ```bash
 --file_type yaml           # Output YAML files (skip MSA, go straight to Boltz)
@@ -386,7 +398,7 @@ sequence → (ESM-C) → NPY, (ESMFold) → CIF.
 │   └── scripts/                 # Python helpers (chunking, organizing)
 ├── webapp/                      # Streamlit UI + estimator / monitor / results / satmut CLIs
 ├── scripts/                     # download_models.py, uniprot_fetch/, calibration
-├── bash_scripts/                # Data preparation (generate_data.sh)
+├── bash_scripts/                # Data preparation (generate_data.sh, generate_satmut.sh)
 ├── utils/                       # Python utilities (mutations, file conversion)
 ├── profiles/slurm/              # Snakemake SLURM executor profile
 ├── .claude/skills/              # Claude Code skill suite (setup, run-pipeline, …)

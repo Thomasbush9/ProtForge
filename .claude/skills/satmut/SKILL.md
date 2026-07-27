@@ -28,6 +28,27 @@ The logic lives in `webapp/satmut.py` (launch/derive/load) and
 `workflow/scripts/mutation_scan.py` (the LLR math). Do **not** reimplement it —
 drive the `webapp/satmut_cli.py` CLI.
 
+## When the user wants embeddings or structures per mutant
+
+The scan cannot give them: it never runs a mutant through the model, so there
+are no per-mutant embeddings to save. Getting one means a real forward pass per
+variant — `L x 19` of them, e.g. 4522 for a 238-residue protein, against 1 for
+the scan.
+
+That is a normal pipeline run, so generate the mutants as input and use the
+regular stages:
+
+```bash
+bash bash_scripts/generate_satmut.sh --input wt.fasta --output-dir muts/ --dry-run
+bash bash_scripts/generate_satmut.sh --input wt.fasta --output-dir muts/
+```
+
+Then point `input.fasta_dir` at `muts/` and enable `esmc` (embeddings) or
+`esmfold`/`boltz` (structures). `--dry-run` first: always show the user the file
+count before writing thousands of files. `--positions '1-50'` restricts the scan
+to a region. `muts/index.csv` maps each file name to its mutation and sequence,
+for joining predictions back to variants.
+
 ## Environment
 
 The CLI needs only `numpy` + `pyyaml`. The deriving/viewing steps are pure NumPy
