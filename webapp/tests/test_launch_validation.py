@@ -165,6 +165,67 @@ class TestStageAssets:
         assert check_stage_assets(cfg) == []
 
 
+class TestPlaceholderDiagnosis:
+    """An unresolved ${VAR} must not be reported as a missing image.
+
+    The old message told the user to run containers/build.sh — an hour-long
+    build — when the real fix was exporting a variable.
+    """
+
+    def test_placeholder_container_names_the_variable(self, monkeypatch):
+        monkeypatch.delenv("PROTFORGE_ASSETS", raising=False)
+        cfg = {
+            "pipeline": {"msa": True},
+            "containers": {"colabfold": "${PROTFORGE_ASSETS}/sifs/msa.sif"},
+        }
+        joined = _joined(check_stage_assets(cfg))
+        assert "PROTFORGE_ASSETS" in joined
+        assert "containers/build.sh" not in joined
+
+    def test_placeholder_cache_names_the_variable(self, monkeypatch):
+        monkeypatch.delenv("PROTFORGE_ASSETS", raising=False)
+        cfg = {
+            "pipeline": {"esmc": True},
+            "containers": {"esmc": "${PROTFORGE_ASSETS}/sifs/esm.sif"},
+            "esmc": {"cache_dir": "${PROTFORGE_ASSETS}/models/hf"},
+        }
+        joined = _joined(check_stage_assets(cfg))
+        assert "PROTFORGE_ASSETS" in joined
+        assert "download_models.py" not in joined
+
+    def test_placeholder_explains_that_restarting_is_not_enough(self, monkeypatch):
+        monkeypatch.delenv("PROTFORGE_ASSETS", raising=False)
+        cfg = {
+            "pipeline": {"msa": True},
+            "containers": {"colabfold": "${PROTFORGE_ASSETS}/sifs/msa.sif"},
+        }
+        joined = _joined(check_stage_assets(cfg))
+        assert "Re-apply cluster defaults" in joined
+
+    def test_exported_variable_resolves_and_passes(self, tmp_path, monkeypatch):
+        (tmp_path / "sifs").mkdir()
+        (tmp_path / "sifs" / "msa.sif").touch()
+        monkeypatch.setenv("PROTFORGE_ASSETS", str(tmp_path))
+        cfg = {
+            "pipeline": {"msa": True},
+            "containers": {"colabfold": "${PROTFORGE_ASSETS}/sifs/msa.sif"},
+        }
+        assert check_stage_assets(cfg) == []
+
+    def test_exported_but_genuinely_absent_says_build_it(self, tmp_path, monkeypatch):
+        """The build hint is still right when the variable resolved fine, and
+        the message shows the path actually searched, not the raw ${VAR}."""
+        monkeypatch.setenv("PROTFORGE_ASSETS", str(tmp_path))
+        cfg = {
+            "pipeline": {"msa": True},
+            "containers": {"colabfold": "${PROTFORGE_ASSETS}/sifs/msa.sif"},
+        }
+        joined = _joined(check_stage_assets(cfg))
+        assert "containers/build.sh" in joined
+        assert f"{tmp_path}/sifs/msa.sif" in joined
+        assert "${PROTFORGE_ASSETS}" not in joined
+
+
 class TestCheckLaunchInputs:
     """The identity checks must survive every early return in the input logic."""
 

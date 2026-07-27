@@ -14,6 +14,9 @@ __pychace__/*
 # Every config.*.yaml is personal (paths/account/email); only the templates ship.
 config.yaml
 config.*.yaml
+# ...including backups/renames like config.yaml.bak or config.yaml.pre-assets,
+# which `config.*.yaml` does NOT match (the extension is no longer .yaml).
+config.yaml.*
 !config.template.yaml
 !config.kempner.template.yaml
 

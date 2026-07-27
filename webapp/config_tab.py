@@ -12,10 +12,16 @@ from pathlib import Path
 import streamlit as st
 import yaml
 
-from session import Session, touch_session
+from session import (
+    Session,
+    touch_session,
+    default_seed_config_with_source,
+    list_sessions,
+)
 from validate import scan_directory, copy_valid_files
 from estimator import compute_input_stats
 from pipeline_ops import load_config, save_config
+from snake_helpers import unexpanded_var
 from ui_helpers import (
     autoscan_directory,
     _cached_scan,
@@ -577,8 +583,69 @@ def boltz_advanced_dialog(session: Session):
 # =========================================================================
 # Configuration tab body
 # =========================================================================
+def _render_seed_status(session: Session, cfg: dict):
+    """Where this session's defaults came from, and how to re-apply them.
+
+    Seeding happens once, at session creation, from the environment the webapp
+    was started in. Two failure modes were invisible before: placeholders baked
+    in because the variables were not exported yet (restarting the app does not
+    re-seed), and defaults quietly taken from a stale repo-root config.yaml
+    instead of the shipped template.
+    """
+    stale = sorted({
+        var for _, var in (
+            (path, unexpanded_var(value))
+            for path, value in _walk_strings(cfg)
+        ) if var
+    })
+
+    info = next(
+        (s for s in list_sessions() if s["id"] == session.id), {}
+    )
+    seeded_from = info.get("seeded_from")
+
+    if stale:
+        st.warning(
+            "This session was seeded before "
+            + ", ".join(f"`{v}`" for v in stale)
+            + " existed in the environment, so its paths are still placeholders. "
+            "Export the variable(s), restart the app, then re-apply the defaults "
+            "below — a restart alone will not update this session."
+        )
+
+    cols = st.columns([3, 1])
+    with cols[0]:
+        if seeded_from:
+            st.caption(f"Defaults seeded from `{seeded_from}`")
+    with cols[1]:
+        if st.button("Re-apply cluster defaults", width="stretch", key="reseed"):
+            fresh, source = default_seed_config_with_source()
+            if not fresh:
+                st.error("No config.yaml or Kempner template found to seed from.")
+            else:
+                # save_config snapshots the current file into .config_backups
+                # first, so this is recoverable.
+                save_config(session, fresh)
+                st.success(f"Re-applied defaults from {source}.")
+                st.rerun()
+
+
+def _walk_strings(node, path: str = ""):
+    """Yield (dotted-path, value) for every string leaf in a config."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _walk_strings(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _walk_strings(v, f"{path}[{i}]")
+    elif isinstance(node, str):
+        yield path, node
+
+
 def render_config_tab(session: Session):
     cfg = load_config(session)
+
+    _render_seed_status(session, cfg)
 
     with st.expander("Pipeline Stages", expanded=True):
         pipeline = cfg.get("pipeline", {})

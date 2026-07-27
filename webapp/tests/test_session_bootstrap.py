@@ -154,6 +154,41 @@ class TestCreateSession:
         assert entry["created_by"] == "newuser"
 
 
+class TestSeedProvenance:
+    """Which file the defaults came from must be recorded, not inferred.
+
+    A months-old repo-root config.yaml and the shipped template produce configs
+    that look alike in the UI but can point at completely different assets.
+    """
+
+    def test_records_the_template_when_no_config_yaml(self, fake_repo, monkeypatch):
+        monkeypatch.setenv("PROTFORGE_ROOT", "/n/lab/newuser")
+        monkeypatch.setenv("PROTFORGE_ASSETS", "/n/lab/shared")
+        s = create_session("A")
+        entry = next(e for e in list_sessions() if e["id"] == s.id)
+        assert entry["seeded_from"].endswith("config.kempner.template.yaml")
+
+    def test_records_repo_config_when_present(self, fake_repo, monkeypatch):
+        monkeypatch.setenv("PROTFORGE_ROOT", "/n/lab/newuser")
+        (fake_repo / "config.yaml").write_text(yaml.dump({"marker": "mine"}))
+        s = create_session("B")
+        entry = next(e for e in list_sessions() if e["id"] == s.id)
+        assert entry["seeded_from"].endswith("config.yaml")
+        assert not entry["seeded_from"].endswith("template.yaml")
+
+    def test_explicit_config_records_no_source(self, fake_repo):
+        s = create_session("C", base_config={"marker": "given"})
+        entry = next(e for e in list_sessions() if e["id"] == s.id)
+        assert entry["seeded_from"] is None
+
+    def test_source_matches_the_config_returned(self, fake_repo, monkeypatch):
+        monkeypatch.setenv("PROTFORGE_ROOT", "/n/lab/newuser")
+        monkeypatch.setenv("PROTFORGE_ASSETS", "/n/lab/shared")
+        cfg, source = session_mod.default_seed_config_with_source()
+        assert source.name == "config.kempner.template.yaml"
+        assert cfg["containers"]["boltz"].startswith("/n/lab/shared/")
+
+
 class TestForeignSessionOwner:
     def test_flags_a_session_created_by_someone_else(self, fake_repo, monkeypatch):
         s = create_session("Theirs", base_config={})
