@@ -6,7 +6,10 @@ run metadata, and log file. A central registry tracks all sessions.
 """
 
 import json
+import os
+import re
 import shutil
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +19,24 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SESSIONS_DIR = REPO_ROOT / ".sessions"
 REGISTRY_FILE = SESSIONS_DIR / "registry.json"
+
+# The cluster-correct config a new user starts from. Everything that is a
+# property of Kempner (shared databases, partitions, container layout) is
+# already filled in; only the user's own fields are blanked out below.
+KEMPNER_TEMPLATE = REPO_ROOT / "config.kempner.template.yaml"
+
+# `${VAR}` expansion is shared with the Snakefile so the webapp and the workflow
+# agree on what a template path resolves to.
+_WORKFLOW_SCRIPTS = REPO_ROOT / "workflow" / "scripts"
+if str(_WORKFLOW_SCRIPTS) not in sys.path:
+    sys.path.append(str(_WORKFLOW_SCRIPTS))
+
+from snake_helpers import expand_config  # noqa: E402
+
+# Template fields the user must supply, written as `<YOUR_EMAIL>`-style markers.
+# Seeding blanks them: a placeholder that reaches the config tab looks like a
+# real value, and one that reaches sbatch mails the wrong person.
+_PLACEHOLDER = re.compile(r"^<[^<>]+>$")
 
 
 class Session:
@@ -28,6 +49,47 @@ class Session:
         self.run_meta_file = self.dir / ".snakemake_run.json"
         self.log_file = self.dir / "snakemake_run.log"
         self.backup_dir = self.dir / ".config_backups"
+
+
+def current_user() -> str:
+    """The OS user running the app — recorded on each session it creates."""
+    return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
+
+
+def blank_placeholders(node):
+    """Replace `<YOUR_EMAIL>`-style template markers with empty strings."""
+    if isinstance(node, dict):
+        return {k: blank_placeholders(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [blank_placeholders(v) for v in node]
+    if isinstance(node, str) and _PLACEHOLDER.match(node.strip()):
+        return ""
+    return node
+
+
+def default_seed_config() -> dict:
+    """The config a brand-new session starts from.
+
+    A repo-root config.yaml wins when present — that is the user's own file,
+    written by the documented `cp config.kempner.template.yaml config.yaml`
+    setup step. Otherwise fall back to the shipped Kempner template so a fresh
+    clone opens on working cluster defaults instead of an empty form.
+
+    `${PROTFORGE_ROOT}` is expanded when it is exported, and left literal when
+    it is not (non-strict) so the field still shows what belongs there. The
+    strict pass in check_launch_inputs() blocks a launch on the leftovers.
+    """
+    for source in (REPO_ROOT / "config.yaml", KEMPNER_TEMPLATE):
+        if not source.is_file():
+            continue
+        try:
+            cfg = yaml.safe_load(source.read_text()) or {}
+        except yaml.YAMLError:
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        return blank_placeholders(expand_config(cfg, strict=False))
+    return {}
 
 
 def load_registry() -> dict:
@@ -47,12 +109,16 @@ def save_registry(registry: dict):
 
 
 def create_session(name: str, base_config: dict | None = None) -> Session:
-    """Create a new session. Optionally seed it with a config dict."""
+    """Create a new session.
+
+    `base_config` of None means "start from the cluster defaults"
+    (default_seed_config()); pass an explicit `{}` for a genuinely blank config.
+    """
     session_id = uuid.uuid4().hex[:12]
     session = Session(session_id)
     session.dir.mkdir(parents=True, exist_ok=True)
 
-    config = base_config if base_config is not None else {}
+    config = default_seed_config() if base_config is None else base_config
     session.config_path.write_text(
         yaml.dump(config, default_flow_style=False, sort_keys=False)
     )
@@ -63,6 +129,10 @@ def create_session(name: str, base_config: dict | None = None) -> Session:
         "name": name,
         "created": datetime.now().isoformat(),
         "last_modified": datetime.now().isoformat(),
+        # Who owns this session. The repo often lives in a shared lab directory,
+        # so a session created by someone else must be flagged rather than
+        # silently adopted along with their account, email and paths.
+        "created_by": current_user(),
     })
     # If this is the first session, make it active
     if registry["active_session_id"] is None:
@@ -133,27 +203,33 @@ def set_active_session(session_id: str):
     save_registry(registry)
 
 
-def migrate_legacy():
-    """One-time migration: create a Default session from existing repo-root files.
+def foreign_session_owner(session_id: str) -> str | None:
+    """The user who created `session_id`, if that is not the user running now.
 
-    Only runs if .sessions/ doesn't exist yet. Copies (not moves) existing
-    config.yaml, .snakemake_run.json, and snakemake_run.log so nothing is lost.
+    Returns None when the session is ours, or when it predates `created_by`
+    (an older registry) — an absent owner is unknown, not foreign.
+    """
+    for s in load_registry().get("sessions", []):
+        if s["id"] == session_id:
+            owner = s.get("created_by")
+            return owner if owner and owner != current_user() else None
+    return None
+
+
+def migrate_legacy():
+    """One-time bootstrap: create the Default session.
+
+    Only runs if .sessions/ doesn't exist yet. Seeds from repo-root config.yaml
+    when the user has already written one, else from the shipped Kempner
+    template (see default_seed_config), and copies (not moves) existing
+    .snakemake_run.json and snakemake_run.log so nothing is lost.
     """
     if SESSIONS_DIR.exists() and REGISTRY_FILE.exists():
         return  # Already migrated
 
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Load existing config if present
-    legacy_config_path = REPO_ROOT / "config.yaml"
-    base_config = None
-    if legacy_config_path.exists():
-        try:
-            base_config = yaml.safe_load(legacy_config_path.read_text()) or {}
-        except yaml.YAMLError:
-            base_config = {}
-
-    session = create_session("Default", base_config=base_config)
+    session = create_session("Default")
 
     # Copy (not move) legacy run metadata
     legacy_meta = REPO_ROOT / ".snakemake_run.json"

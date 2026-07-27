@@ -38,7 +38,10 @@
 #   bash containers/build.sh boltz --dry-run         # print command without running
 #
 # Output dir (per-stage SIF names appended): -o/--output (single stage only),
-# else $PROTFORGE_SIF_DIR, else $PROTFORGE_ROOT/sifs. Model weights and the big
+# else $PROTFORGE_SIF_DIR, else $PROTFORGE_ASSETS/sifs, else $PROTFORGE_ROOT/sifs
+# — $PROTFORGE_ASSETS is where the configs look for containers.*, so building
+# with it set puts the images exactly where a run will expect them. Weights and
+# the big
 # MSA/Boltz databases are NOT baked in — they are bind-mounted at runtime and
 # fetched separately (scripts/download_models.py; shared DBs already on Kempner).
 #
@@ -161,12 +164,16 @@ SIF_DIR=""
 if [[ -z "$OUT" ]]; then
   if [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
     SIF_DIR="${PROTFORGE_SIF_DIR%/}"
+  elif [[ -n "${PROTFORGE_ASSETS:-}" ]]; then
+    # Same variable the configs read for containers.* — build where they look.
+    SIF_DIR="${PROTFORGE_ASSETS%/}/sifs"
   elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
     SIF_DIR="${PROTFORGE_ROOT%/}/sifs"
   else
     echo "ERROR: no output directory for the SIFs. Set one of:" >&2
     echo "  - pass -o/--output /path/to/<stage>.sif   (single stage only)" >&2
     echo "  - export PROTFORGE_SIF_DIR  (writes \$PROTFORGE_SIF_DIR/<stage>.sif)" >&2
+    echo "  - export PROTFORGE_ASSETS   (writes \$PROTFORGE_ASSETS/sifs/<stage>.sif)" >&2
     echo "  - export PROTFORGE_ROOT     (writes \$PROTFORGE_ROOT/sifs/<stage>.sif)" >&2
     echo "Non-interactive bash does not load ~/.bashrc; export in the job script or use -o." >&2
     exit 1
@@ -174,12 +181,16 @@ if [[ -z "$OUT" ]]; then
 fi
 
 # Pick a base for SINGULARITY_CACHEDIR/TMPDIR defaults:
-#   - PROTFORGE_ROOT if set (canonical case)
+#   - PROTFORGE_ASSETS if set — build staging belongs beside the images it
+#     produces, and that tree is the one sized for them
+#   - else PROTFORGE_ROOT (setups predating the assets/workspace split)
 #   - else dirname of PROTFORGE_SIF_DIR (so users who only set SIF_DIR still get
 #     big-FS cache/tmp dirs instead of /tmp, which is too small for fakeroot
 #     builds and often noexec on compute nodes).
 SING_BASE=""
-if [[ -n "${PROTFORGE_ROOT:-}" ]]; then
+if [[ -n "${PROTFORGE_ASSETS:-}" ]]; then
+  SING_BASE="${PROTFORGE_ASSETS%/}"
+elif [[ -n "${PROTFORGE_ROOT:-}" ]]; then
   SING_BASE="${PROTFORGE_ROOT%/}"
 elif [[ -n "${PROTFORGE_SIF_DIR:-}" ]]; then
   SING_BASE="$(dirname "${PROTFORGE_SIF_DIR%/}")"

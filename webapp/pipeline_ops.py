@@ -18,6 +18,11 @@ import yaml
 from session import Session, touch_session, REPO_ROOT
 from validate import scan_directory
 
+# Importing session put workflow/scripts on sys.path. Reuse the workflow's own
+# expansion and identity checks so preflight fails on exactly what the Snakefile
+# would reject, rather than drifting into a second set of rules.
+from snake_helpers import expand_config, slurm_identity_errors  # noqa: E402
+
 
 def load_config(session: Session) -> dict:
     if session.config_path.exists():
@@ -89,6 +94,75 @@ def launch_snakemake(session: Session, extra_args: list[str] | None = None):
     return proc.pid
 
 
+def check_unexpanded_paths(cfg: dict) -> list[str]:
+    """Fatal `${VAR}` placeholders that the workflow would refuse to expand.
+
+    The webapp seeds a session from the shipped template without requiring
+    PROTFORGE_ROOT, so this is where an un-exported variable surfaces — in the
+    UI at preflight, rather than as a traceback in the snakemake log.
+    """
+    try:
+        expand_config(cfg)
+    except KeyError as exc:
+        return [str(exc).strip('"')]
+    return []
+
+
+# Enabled stage -> (containers.<key>, weight-cache config path). The MSA
+# databases and the Boltz checkpoint are shared cluster paths, so only the
+# per-user HF/OpenFold caches are checked here.
+_STAGE_ASSETS = {
+    "msa": ("colabfold", None),
+    "boltz": ("boltz", None),
+    "esmc": ("esmc", ("esmc", "cache_dir")),
+    "esmfold": ("esmfold", ("esmfold", "cache_dir")),
+    "openfold": ("openfold", ("openfold", "cache_dir")),
+}
+
+
+def check_stage_assets(cfg: dict) -> list[str]:
+    """Fatal missing container images or model caches for the enabled stages.
+
+    A seeded config points at `$PROTFORGE_ROOT/sifs/*.sif` and
+    `$PROTFORGE_ROOT/models/hf`, which only exist once containers/build.sh and
+    scripts/download_models.py have been run. Without this the config validates,
+    every job is submitted, and each one dies on a missing image.
+    """
+    errors: list[str] = []
+    pipeline = cfg.get("pipeline", {}) or {}
+    containers = cfg.get("containers", {}) or {}
+    shared_gpu = containers.get("gpu", "")
+
+    for stage, (container_key, cache_key) in _STAGE_ASSETS.items():
+        if not pipeline.get(stage):
+            continue
+
+        sif = containers.get(container_key, "") or shared_gpu
+        if not sif:
+            errors.append(
+                f"{stage} is enabled but containers.{container_key} is not set."
+            )
+        elif not Path(sif).exists():
+            errors.append(
+                f"{stage} container image not found: {sif} — build it with "
+                f"`bash containers/build.sh` (see docs/CLUSTER_SETUP.md)."
+            )
+
+        if cache_key:
+            cache = cfg.get(cache_key[0], {}).get(cache_key[1], "")
+            if not cache:
+                errors.append(
+                    f"{stage} is enabled but {cache_key[0]}.{cache_key[1]} is not set."
+                )
+            elif not Path(cache).is_dir():
+                errors.append(
+                    f"{stage} model cache not found: {cache} — download weights "
+                    f"with `python scripts/download_models.py --cache-dir {cache}`."
+                )
+
+    return errors
+
+
 def check_launch_inputs(cfg: dict) -> dict:
     """Inspect configured inputs before submitting cluster jobs.
 
@@ -105,7 +179,13 @@ def check_launch_inputs(cfg: dict) -> dict:
 
     Returns ``{"errors": [...], "invalid_groups": [...]}``.
     """
-    errors: list[str] = []
+    # Identity and placeholder checks run first and ride along on every return
+    # path below, several of which bail out early on an input problem.
+    errors: list[str] = (
+        slurm_identity_errors(cfg)
+        + check_unexpanded_paths(cfg)
+        + check_stage_assets(cfg)
+    )
     invalid_groups: list[dict] = []
     pipeline = cfg.get("pipeline", {})
     inp = cfg.get("input", {})

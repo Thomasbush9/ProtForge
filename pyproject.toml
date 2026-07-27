@@ -30,7 +30,7 @@ webapp = [
 # requirements-host.txt — install with `pip install ".[host]"` or via the
 # requirements file. The GPU SIF stays a separate concern.
 host = [
-    "snakemake>=8.10,<9",
+    "snakemake>=9,<10",
     "snakemake-executor-plugin-slurm>=0.10",
     "streamlit>=1.49",
     "streamlit-autorefresh",

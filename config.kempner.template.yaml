@@ -2,26 +2,33 @@
 #
 # Everything that is a *property of the cluster* (shared MSA/Boltz databases,
 # partitions, container runtime, image + cache layout) is already filled in.
-# You only supply the three things that are properties of *you*:
+# You supply two environment variables and two config fields:
 #
-#   1. export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
-#      (the parent of the repo — see docs/CLUSTER_SETUP.md for the layout)
-#   2. slurm.account  — your kempner_<pi>_lab account
-#   3. slurm.email    — where SLURM sends job notifications
+#   PROTFORGE_ASSETS — where the container images and model weights live.
+#                      Point it at a shared copy your lab already has and there
+#                      is NOTHING to build or download. Point it at your own
+#                      workspace to build them yourself (containers/build.sh).
+#   PROTFORGE_ROOT   — YOUR workspace: inputs, outputs and job logs land here.
+#                      Set it to the same value as PROTFORGE_ASSETS if you are
+#                      building your own.
+#
+#   slurm.account    — your kempner_<pi>_lab account
+#   slurm.email      — where SLURM sends job notifications
 #
 # ...plus input.fasta_dir when you have data to run.
 #
 # Quick start:
 #
+#   export PROTFORGE_ASSETS=<shared assets dir>   # see README
 #   export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
 #   cp config.kempner.template.yaml config.yaml
 #   $EDITOR config.yaml            # set slurm.account, slurm.email, input.fasta_dir
 #   snakemake --profile profiles/slurm/ -n     # dry run
 #   snakemake --profile profiles/slurm/        # go
 #
-# ${PROTFORGE_ROOT} below is expanded from your environment when the workflow
-# loads this file. If it is not exported you get a clear error naming the key,
-# not a broken path. Literal absolute paths work too — substitute freely.
+# Both variables are expanded from your environment when the workflow loads this
+# file. If one is not exported you get a clear error naming the config key, not a
+# broken path. Literal absolute paths work too — substitute freely.
 
 # ---------------------------------------------------------------------------
 # Stages
@@ -75,14 +82,15 @@ boltz:
   colabfold_db: /n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/colabfold_db
 
 # ---------------------------------------------------------------------------
-# Model caches — YOU populate these (one-time), see docs/CLUSTER_SETUP.md
+# Model caches — already populated if PROTFORGE_ASSETS points at a shared copy;
+# otherwise you populate them once, see docs/CLUSTER_SETUP.md
 # ---------------------------------------------------------------------------
-#   python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+#   python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 esmc:
   models: [600M]           # any subset of: 300M, 600M, 6B
   max_files_per_job: 25
   chunks_per_group: 1      # chunks served per GPU job (amortizes the weight load)
-  cache_dir: ${PROTFORGE_ROOT}/models/hf
+  cache_dir: ${PROTFORGE_ASSETS}/models/hf
   sae:
     enabled: false
     sae_type: all-layers
@@ -94,7 +102,7 @@ esmfold:
   max_files_per_job: 25
   chunks_per_group: 1
   compile: false
-  cache_dir: ${PROTFORGE_ROOT}/models/hf
+  cache_dir: ${PROTFORGE_ASSETS}/models/hf
   num_loops: 3
   num_sampling_steps: 50
   seed: 0
@@ -111,21 +119,22 @@ openfold:
   write_full_confidence: true
   # OpenFold3 weights + CCD cache (holds ckpt_root/ and of3-p2-*.pt). Not fetched
   # by download_models.py — obtain separately, then point this at the dir.
-  cache_dir: ${PROTFORGE_ROOT}/models/openfold
+  cache_dir: ${PROTFORGE_ASSETS}/models/openfold
 
 # ---------------------------------------------------------------------------
-# Containers — built once by `bash containers/build.sh` into $PROTFORGE_ROOT/sifs/
+# Containers — a shared copy, or built once by `bash containers/build.sh` into
+# $PROTFORGE_ASSETS/sifs/
 # ---------------------------------------------------------------------------
 # On Kempner the runtime binary is `singularity`. esmc and esmfold deliberately
 # share one image (esm.sif) — that is not a typo.
 containers:
   runtime: singularity
   gpu: ""
-  colabfold: ${PROTFORGE_ROOT}/sifs/msa.sif
-  boltz: ${PROTFORGE_ROOT}/sifs/boltz.sif
-  esmc: ${PROTFORGE_ROOT}/sifs/esm.sif
-  esmfold: ${PROTFORGE_ROOT}/sifs/esm.sif
-  openfold: ${PROTFORGE_ROOT}/sifs/openfold.sif
+  colabfold: ${PROTFORGE_ASSETS}/sifs/msa.sif
+  boltz: ${PROTFORGE_ASSETS}/sifs/boltz.sif
+  esmc: ${PROTFORGE_ASSETS}/sifs/esm.sif
+  esmfold: ${PROTFORGE_ASSETS}/sifs/esm.sif
+  openfold: ${PROTFORGE_ASSETS}/sifs/openfold.sif
 
 # ---------------------------------------------------------------------------
 # SLURM — set account + email; the rest is Kempner-correct as shipped

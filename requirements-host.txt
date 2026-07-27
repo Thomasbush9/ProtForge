@@ -17,7 +17,7 @@
 
 # --- Snakemake launcher -----------------------------------------------------
 # Pin to a known-good range; >=8 is required for the slurm executor plugin.
-snakemake>=8.10,<9
+snakemake>=9,<10
 snakemake-executor-plugin-slurm>=0.10
 
 # --- Webapp -----------------------------------------------------------------

@@ -100,10 +100,30 @@ def test_excluded_file_no_longer_scanned(tmp_path):
 # check_launch_inputs — spot invalid without blocking
 # --------------------------------------------------------------------------
 
+def _runnable_cfg(tmp_path, pipeline, inp):
+    """A config that passes everything except the input checks under test.
+
+    The SLURM identity and stage-asset checks have their own file
+    (test_launch_validation.py); here they just need to be satisfied so these
+    tests fail only on input problems.
+    """
+    assets = tmp_path / "_assets"
+    assets.mkdir(exist_ok=True)
+    sif = assets / "fake.sif"
+    sif.touch()
+    return {
+        "pipeline": pipeline,
+        "input": inp,
+        # A shared containers.gpu image covers every enabled stage.
+        "containers": {"gpu": str(sif)},
+        "slurm": {"account": "kempner_x_lab", "email": "me@uni.edu"},
+    }
+
+
 def test_msa_invalid_files_are_skippable_not_fatal(tmp_path):
     _write_fasta(tmp_path / "good.fasta", "good", "MAUKG")
     _write_fasta(tmp_path / "bad.fasta", "bad", "MAXKG")
-    cfg = {"pipeline": {"msa": True}, "input": {"fasta_dir": str(tmp_path)}}
+    cfg = _runnable_cfg(tmp_path, {"msa": True}, {"fasta_dir": str(tmp_path)})
 
     check = check_launch_inputs(cfg)
     assert check["errors"] == []  # not fatal — there is a valid file
@@ -113,24 +133,23 @@ def test_msa_invalid_files_are_skippable_not_fatal(tmp_path):
 
 def test_msa_all_invalid_is_fatal(tmp_path):
     _write_fasta(tmp_path / "bad.fasta", "bad", "MAXKG")
-    cfg = {"pipeline": {"msa": True}, "input": {"fasta_dir": str(tmp_path)}}
+    cfg = _runnable_cfg(tmp_path, {"msa": True}, {"fasta_dir": str(tmp_path)})
 
     check = check_launch_inputs(cfg)
     assert check["errors"], "all-invalid should block launch"
 
 
 def test_msa_missing_dir_is_fatal(tmp_path):
-    cfg = {"pipeline": {"msa": True}, "input": {"fasta_dir": str(tmp_path / "nope")}}
+    cfg = _runnable_cfg(tmp_path, {"msa": True}, {"fasta_dir": str(tmp_path / "nope")})
     assert check_launch_inputs(cfg)["errors"]
 
 
 def test_msa_off_yaml_invalid_files_are_skippable(tmp_path):
     _write_yaml(tmp_path / "good.yaml", "MAUKG")
     (tmp_path / "bad.yaml").write_text("not: [valid")  # broken YAML
-    cfg = {
-        "pipeline": {"msa": False, "boltz": True},
-        "input": {"yaml_dir": str(tmp_path)},
-    }
+    cfg = _runnable_cfg(
+        tmp_path, {"msa": False, "boltz": True}, {"yaml_dir": str(tmp_path)}
+    )
     check = check_launch_inputs(cfg)
     assert check["errors"] == []
     assert len(check["invalid_groups"]) == 1
@@ -139,6 +158,6 @@ def test_msa_off_yaml_invalid_files_are_skippable(tmp_path):
 def test_validate_launch_inputs_wrapper_returns_errors_only(tmp_path):
     _write_fasta(tmp_path / "good.fasta", "good", "MAUKG")
     _write_fasta(tmp_path / "bad.fasta", "bad", "MAXKG")
-    cfg = {"pipeline": {"msa": True}, "input": {"fasta_dir": str(tmp_path)}}
+    cfg = _runnable_cfg(tmp_path, {"msa": True}, {"fasta_dir": str(tmp_path)})
     # Back-compat: invalid-but-recoverable inputs no longer appear as errors.
     assert validate_launch_inputs(cfg) == []

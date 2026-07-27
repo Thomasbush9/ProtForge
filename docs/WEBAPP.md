@@ -43,18 +43,29 @@ the `snakemake` CLI.
 On a login node, in your ProtForge checkout:
 
 ```bash
-# Option A — full host env (Snakemake + webapp), recommended:
-python -m venv ~/envs/protforge-host
-source ~/envs/protforge-host/bin/activate
+# Option A — the shared host env, recommended. Nothing to install.
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
+
+# Option B — your own, if you can't read the shared copy or need extra packages.
+# Put it on lab storage, not in ~ or ~/.conda: home quotas are small.
+module load python
+mamba create -p "$PROTFORGE_ROOT/envs/host" python=3.13 -y
+mamba activate "$PROTFORGE_ROOT/envs/host"
 pip install -r requirements-host.txt          # includes the webapp + viz deps
 
-# Option B — webapp only, into an env that already has Snakemake:
+# Option C — webapp only, into an env that already has Snakemake:
 pip install -r webapp/requirements.txt
 ```
 
 That's the whole install — the heavy ML stacks live in the containers, not here.
 The Results tab's 3D viewer (`py3Dmol`) and charts (`plotly`) are included above;
 without them the tab still works (download link + native charts).
+
+**Activate the environment before starting the app.** Streamlit launches
+Snakemake as a child process, so it inherits the shell you started it from, and
+the workflow's local chunking rules shell out to a bare `python`. Starting the
+app without an activated environment fails on the first rule with
+`python: command not found` — after the UI has reported a successful launch.
 
 ## Run it
 
@@ -64,8 +75,8 @@ survive an SSH disconnect:
 ```bash
 ssh <user>@<login-node>          # e.g. holylogin06.rc.fas.harvard.edu
 tmux new -s protforge            # or: tmux attach -t protforge
-cd ~/ProtForge
-source ~/envs/protforge-host/bin/activate
+cd "$PROTFORGE_ROOT/ProtForge"
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
 streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 ```
 

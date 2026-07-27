@@ -89,7 +89,7 @@ Input CSV formats:
 ```bash
 # Build (or pull) the GPU container, then download ESM-C / ESMFold weights:
 bash containers/build.sh                                  # or: --from-docker docker://...
-python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 ```
 See `docs/CLUSTER_SETUP.md` for the full first-time setup.
 

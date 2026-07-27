@@ -30,6 +30,7 @@ from session import (
     load_registry,
     create_session,
     delete_session,
+    foreign_session_owner,
     rename_session,
     list_sessions,
     get_session,
@@ -45,6 +46,11 @@ from satmut_tab import render_satmut_tab
 
 USER = os.environ.get("USER", "unknown")
 HOST = socket.gethostname()
+
+# Labels for the "start config from" picker — compared by value, so keep them
+# distinct from any session name a user might type.
+CLUSTER_DEFAULTS = "Cluster defaults (config.kempner.template.yaml)"
+EMPTY_CONFIG = "Empty config"
 
 # ---------------------------------------------------------------------------
 # Bootstrap: migrate legacy config and ensure at least one session exists
@@ -107,15 +113,16 @@ with st.sidebar:
     # New session
     with st.expander("New Session", expanded=False):
         new_name = st.text_input("Session name", value="", key="new_session_name")
-        clone_options = ["Empty config"] + [s["name"] for s in sessions]
-        clone_choice = st.selectbox("Clone config from", options=clone_options, key="clone_source")
+        clone_options = [CLUSTER_DEFAULTS, EMPTY_CONFIG] + [s["name"] for s in sessions]
+        clone_choice = st.selectbox("Start config from", options=clone_options, key="clone_source")
 
         if st.button("Create", key="create_session", width="stretch"):
             if not new_name.strip():
                 st.error("Enter a session name.")
             else:
-                base_config = None
-                if clone_choice != "Empty config":
+                # None seeds from the shipped cluster template; {} is blank.
+                base_config = None if clone_choice == CLUSTER_DEFAULTS else {}
+                if clone_choice not in (CLUSTER_DEFAULTS, EMPTY_CONFIG):
                     # Find the session to clone from
                     for s_info in sessions:
                         if s_info["name"] == clone_choice:
@@ -173,6 +180,23 @@ with col_title:
     st.title(f"ProtForge — {active_name}")
 with col_info:
     st.caption(f"{USER}@{HOST}")
+    # The identity this session would submit under. Shown next to the OS user so
+    # a config inherited from someone else is visible before anything is queued.
+    _slurm = load_config(session).get("slurm", {}) or {}
+    _account = _slurm.get("account") or "no account set"
+    _email = _slurm.get("email") or "no email set"
+    st.caption(f"{_account} · {_email}")
+
+# A session created by another user — a shared checkout, or a copied workspace
+# that carried .sessions/ along with it. Their account and email are still in
+# this config, so say so rather than letting it look like the user's own.
+_owner = foreign_session_owner(session.id)
+if _owner:
+    st.warning(
+        f"Session **{active_name}** was created by **{_owner}**, not {USER}. "
+        "Its SLURM account, email and paths are theirs — check the "
+        "Configuration tab, or create a new session from the cluster defaults."
+    )
 
 tab_config, tab_run, tab_monitor, tab_results, tab_satmut = st.tabs(
     ["Configuration", "Run Pipeline", "Job Monitor", "Results", "Saturation Mutagenesis"]
