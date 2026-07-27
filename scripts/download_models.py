@@ -2,7 +2,7 @@
 
 Run on a node with internet access before submitting containerized jobs:
 
-    python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+    python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 
 The resulting cache should be bind-mounted read-only into the SIF at
 `/models/hf` and used as `HF_HOME` by ESM-C and ESMFold rules.
@@ -32,7 +32,13 @@ ESMC_REPO = "EvolutionaryScale/esmc-600m-2024-12"
 
 
 def _default_cache_dir() -> Path | None:
-    root = os.environ.get("PROTFORGE_ROOT")
+    """Where weights land when --cache-dir is omitted.
+
+    PROTFORGE_ASSETS first: that is the variable the configs read for the model
+    caches, so downloading with it set puts the weights where a run will look.
+    PROTFORGE_ROOT stays as the fallback for setups predating the split.
+    """
+    root = os.environ.get("PROTFORGE_ASSETS") or os.environ.get("PROTFORGE_ROOT")
     if not root:
         return None
     return Path(root).expanduser() / "models" / "hf"
@@ -101,7 +107,7 @@ def main() -> None:
         default=default_cache,
         help=(
             "HF_HOME root to populate. Defaults to "
-            "$PROTFORGE_ROOT/models/hf when PROTFORGE_ROOT is set."
+            "$PROTFORGE_ASSETS/models/hf (or $PROTFORGE_ROOT/models/hf) when either is set."
         ),
     )
     parser.add_argument(
@@ -139,8 +145,8 @@ def main() -> None:
 
     if args.cache_dir is None:
         raise SystemExit(
-            "ERROR: provide --cache-dir or set PROTFORGE_ROOT "
-            "(uses $PROTFORGE_ROOT/models/hf)."
+            "ERROR: provide --cache-dir or set PROTFORGE_ASSETS "
+            "(uses $PROTFORGE_ASSETS/models/hf)."
         )
 
     cache_dir = args.cache_dir.expanduser().resolve()

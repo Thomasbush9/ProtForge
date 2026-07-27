@@ -35,14 +35,27 @@ MSA/Boltz databases, partition, container runtime and image/cache layout are
 already filled in, so you only set your account and email:
 
 ```bash
-export PROTFORGE_ROOT="$WORKSPACE"      # the PARENT of the repo; see layout below
+export PROTFORGE_ROOT="$WORKSPACE"      # YOUR workspace: inputs, outputs, logs
+export PROTFORGE_ASSETS="$WORKSPACE"    # images + weights; see below
 cp config.kempner.template.yaml config.yaml
 # Edit exactly three things: slurm.account, slurm.email, input.fasta_dir.
 ```
 
-`config.kempner.template.yaml` refers to your workspace as `${PROTFORGE_ROOT}`;
-the workflow expands that (and `$VAR` / `~`) from your environment at load time.
-Export it in the same shell you run `snakemake` from — if it is unset the run
+The template splits paths across **two** variables so a lab can share the heavy,
+read-only artifacts:
+
+| Variable | Holds | Share it? |
+|----------|-------|-----------|
+| `PROTFORGE_ASSETS` | container images (`sifs/`) and model weights (`models/`) | Yes — point several users at one copy and none of them build anything |
+| `PROTFORGE_ROOT` | your inputs, outputs and job logs | No — per user |
+
+Set both to your workspace if you are building your own images (steps 1–2 below).
+If someone has already published a shared copy, point `PROTFORGE_ASSETS` at it and
+**skip steps 1 and 2 entirely** — on Kempner the bsabatini lab keeps one at
+`/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge-assets`.
+
+The workflow expands both (and `$VAR` / `~`) from your environment at load time.
+Export them in the same shell you run `snakemake` from — if one is unset the run
 stops immediately with an error naming the offending config key, rather than
 building a broken path. Literal absolute paths still work if you prefer them.
 
@@ -50,7 +63,16 @@ building a broken path. Literal absolute paths still work if you prefer them.
 use it if you are not on Kempner or want to see every available parameter.
 
 Every other `config.*.yaml` is git-ignored (it holds your paths/account/email);
-only the two templates are tracked.
+only the two templates are tracked. Nothing user-specific ships with a clone, so
+a config you did not write can only have come from a workspace you copied.
+
+**Using the webapp instead?** You can skip the `cp` above. On first launch the
+webapp creates a Default session seeded from `config.kempner.template.yaml`, with
+`${PROTFORGE_ROOT}` expanded from your environment and `slurm.account` /
+`slurm.email` left blank for you to fill in on the Configuration tab. If a
+`config.yaml` already exists in the repo root it seeds from that instead. Either
+way the session config lives in `.sessions/<id>/config.yaml`, never in the repo
+root, and the run is blocked before submission while the account is unset.
 
 ---
 
@@ -65,25 +87,31 @@ ProtForge uses one image per GPU stage:
 | ESM | `esmfold_cu.def` | `esm.sif` | ESM-C embeddings + ESMFold2 |
 | OpenFold | `openfold.def` | `openfold.sif` | OpenFold3 |
 
-Build from an **interactive allocation, not a login node**. `PROTFORGE_ROOT`
-is the *parent* of the repo; SIFs land in `$PROTFORGE_ROOT/sifs/`.
+**Skip this whole step** if `PROTFORGE_ASSETS` points at a shared copy someone
+has already built — that is the point of the variable.
+
+Otherwise build from an **interactive allocation, not a login node**. SIFs land
+in `$PROTFORGE_ASSETS/sifs/`, which is where the configs look for them.
 
 ```bash
 salloc -p test --account=<your_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
 
-#   $PROTFORGE_ROOT/
-#   ├── ProtForge/        <- repo (cloned in step 0)
-#   ├── sifs/             <- output SIFs land here
-#   ├── models/hf/        <- ESM-C + ESMFold HF cache
-#   ├── models/openfold/  <- OpenFold3 weights + CCD cache
-#   ├── sing_cache/       <- singularity layer cache
-#   └── sing_tmp/         <- build staging
+#   $PROTFORGE_ASSETS/        (shareable — read-only once built)
+#   ├── sifs/                 <- output SIFs land here
+#   ├── models/hf/            <- ESM-C + ESMFold HF cache
+#   ├── models/openfold/      <- OpenFold3 weights + CCD cache
+#   ├── sing_cache/           <- singularity layer cache
+#   └── sing_tmp/             <- build staging
+#   $PROTFORGE_ROOT/          (yours alone)
+#   ├── ProtForge/            <- repo (cloned in step 0)
+#   ├── data/, outputs/, job_logs/
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
-mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf" "$PROTFORGE_ROOT/models/openfold"
+export PROTFORGE_ASSETS="$PROTFORGE_ROOT"      # or a dir you intend to share
+mkdir -p "$PROTFORGE_ASSETS"/{sifs,models/hf,models/openfold}
 
 cd "$PROTFORGE_ROOT/ProtForge"
 bash containers/build.sh all              # or a subset: bash containers/build.sh boltz esm
-python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 ```
 
 `build.sh` prints `Done. Image at: …` per stage and writes a `.sha256` sidecar

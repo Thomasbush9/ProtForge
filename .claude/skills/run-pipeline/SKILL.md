@@ -71,6 +71,9 @@ The script prints the output dir — that becomes `input.fasta_dir` (or
 ### 3. Get a config to work with
 
 - Reuse an existing config the user names, **or**
+- on Kempner, `cp config.kempner.template.yaml config.<run>.yaml` — the shared
+  DBs, partition, container runtime and SIF/cache paths are already right, so
+  only `slurm.account`, `slurm.email` and `input.fasta_dir` are left, **or**
 - `cp config.template.yaml config.<run>.yaml` and fill in the must-haves:
   `pipeline.*` toggles, `input.fasta_dir`/`input.yaml_dir`,
   `output.parent_dir`, `slurm.account`, `slurm.log_dir`, container `.sif` paths,

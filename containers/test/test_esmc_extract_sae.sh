@@ -5,7 +5,6 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=32GB
 #SBATCH --partition=kempner_h100
-#SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=01:00:00
 #SBATCH --output=%x.%A_%a.out
 

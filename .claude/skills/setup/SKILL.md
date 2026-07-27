@@ -33,8 +33,14 @@ prebuilt images with `--from-docker` instead of building.
 - Boltz model checkpoint — `boltz.cache_dir`
   (`/n/holylfs06/LABS/kempner_shared/Everyone/workflow/boltz/...`)
 
+**Also possibly already present**: the per-stage SIFs and the ESM-C/ESMFold
+weight cache. They are read-only, so a lab typically keeps one shared copy —
+ask before planning a build (see step 2). If one exists, the whole build and
+download half of this skill is skipped.
+
 **The user must do** (this skill): pick a workspace, create dirs, fill
-`config.yaml`, build the per-stage SIFs, download ESM-C/ESMFold weights, smoke-test.
+`config.yaml`, smoke-test — plus building the SIFs and downloading weights only
+when no shared copy is available.
 
 ## Interactive steps run by the user, not by Claude
 
@@ -48,12 +54,15 @@ file edits and dry, non-interactive checks.
 
 Ask only what you can't read from an existing `config.yaml`:
 
+- **Asset root `PROTFORGE_ASSETS`** — where the images and weights live:
+  `$PROTFORGE_ASSETS/{sifs/, models/hf/, models/openfold/, sing_cache/,
+  sing_tmp/}`. Read-only once built, so it can be **one shared copy per lab**.
+  Ask whether the user can read an existing one before planning a build.
 - **Workspace root `PROTFORGE_ROOT`** — the **parent** of the repo, NOT the repo
-  itself. Layout: `$PROTFORGE_ROOT/{ProtForge/, sifs/, models/hf/,
-  models/openfold/, sing_cache/, sing_tmp/}`. Keeping `sing_tmp/` and the SIFs
-  as siblings of the repo (not inside it) also keeps the build cache off the
-  checkout. Must live on `/n/holylfs06` (or similar lab storage) — home dirs
-  are too small for the SIFs + caches.
+  itself: `$PROTFORGE_ROOT/{ProtForge/, data/, outputs/, job_logs/}`. Per-user,
+  never shared. Set it equal to `PROTFORGE_ASSETS` when the user is building
+  their own images. Both must live on `/n/holylfs06` (or similar lab storage) —
+  home dirs are too small for the SIFs + caches.
 - **SLURM** — `account` (e.g. `kempner_yourpi_lab`), `partition`
   (default `kempner_requeue`), and notification `email`.
 - **Output + logs** — `output.parent_dir` and `slurm.log_dir`, both on
@@ -68,24 +77,41 @@ Ask only what you can't read from an existing `config.yaml`:
 
 ## 2. Create the workspace dirs
 
-Have the user export `PROTFORGE_ROOT` and create the tree (the repo should
-already be cloned as `$PROTFORGE_ROOT/ProtForge`):
+**Ask first whether a shared asset copy exists.** The images and weights are
+~120 GB and entirely read-only once built, so a lab usually keeps one copy that
+everyone points at. On Kempner the bsabatini lab's lives at
+`/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge-assets`. If the user can read
+one, `PROTFORGE_ASSETS` points at it and **steps 3 and 4 below are skipped
+entirely** — no build, no download.
 
 ```bash
+# Shared assets (nothing to build, nothing to install):
+export PROTFORGE_ASSETS=/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge-assets
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
-mkdir -p "$PROTFORGE_ROOT/sifs" "$PROTFORGE_ROOT/models/hf" \
-         "$PROTFORGE_ROOT/sing_cache" "$PROTFORGE_ROOT/sing_tmp"
+mkdir -p "$PROTFORGE_ROOT"/{data/fastas,outputs,job_logs}
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
+
+# Building your own instead — both variables point at your workspace:
+export PROTFORGE_ASSETS="$PROTFORGE_ROOT"
+mkdir -p "$PROTFORGE_ASSETS"/{sifs,models/hf,sing_cache,sing_tmp}
 ```
 
+The shared assets tree also carries the **host environment** at
+`$PROTFORGE_ASSETS/envs/host` (Snakemake + SLURM executor + Streamlit). It must
+be *activated* in whatever shell runs `snakemake` or the webapp — the local
+chunking rules shell out to a bare `python`, so an unactivated shell dies on the
+first rule with `python: command not found` before any job is submitted. `mamba`
+is only a shell function after `module load python`; chain them in one command.
+
 `build.sh` auto-sets `SINGULARITY_CACHEDIR`/`SINGULARITY_TMPDIR` (and the
-`APPTAINER_*` equivalents) under `$PROTFORGE_ROOT` when they're unset, so you
+`APPTAINER_*` equivalents) under `$PROTFORGE_ASSETS` when they're unset, so you
 don't have to export them — but the dirs above must exist on big storage.
 
 ## 3. Create and fill config.yaml
 
 Copy the template, then Claude edits the copy in place — do **not** make the
 user hand-edit. On Kempner prefer the **Kempner template**: the shared DBs,
-partition, container runtime and `${PROTFORGE_ROOT}`-relative SIF/cache paths
+partition, container runtime and `${PROTFORGE_ASSETS}`-relative SIF/cache paths
 are already correct, so most must-fill fields below are pre-filled and only
 `slurm.account`, `slurm.email` and `input.fasta_dir` are genuinely left to set.
 
@@ -94,11 +120,18 @@ cp config.kempner.template.yaml config.yaml   # Kempner (preferred)
 # cp config.template.yaml config.yaml         # other clusters / full reference
 ```
 
-The Kempner template keeps `${PROTFORGE_ROOT}` placeholders, which the workflow
+A user who only ever drives the webapp can skip this: its first launch seeds a
+Default session from the same Kempner template (expanding both env vars
+when exported, blanking `slurm.account` / `slurm.email`). Doing the `cp` anyway
+is still worth it — a repo-root `config.yaml` takes precedence when the session
+is seeded, and it is what the CLI path reads.
+
+The Kempner template keeps `${PROTFORGE_ASSETS}` (images, weight caches) and
+`${PROTFORGE_ROOT}` (inputs, outputs, logs) placeholders, which the workflow
 expands from the environment at load time. That means the user **must export
-`PROTFORGE_ROOT` in the shell they run `snakemake` from** — remind them, and add
-it to their shell rc. If it is unset the run aborts with a clear error naming the
-config key. If the user would rather not depend on the env var, resolve the
+both in the shell they run `snakemake` from** — remind them, and add them to
+their shell rc. If either is unset the run aborts with a clear error naming the
+config key. If the user would rather not depend on the env vars, resolve the
 placeholders to literal absolute paths when you edit `config.yaml`.
 
 Fill only these **must-fill** fields (Claude edits `config.yaml`):
@@ -112,7 +145,7 @@ Fill only these **must-fill** fields (Claude edits `config.yaml`):
   (`-B {cache_dir}:/models/hf:ro`), so the container always sees `/models/hf` —
   do **NOT** set `cache_dir` to `/models/hf`; that is the in-container mount
   target, not a config value. **Always ASK the user for their host HF model-cache
-  dir** rather than assuming `$PROTFORGE_ROOT/models/hf` (some installs keep it
+  dir** rather than assuming `$PROTFORGE_ASSETS/models/hf` (some installs keep it
   elsewhere on lab storage).
 - `openfold.cache_dir` (if running OpenFold) → host dir holding the OpenFold
   checkpoints (`ckpt_root`, `of3-p2-*.pt`); bound to `/models/openfold` and
@@ -142,12 +175,12 @@ salloc -p test --account=<your_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
 # 2) Inside the allocation:
 export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>
 cd "$PROTFORGE_ROOT/ProtForge"
-bash containers/build.sh all      # writes $PROTFORGE_ROOT/sifs/{msa,boltz,esm,openfold}.sif
+bash containers/build.sh all      # writes $PROTFORGE_ASSETS/sifs/{msa,boltz,esm,openfold}.sif
 #   or a subset: bash containers/build.sh boltz esm
 ```
 
 Output-dir resolution: `-o/--output` (single stage) wins, else
-`$PROTFORGE_SIF_DIR`, else `$PROTFORGE_ROOT/sifs`. Each `<stage>.sif` gets a
+`$PROTFORGE_SIF_DIR`, else `$PROTFORGE_ASSETS/sifs`, else `$PROTFORGE_ROOT/sifs`. Each `<stage>.sif` gets a
 `.sha256` sidecar next to it for provenance.
 
 Variants to offer:
@@ -173,7 +206,7 @@ to the host cache and bind-mounted at `/models/hf`. Run once:
 
 ```bash
 cd "$PROTFORGE_ROOT/ProtForge"
-python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 ```
 
 The script writes an HF cache (`HF_HOME`) under that dir, prints the resolved
@@ -185,7 +218,7 @@ commit SHAs, and the total size. Useful flags:
   reproducibility (defaults resolve `main` → current HEAD SHA and log it).
 
 If `PROTFORGE_ROOT` is exported, `--cache-dir` defaults to
-`$PROTFORGE_ROOT/models/hf`, so it can be omitted.
+`$PROTFORGE_ASSETS/models/hf`, so it can be omitted.
 
 ## 6. Point config.yaml at the stage SIFs
 

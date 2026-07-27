@@ -18,6 +18,7 @@ from pathlib import Path as _Path
 # Make workflow.scripts importable for any rule helpers we factor out.
 _sys.path.insert(0, str(_Path(workflow.basedir) / "workflow" / "scripts"))
 from snake_helpers import expand_config as _expand_config
+from snake_helpers import slurm_identity_errors as _slurm_identity_errors
 from snake_helpers import stage_resource as _stage_resource_impl
 from snake_helpers import stage_uses_gpu as _stage_uses_gpu_impl
 from binning import chunk_resource as _chunk_resource_impl
@@ -27,6 +28,15 @@ configfile: "config.yaml"
 # Resolve ${PROTFORGE_ROOT}-style placeholders so the shipped cluster templates
 # can point at the caller's workspace. Plain absolute paths are unaffected.
 config.update(_expand_config(dict(config)))
+
+# Refuse to submit under a SLURM identity copied from the shipped template — an
+# unedited `<YOUR_EMAIL>` would otherwise reach sbatch. A *missing* account is
+# allowed here: it is legitimate for a local, non-SLURM run.
+_identity_errors = _slurm_identity_errors(config, require_account=False)
+if _identity_errors:
+    raise WorkflowError(
+        "Edit your config before running:\n  - " + "\n  - ".join(_identity_errors)
+    )
 
 # Pipeline start time (wall-clock)
 _PIPELINE_START = _time.time()

@@ -4,9 +4,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=48GB
-# Partition/account set by caller via sbatch flags (from config)
+# Partition/account set by caller via sbatch flags, e.g.
+#   sbatch --account=<your_slurm_account> --partition=<partition> <this script>
 #SBATCH --partition=kempner_h100
-#SBATCH --account=kempner_bsabatini_lab
 #SBATCH --time=01:00:00
 # Log dir from env (caller passes -o)
 #SBATCH --output=%x.%A_%a.out

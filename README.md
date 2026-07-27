@@ -62,58 +62,110 @@ A typical first session is just: **"set up ProtForge"** → **"run the pipeline 
 `/path/to/fastas`"** → **"summarize the run"**.
 
 > Prefer to drive it by hand? The manual workflow is below — the skills are a
-> convenience layer over exactly these scripts, not a replacement.
+> convenience layer over exactly these scripts, not a replacement. For a
+> point-and-click alternative, jump to [Web UI](#web-ui): a first-time setup and
+> a browser tab, with no `config.yaml` to write.
 
 ---
 
-## Manual setup (Kempner cluster)
+## Setup (Kempner)
 
-There is no `setup.sh` for the container path. Setup is: build (or reuse) the GPU
-container image, download model weights, and fill `config.yaml`. See the
-[Cluster Setup Guide](docs/CLUSTER_SETUP.md) for the full first-time walkthrough.
+The container images and model weights already exist on the cluster, so there is
+nothing to build or download. Setup is two exports, a clone, and an environment.
 
 ```bash
-# 1. Clone
-git clone https://github.com/Thomasbush9/ProtForge.git
-cd ProtForge
+# 1. Where the images and weights live, and where YOUR runs land.
+export PROTFORGE_ASSETS=/n/holylfs06/LABS/bsabatini_lab/Everyone/protforge-assets
+export PROTFORGE_ROOT=/n/holylfs06/LABS/bsabatini_lab/Everyone/<you>
+#    Add both to ~/.bashrc so every shell has them.
 
-# 2. Build the per-stage GPU containers (on a compute node — needs --fakeroot).
-#    ProtForge uses one image per stage; `all` builds msa/boltz/esm/openfold.
-export PROTFORGE_ROOT=/n/holylfs06/LABS/<your_lab>/Everyone/<you>   # SIFs land in $PROTFORGE_ROOT/sifs
-bash containers/build.sh all
-#   or build a subset:  bash containers/build.sh boltz esm
-#   or pull one prebuilt image:  bash containers/build.sh boltz --from-docker docker://ghcr.io/<owner>/protforge-boltz:latest
+# 2. Clone.
+git clone https://github.com/Thomasbush9/ProtForge.git "$PROTFORGE_ROOT/ProtForge"
+cd "$PROTFORGE_ROOT/ProtForge"
 
-# 3. Download ESM-C / ESMFold weights to a host HF cache
-python scripts/download_models.py --cache-dir "$PROTFORGE_ROOT/models/hf"
+# 3. Activate the shared host environment (Snakemake + the web UI).
+#    Nothing to install — it lives beside the images.
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
+```
 
-# 4. Create your config. On Kempner, start from the Kempner template — the shared
-#    DBs, partition, container runtime and $PROTFORGE_ROOT-relative SIF/cache
-#    paths are already filled in.
+That's it. Nothing is copied to your workspace: `PROTFORGE_ASSETS` is read-only
+and shared, `PROTFORGE_ROOT` holds only your inputs, outputs and job logs.
+
+> `PROTFORGE_ASSETS` above is readable by the **bsabatini lab**. On Kempner
+> outside the lab, see [Building your own images](#building-your-own-images).
+
+### The host environment
+
+`$PROTFORGE_ASSETS/envs/host` is a shared conda environment holding Snakemake,
+the SLURM executor plugin, Streamlit and the Results tab's viewer/plot deps.
+Nothing heavier lives there — PyTorch, ESM, Boltz and OpenFold are all inside
+the container images. Activating it is the whole install.
+
+**It must be *activated* every time you run `snakemake` or the web UI.** The
+workflow's chunking rules run locally and shell out to a bare `python`, so an
+unactivated shell fails on the very first rule with `python: command not found`,
+before a single cluster job is submitted.
+
+On Kempner, `mamba` only exists as a shell function *after* `module load python`,
+and it does not survive into a non-interactive shell — chain both in one
+invocation. Put this in your `~/.bashrc` alongside the two exports:
+
+```bash
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
+python -c "import snakemake"     # sanity check: should print nothing
+```
+
+Read-only, so you can't `pip install` into it. If you need extra packages, or
+can't read the shared copy, build your own — a conda env or a plain venv both
+work, the only requirement being that `python` and `snakemake` are on `PATH`:
+
+```bash
+module load python
+mamba create -p "$PROTFORGE_ROOT/envs/host" python=3.13 -y
+mamba activate "$PROTFORGE_ROOT/envs/host"
+pip install -r requirements-host.txt
+```
+
+Put it on lab storage as shown, not in `~` or `~/.conda` — home quotas are small
+and a host env is a couple of GB. Note that a conda env cannot be relocated by
+copying (absolute prefixes are baked into its shebangs); use
+`mamba create -p <new> --clone <old>` if you need it somewhere else.
+
+Then either launch the [Web UI](#web-ui) — no config file to write — or work from
+the command line:
+
+```bash
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
 cp config.kempner.template.yaml config.yaml
-#   edit only: slurm.account, slurm.email, input.fasta_dir
-#   (keep PROTFORGE_ROOT exported — the config expands ${PROTFORGE_ROOT} at load time)
-#
-#   Not on Kempner, or want the full annotated parameter reference?
-#   cp config.template.yaml config.yaml   # then fill in every path by hand
+$EDITOR config.yaml     # set slurm.account, slurm.email, input.fasta_dir
+snakemake --profile profiles/slurm/ -n      # dry run
+snakemake --profile profiles/slurm/         # go
 ```
 
-**Shared resources already on Kempner** (no setup needed — leave the template
-defaults): the MSA databases (`msa.mmseq2_db`, `msa.colabfold_db`) and the Boltz
-checkpoint (`boltz.cache_dir`).
+The MSA databases, the Boltz checkpoint, the partition and the container runtime
+are already correct in that template — leave them alone.
 
-> **Container cache paths:** `esmc.cache_dir` / `esmfold.cache_dir` /
-> `openfold.cache_dir` are **host** directories — the rules bind them read-only
-> into the container at `/models/hf` (and `/models/openfold`). Don't set them to
-> the in-container path.
+### Building your own images
 
-**Requirements:**
-- Snakemake 8+ with the SLURM executor plugin, in a conda/mamba env
-- Singularity/Apptainer + a SLURM cluster with GPU nodes
+Only if you can't read a shared `PROTFORGE_ASSETS`. Point it at your own
+workspace, then build once (on a compute node — `--fakeroot` is not permitted on
+login nodes) and fetch the weights:
 
 ```bash
-pip install snakemake snakemake-executor-plugin-slurm
+export PROTFORGE_ASSETS="$PROTFORGE_ROOT"
+salloc -p test --account=<your_slurm_account> -t 4:00:00 --mem 32G --ntasks-per-node 4
+bash containers/build.sh all        # or a subset: bash containers/build.sh msa boltz
+exit
+python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 ```
+
+Expect ~1 h and ~120 GB. `containers/build.sh <stage> --from-docker docker://...`
+pulls a prebuilt image instead. Full walkthrough: [Cluster Setup
+Guide](docs/CLUSTER_SETUP.md).
+
+> **Cache paths are host paths.** `esmc.cache_dir` / `esmfold.cache_dir` /
+> `openfold.cache_dir` are bound read-only into the container at `/models/hf`
+> (and `/models/openfold`) — don't set them to the in-container path.
 
 ## Prepare input data
 
@@ -185,15 +237,54 @@ snakemake --profile profiles/slurm/ --dag | dot -Tpng > dag.png
 
 ## Web UI
 
-A Streamlit front-end exposes config editing, the resource estimator, live
-monitoring, results, and saturation-mutagenesis:
+A Streamlit front-end covering config editing, the resource estimator, launch,
+live monitoring, results, and saturation mutagenesis. On Kempner it is the
+shortest path from a clone to a running pipeline.
+
+### Launching
+
+After [Setup](#setup-kempner), on a login node:
 
 ```bash
+tmux new -s protforge          # so the app survives an SSH disconnect
+module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
+cd "$PROTFORGE_ROOT/ProtForge"
 streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
-# then tunnel from your laptop:  ssh -L 8501:localhost:8501 <user>@<login-node>
 ```
 
-See the [Web UI guide](docs/WEBAPP.md) for SSH / VS Code / Open OnDemand access.
+The app launches Snakemake as a child process, so it inherits this shell's
+environment — activate before starting it, not after.
+
+Then from your laptop, tunnel in and open <http://localhost:8501>:
+
+```bash
+ssh -L 8501:localhost:8501 <you>@holylogin06.rc.fas.harvard.edu
+```
+
+### In the browser
+
+There is **no `config.yaml` to copy**. The first launch creates a *Default*
+session already seeded from `config.kempner.template.yaml`, so the shared
+MSA/Boltz databases, partitions, container runtime, images and weight caches
+arrive filled in. On the **Configuration** tab you supply only:
+
+| Field | Value |
+|-------|-------|
+| `slurm.account` | your `kempner_<pi>_lab` account |
+| `slurm.email` | where SLURM sends job notifications — leave blank to disable them |
+| `input.fasta_dir` | a directory of `.fasta` files, one sequence per file |
+
+Then **Run Pipeline → Launch**. The launch is blocked, with a message naming the
+specific problem, if the account is unset, either environment variable is
+unexported, or an enabled stage's image or weight cache is missing — so a
+half-finished setup fails in the browser, not four hours into a queue.
+
+Each session keeps its own config, logs and run state under `.sessions/<id>/`
+(never in the repo, and never shared between users). Create more from the sidebar
+to keep several configurations side by side.
+
+See the [Web UI guide](docs/WEBAPP.md) for VS Code / Open OnDemand access and
+login-node etiquette.
 
 ## Usage Examples
 
