@@ -61,6 +61,28 @@ def test_sensitivity_excludes_wt_zero():
     assert position_sensitivity(llr)[0] == pytest.approx(0.0)
 
 
+def test_sensitivity_divides_by_all_columns_when_wt_is_outside_aa_order():
+    """A selenoprotein's Sec has no zero column, so every one of the columns is
+    a genuine substitution. Dividing by len(aa_order) - 1, as for an ordinary
+    residue, would inflate the row and misrank the catalytic position."""
+    # 5-token vocab; wt = U, which is scorable but not an output column.
+    aa = {"A": 0, "C": 1, "D": 2, "E": 3, "U": 4}
+    logits = np.array([[3.0, 2.0, 1.0, 0.0, 3.0]])  # wt=U (logit 3.0)
+    llr = wt_marginal_llr(logits, "U", aa, aa_order=ORDER)
+
+    # LLRs vs wt: A=0, C=-1, D=-2, E=-3 -> sum -6 over 4 real substitutions.
+    assert llr.sum() == pytest.approx(-6.0)
+    assert position_sensitivity(llr, "U", ORDER)[0] == pytest.approx(-6.0 / 4)
+    # Without wt_seq the old uniform n-1 divisor is kept, and is wrong here.
+    assert position_sensitivity(llr)[0] == pytest.approx(-6.0 / 3)
+
+
+def test_sensitivity_still_excludes_wt_zero_for_canonical_residues():
+    logits = np.array([[2.0, 5.0, 1.0, 0.0]])  # wt=A; LLRs: A=0,C=+3,D=-1,E=-2
+    llr = wt_marginal_llr(logits, "A", AA, aa_order=ORDER)
+    assert position_sensitivity(llr, "A", ORDER)[0] == pytest.approx(0.0)
+
+
 def test_length_and_missing_token_guards():
     logits = np.zeros((2, 4))
     with pytest.raises(ValueError):

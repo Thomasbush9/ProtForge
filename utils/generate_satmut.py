@@ -11,7 +11,8 @@ this produces: a directory of FASTA files that `input.fasta_dir` can point at.
 For a length-L sequence over the 20 standard amino acids that is L x 19 files
 (the wild-type residue at each position is skipped). A 238-residue protein gives
 4522 sequences — a normal-sized ProtForge run, but check the count before
-launching a stage over it.
+launching a stage over it. A selenocysteine position contributes 20, not 19,
+since none of the 20 substitutions is its wild type.
 
 Names follow the standard point-mutation convention `<wt><pos><mut>` with
 1-based positions (`M1A`, `K52R`), optionally prefixed with the parent name so
@@ -29,6 +30,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.utils import AMINO_ACIDS_20, load_seq_
+
+# Wild-type residues we can meaningfully mutate *away from*. Selenocysteine is a
+# real residue in selenoproteins (the deiodinases, the glutathione peroxidases)
+# and is in the ESM-C vocabulary, so its position is scannable — often it is the
+# catalytic one. It stays out of the substitution alphabet because Sec insertion
+# requires a SECIS element, so introducing it elsewhere is not meaningful.
+MUTABLE_WT_AAS = set(AMINO_ACIDS_20) | {"U"}
 
 
 def parse_positions(spec: str | None, length: int) -> list[int]:
@@ -83,6 +91,18 @@ def satmut_variants(
             seq = wt_seq[: pos - 1] + mut_aa + wt_seq[pos:]
             variants.append((f"{prefix}{mutation}", mutation, seq))
     return variants
+
+
+def split_scannable(seq: str, positions: list[int]) -> tuple[list[int], list[int]]:
+    """Partition `positions` into (scannable, skipped) by wild-type residue.
+
+    Ambiguity codes (X, B, Z) and gaps can't be substituted meaningfully, so
+    they are dropped rather than turned into nonsense variants. Everything in
+    MUTABLE_WT_AAS is kept, selenocysteine included.
+    """
+    keep = [p for p in positions if seq[p - 1] in MUTABLE_WT_AAS]
+    skip = [p for p in positions if seq[p - 1] not in MUTABLE_WT_AAS]
+    return keep, skip
 
 
 def write_fastas(
@@ -143,10 +163,7 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"ERROR: --positions {exc}")
 
-    # Residues outside the alphabet (X, B, Z, gaps) can't be substituted
-    # meaningfully; skip them rather than emitting nonsense variants.
-    skipped = [p for p in positions if seq[p - 1] not in AMINO_ACIDS_20]
-    positions = [p for p in positions if seq[p - 1] in AMINO_ACIDS_20]
+    positions, skipped = split_scannable(seq, positions)
 
     variants = satmut_variants(seq, positions, alphabet, args.name_prefix)
     if args.include_wt:
@@ -157,7 +174,11 @@ def main() -> None:
     print(f"alphabet        : {len(alphabet)} residues")
     print(f"files to write  : {len(variants)}")
     if skipped:
-        print(f"skipped         : {len(skipped)} position(s) with non-standard residues")
+        shown = ", ".join(f"{seq[p - 1]}{p}" for p in skipped[:10])
+        if len(skipped) > 10:
+            shown += f", +{len(skipped) - 10} more"
+        print(f"skipped         : {len(skipped)} position(s) with non-standard "
+              f"residues ({shown})")
     if args.dry_run:
         print("(--dry-run: nothing written)")
         return

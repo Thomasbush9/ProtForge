@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from utils.generate_satmut import (  # noqa: E402
     parse_positions,
     satmut_variants,
+    split_scannable,
     write_fastas,
     write_index,
 )
@@ -78,6 +79,45 @@ class TestSatmutVariants:
     def test_original_sequence_is_not_mutated_in_place(self):
         satmut_variants(WT, [1, 2, 3, 4])
         assert WT == "MSKG"
+
+
+class TestSplitScannable:
+    """Which wild-type residues are worth mutating away from.
+
+    Selenocysteine is the case this exists for: in a selenoprotein (DIO3, the
+    glutathione peroxidases) the Sec is usually the catalytic residue, so
+    dropping it silently removes the most interesting position in the scan.
+    """
+
+    def test_selenocysteine_is_scannable(self):
+        keep, skip = split_scannable("MSUKG", [1, 2, 3, 4, 5])
+        assert keep == [1, 2, 3, 4, 5]
+        assert skip == []
+
+    def test_ambiguity_codes_and_gaps_are_skipped(self):
+        keep, skip = split_scannable("MXBZ-G", [1, 2, 3, 4, 5, 6])
+        assert keep == [1, 6]
+        assert skip == [2, 3, 4, 5]
+
+    def test_partition_is_complete_and_disjoint(self):
+        seq = "MXUKG"
+        positions = [1, 2, 3, 4, 5]
+        keep, skip = split_scannable(seq, positions)
+        assert sorted(keep + skip) == positions
+        assert not set(keep) & set(skip)
+
+    def test_a_sec_position_yields_twenty_variants_not_nineteen(self):
+        """None of the 20 substitution targets is the wild type at a Sec
+        position, so nothing gets skipped as a no-op self-mutation."""
+        keep, _ = split_scannable("MSUKG", [3])
+        variants = satmut_variants("MSUKG", keep)
+        assert len(variants) == 20
+        assert {m for _, m, _ in variants} == {f"U3{a}" for a in "ACDEFGHIKLMNPQRSTVWY"}
+
+    def test_sec_variants_replace_the_sec_residue(self):
+        _, mutation, seq = satmut_variants("MSUKG", [3], alphabet="A")[0]
+        assert mutation == "U3A"
+        assert seq == "MSAKG"
 
 
 class TestWriteOutputs:

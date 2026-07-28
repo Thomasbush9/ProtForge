@@ -81,15 +81,28 @@ def wt_marginal_llr(
     return mut_logits - wt_logits
 
 
-def position_sensitivity(llr: np.ndarray) -> np.ndarray:
-    """Per-position mean LLR over the 19 non-wild-type substitutions.
+def position_sensitivity(llr: np.ndarray, wt_seq: str | None = None,
+                         aa_order: str = CANONICAL_AAS) -> np.ndarray:
+    """Per-position mean LLR over the non-wild-type substitutions.
 
     Lower (more negative) = the position is less tolerant to mutation. The
-    wild-type column is 0, so we exclude exactly one zero per row.
+    wild-type column is 0, so summing the row and dividing by the number of
+    non-wild-type columns gives their mean.
+
+    That count is len(aa_order) - 1 only when the wild type is one of the
+    columns. A residue outside aa_order — selenocysteine in a selenoprotein —
+    has no zero column, so all len(aa_order) entries are real substitutions and
+    dividing by one fewer would inflate the row. Pass `wt_seq` to get the
+    per-row count right; without it the uniform len(aa_order) - 1 is assumed.
     """
     n = llr.shape[1]
-    # Sum all columns (wt column contributes 0) and divide by the non-wt count.
-    return llr.sum(axis=1) / max(n - 1, 1)
+    if wt_seq is None:
+        return llr.sum(axis=1) / max(n - 1, 1)
+
+    non_wt = np.array(
+        [n - 1 if wt in aa_order else n for wt in wt_seq], dtype=np.float64
+    )
+    return llr.sum(axis=1) / np.maximum(non_wt, 1.0)
 
 
 def write_scan_csv(path: Path, wt_seq: str, llr: np.ndarray,
@@ -100,7 +113,7 @@ def write_scan_csv(path: Path, wt_seq: str, llr: np.ndarray,
     column per amino acid in aa_order.
     """
     path = Path(path)
-    sens = position_sensitivity(llr)
+    sens = position_sensitivity(llr, wt_seq, aa_order)
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["position", "wt_aa", "sensitivity", *aa_order])
@@ -115,7 +128,7 @@ def summarize_scan(wt_seq: str, llr: np.ndarray, top_n: int = 10,
     """Headline numbers for a scan: most/least mutation-tolerant positions and
     the best-scoring single substitutions. Used for the ranking table + summary.
     """
-    sens = position_sensitivity(llr)
+    sens = position_sensitivity(llr, wt_seq, aa_order)
     order = np.argsort(sens)  # ascending: most sensitive first
     least_tolerant = [
         {"position": int(i + 1), "wt_aa": wt_seq[i], "sensitivity": float(sens[i])}
