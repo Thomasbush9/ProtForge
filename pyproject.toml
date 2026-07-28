@@ -39,6 +39,9 @@ host = [
     "pandas>=1.0",
     "numpy>=1.20",
     "tqdm>=4.0",
+    # tests/test_fresh_install.py shells out to the snakemake binary; keeping
+    # pytest here lets the whole suite run from the env that has it.
+    "pytest>=7.0",
 ]
 
 [tool.pytest.ini_options]
@@ -48,3 +51,6 @@ testpaths = ["tests", "webapp/tests"]
 # Put the source dirs on sys.path so tests can use bare imports
 # (e.g. `from estimator import ...`) without a manual PYTHONPATH.
 pythonpath = ["webapp", "workflow/scripts"]
+markers = [
+    "slow: spawns subprocesses (snakemake dry runs) — ~1 min. Skip with -m 'not slow'.",
+]

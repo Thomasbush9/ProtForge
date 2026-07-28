@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 # `${VAR}` / `$VAR` left behind by os.path.expandvars means the variable was not
 # set in the environment. We refuse to run rather than silently build a path with
@@ -107,6 +108,90 @@ def slurm_identity_errors(cfg: dict, require_account: bool = True) -> list[str]:
         )
     elif email and "@" not in email:
         errors.append(f"slurm.email does not look like an address: {email}")
+
+    return errors
+
+
+# Enabled stage -> (containers.<key>, weight-cache config path). The MSA
+# databases and the Boltz checkpoint are shared cluster paths, so only the
+# per-user HF/OpenFold caches are checked here.
+_STAGE_ASSETS = {
+    "msa": ("colabfold", None),
+    "boltz": ("boltz", None),
+    "esmc": ("esmc", ("esmc", "cache_dir")),
+    "esmfold": ("esmfold", ("esmfold", "cache_dir")),
+    "openfold": ("openfold", ("openfold", "cache_dir")),
+}
+
+
+def check_stage_assets(cfg: dict, placeholder_hint: str = "") -> list[str]:
+    """Fatal missing container images or model caches for the enabled stages.
+
+    A seeded config points at `$PROTFORGE_ASSETS/sifs/*.sif` and
+    `$PROTFORGE_ASSETS/models/hf`, which only exist once containers/build.sh and
+    scripts/download_models.py have been run. Without this the config validates,
+    every job is submitted, and each one dies on a missing image.
+
+    Both the Snakefile and the webapp's preflight call this, so a dry run and
+    the UI agree on whether an install is actually runnable.
+
+    ``placeholder_hint`` appends caller-specific remediation to the unresolved-
+    ``${VAR}`` message. The webapp needs it (its sessions store an already-seeded
+    config, so exporting the variable is not enough on its own); the Snakefile
+    does not, and never reaches that branch anyway because ``expand_config``
+    raises on an unresolved placeholder first.
+    """
+    errors: list[str] = []
+    pipeline = cfg.get("pipeline", {}) or {}
+    containers = cfg.get("containers", {}) or {}
+    shared_gpu = containers.get("gpu", "")
+
+    def _placeholder_error(key: str, raw: str, var: str) -> str:
+        # An unresolved ${VAR} is not a missing asset. Saying "build it" here
+        # would send the user off to rebuild images that already exist.
+        msg = (
+            f"{key} still contains an unresolved ${{{var}}}: {raw}. "
+            f"Export {var} before running."
+        )
+        return f"{msg} {placeholder_hint}".rstrip() if placeholder_hint else msg
+
+    for stage, (container_key, cache_key) in _STAGE_ASSETS.items():
+        if not pipeline.get(stage):
+            continue
+
+        sif = containers.get(container_key, "") or shared_gpu
+        var = unexpanded_var(sif)
+        if not sif:
+            errors.append(
+                f"{stage} is enabled but containers.{container_key} is not set."
+            )
+        elif var:
+            errors.append(
+                _placeholder_error(f"containers.{container_key}", sif, var)
+            )
+        elif not Path(os.path.expandvars(sif)).exists():
+            # Report where we actually looked, not the raw ${VAR} form.
+            errors.append(
+                f"{stage} container image not found: {os.path.expandvars(sif)} — "
+                f"build it with `bash containers/build.sh` "
+                f"(see docs/CLUSTER_SETUP.md)."
+            )
+
+        if cache_key:
+            cache = cfg.get(cache_key[0], {}).get(cache_key[1], "")
+            cache_var = unexpanded_var(cache)
+            key_name = f"{cache_key[0]}.{cache_key[1]}"
+            if not cache:
+                errors.append(f"{stage} is enabled but {key_name} is not set.")
+            elif cache_var:
+                errors.append(_placeholder_error(key_name, cache, cache_var))
+            elif not Path(os.path.expandvars(cache)).is_dir():
+                resolved = os.path.expandvars(cache)
+                errors.append(
+                    f"{stage} model cache not found: {resolved} — download "
+                    f"weights with `python scripts/download_models.py "
+                    f"--cache-dir {resolved}`."
+                )
 
     return errors
 

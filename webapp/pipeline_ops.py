@@ -22,9 +22,9 @@ from validate import scan_directory
 # expansion and identity checks so preflight fails on exactly what the Snakefile
 # would reject, rather than drifting into a second set of rules.
 from snake_helpers import (  # noqa: E402
+    check_stage_assets as _check_stage_assets,
     expand_config,
     slurm_identity_errors,
-    unexpanded_var,
 )
 
 
@@ -112,81 +112,24 @@ def check_unexpanded_paths(cfg: dict) -> list[str]:
     return []
 
 
-# Enabled stage -> (containers.<key>, weight-cache config path). The MSA
-# databases and the Boltz checkpoint are shared cluster paths, so only the
-# per-user HF/OpenFold caches are checked here.
-_STAGE_ASSETS = {
-    "msa": ("colabfold", None),
-    "boltz": ("boltz", None),
-    "esmc": ("esmc", ("esmc", "cache_dir")),
-    "esmfold": ("esmfold", ("esmfold", "cache_dir")),
-    "openfold": ("openfold", ("openfold", "cache_dir")),
-}
+# A session stores its own already-seeded config, so exporting the variable in
+# the shell does not retroactively fix it — the user has to re-seed. That is
+# webapp-specific, hence a hint passed in rather than baked into the shared check.
+_PLACEHOLDER_HINT = (
+    "The webapp was started without it exported, so this session was seeded "
+    "with placeholders. Restart the app, then use 'Re-apply cluster defaults' "
+    "on the Configuration tab (or create a new session) — the stored config "
+    "does not pick it up on its own."
+)
 
 
 def check_stage_assets(cfg: dict) -> list[str]:
-    """Fatal missing container images or model caches for the enabled stages.
+    """Missing container images / model caches for the enabled stages.
 
-    A seeded config points at `$PROTFORGE_ROOT/sifs/*.sif` and
-    `$PROTFORGE_ROOT/models/hf`, which only exist once containers/build.sh and
-    scripts/download_models.py have been run. Without this the config validates,
-    every job is submitted, and each one dies on a missing image.
+    Shared with the Snakefile (see snake_helpers) so a dry run and the UI agree
+    on whether an install is runnable; only the remediation hint differs.
     """
-    errors: list[str] = []
-    pipeline = cfg.get("pipeline", {}) or {}
-    containers = cfg.get("containers", {}) or {}
-    shared_gpu = containers.get("gpu", "")
-
-    def _placeholder_error(key: str, raw: str, var: str) -> str:
-        # An unresolved ${VAR} is not a missing asset. Saying "build it" here
-        # would send the user off to rebuild images that already exist.
-        return (
-            f"{key} still contains an unresolved ${{{var}}}: {raw}. The webapp was "
-            f"started without {var} exported, so this session was seeded with "
-            f"placeholders. Export it, restart the app, then use "
-            f"'Re-apply cluster defaults' on the Configuration tab (or create a "
-            f"new session) — the stored config does not pick it up on its own."
-        )
-
-    for stage, (container_key, cache_key) in _STAGE_ASSETS.items():
-        if not pipeline.get(stage):
-            continue
-
-        sif = containers.get(container_key, "") or shared_gpu
-        var = unexpanded_var(sif)
-        if not sif:
-            errors.append(
-                f"{stage} is enabled but containers.{container_key} is not set."
-            )
-        elif var:
-            errors.append(
-                _placeholder_error(f"containers.{container_key}", sif, var)
-            )
-        elif not Path(os.path.expandvars(sif)).exists():
-            # Report where we actually looked, not the raw ${VAR} form.
-            errors.append(
-                f"{stage} container image not found: {os.path.expandvars(sif)} — "
-                f"build it with `bash containers/build.sh` "
-                f"(see docs/CLUSTER_SETUP.md)."
-            )
-
-        if cache_key:
-            cache = cfg.get(cache_key[0], {}).get(cache_key[1], "")
-            cache_var = unexpanded_var(cache)
-            key_name = f"{cache_key[0]}.{cache_key[1]}"
-            if not cache:
-                errors.append(f"{stage} is enabled but {key_name} is not set.")
-            elif cache_var:
-                errors.append(_placeholder_error(key_name, cache, cache_var))
-            elif not Path(os.path.expandvars(cache)).is_dir():
-                resolved = os.path.expandvars(cache)
-                errors.append(
-                    f"{stage} model cache not found: {resolved} — download "
-                    f"weights with `python scripts/download_models.py "
-                    f"--cache-dir {resolved}`."
-                )
-
-    return errors
+    return _check_stage_assets(cfg, placeholder_hint=_PLACEHOLDER_HINT)
 
 
 def check_launch_inputs(cfg: dict) -> dict:

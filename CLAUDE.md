@@ -93,6 +93,23 @@ python scripts/download_models.py --cache-dir "$PROTFORGE_ASSETS/models/hf"
 ```
 See `docs/CLUSTER_SETUP.md` for the full first-time setup.
 
+### Run the tests
+```bash
+# Whole suite. PROTFORGE_SNAKEMAKE is needed only when pytest and snakemake are
+# in different envs — without it the fresh-install dry runs SKIP, not fail.
+PROTFORGE_SNAKEMAKE="$PROTFORGE_ASSETS/envs/host/bin/snakemake" python -m pytest -q
+
+python -m pytest -q -m "not slow"        # skip the subprocess-heavy fresh-install run
+python -m pytest tests/test_fresh_install.py -v
+```
+
+`tests/test_fresh_install.py` simulates a brand-new user (clone → config → dry
+run → webapp session bootstrap) against the **working tree**, which is the only
+test that exercises the Snakefile, the real `session.REPO_ROOT`, and the config
+templates as shipped. Run it after touching the Snakefile, rule files, config
+templates, `snake_helpers.py`, `session.py` or `pipeline_ops.py` — the
+`fresh-install-check` skill drives it plus the cluster-side checks.
+
 ### Check for errors and retry failed jobs
 ```bash
 ./slurm_scripts/checker.sh msa|boltz|esm <output_dir> [config.yaml]
