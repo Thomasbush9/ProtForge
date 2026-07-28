@@ -19,6 +19,12 @@ ESMC_MODELS = {
 # The 20 canonical amino acids — saved logit columns for these tokens are all a
 # mutation scan needs (see workflow/scripts/mutation_scan.py).
 CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
+# Residues that can appear in a wild type but are not substitution *targets*.
+# Selenocysteine is a genuine residue in selenoproteins (the deiodinases, the
+# glutathione peroxidases) and has its own ESM-C token, so scoring a Sec-bearing
+# wild type needs its logit column for the LLR denominator. It is not a scan
+# target because Sec insertion requires a SECIS element in the mRNA.
+WT_ONLY_AAS = "U"
 
 
 def _enforce_offline(cache_dir: str | None) -> str | None:
@@ -194,6 +200,31 @@ def embed_batch(model, tokenizer, seqs, label):
     return outputs.last_hidden_state
 
 
+def build_aa_token_ids(tokenizer):
+    """Map each scorable residue letter to its vocabulary column.
+
+    Covers the canonical 20 plus WT_ONLY_AAS. A canonical residue the vocabulary
+    cannot represent is fatal — the LLR math would silently read the unknown
+    token's logit. An optional residue is simply left out, so a tokenizer
+    without a Sec token still yields a usable map for ordinary proteins.
+    """
+    wanted = CANONICAL_AAS + WT_ONLY_AAS
+    ids = tokenizer.convert_tokens_to_ids(list(wanted))
+    unk = getattr(tokenizer, "unk_token_id", None)
+
+    aa_token_ids = {}
+    for aa, tid in zip(wanted, ids):
+        if tid is None or (unk is not None and tid == unk):
+            if aa in CANONICAL_AAS:
+                raise RuntimeError(
+                    f"tokenizer has no token for canonical residue {aa!r} — "
+                    "cannot score mutations against this vocabulary."
+                )
+            continue
+        aa_token_ids[aa] = int(tid)
+    return aa_token_ids
+
+
 def load_logits_model(model_name, hub_cache):
     """Load the LM-head model + tokenizer ONCE for the whole group.
 
@@ -210,11 +241,7 @@ def load_logits_model(model_name, hub_cache):
         model_name, cache_dir=hub_cache, local_files_only=True,
         attn_implementation=_attn_impl(),
     ).cuda().eval()
-    aa_token_ids = {
-        aa: int(tid) for aa, tid in
-        zip(CANONICAL_AAS, tokenizer.convert_tokens_to_ids(list(CANONICAL_AAS)))
-    }
-    return model, tokenizer, aa_token_ids
+    return model, tokenizer, build_aa_token_ids(tokenizer)
 
 
 def logits_batch(model, tokenizer, seqs, label):
