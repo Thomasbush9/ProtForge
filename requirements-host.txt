@@ -36,3 +36,9 @@ py3Dmol>=2.0
 pandas>=1.0
 numpy>=1.20
 tqdm>=4.0
+
+# --- Tests ------------------------------------------------------------------
+# tests/test_fresh_install.py shells out to the `snakemake` binary, so having
+# pytest in the same env as snakemake lets the whole suite run in one place.
+# Elsewhere, point it at the binary: PROTFORGE_SNAKEMAKE=/path/to/snakemake
+pytest>=7.0

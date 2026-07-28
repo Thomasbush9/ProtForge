@@ -11,12 +11,14 @@ Usage:
   snakemake --profile profiles/slurm/ --rerun-incomplete
 """
 
+import os as _os
 import sys as _sys
 import time as _time
 from pathlib import Path as _Path
 
 # Make workflow.scripts importable for any rule helpers we factor out.
 _sys.path.insert(0, str(_Path(workflow.basedir) / "workflow" / "scripts"))
+from snake_helpers import check_stage_assets as _check_stage_assets
 from snake_helpers import expand_config as _expand_config
 from snake_helpers import slurm_identity_errors as _slurm_identity_errors
 from snake_helpers import stage_resource as _stage_resource_impl
@@ -37,6 +39,19 @@ if _identity_errors:
     raise WorkflowError(
         "Edit your config before running:\n  - " + "\n  - ".join(_identity_errors)
     )
+
+# Refuse to plan a run whose images or weight caches do not exist. Without this
+# a dry run of a half-finished install reports a clean DAG and exits 0 — the
+# webapp's preflight caught it, `snakemake -n` did not. Set PROTFORGE_SKIP_ASSET_CHECK=1
+# to plan a DAG on a machine that does not hold the assets (e.g. inspecting a
+# --dag off-cluster).
+if not _os.environ.get("PROTFORGE_SKIP_ASSET_CHECK"):
+    _asset_errors = _check_stage_assets(config)
+    if _asset_errors:
+        raise WorkflowError(
+            "Install is incomplete — these are needed by the stages you enabled:"
+            "\n  - " + "\n  - ".join(_asset_errors)
+        )
 
 # Pipeline start time (wall-clock)
 _PIPELINE_START = _time.time()

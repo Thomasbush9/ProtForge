@@ -139,10 +139,10 @@ boltz:
 esmc:
   models: [600M]
   max_files_per_job: 1
-  cache_dir: /models/hf
+  cache_dir: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf
 esmfold:
   max_files_per_job: 1
-  cache_dir: /models/hf
+  cache_dir: /n/holylfs06/LABS/<your_lab>/Everyone/<you>/models/hf
 
 containers:
   runtime: auto
@@ -160,8 +160,11 @@ slurm:
 
 Each rule builds its own bind set (inputs + shared DBs read-only + the host
 `cache_dir` mapped to `/models/hf`); there is no hand-maintained global bind
-list. `esmc.cache_dir` / `esmfold.cache_dir` are the in-container mount point
-(`/models/hf`), populated on the host by `download_models.py`.
+list. `esmc.cache_dir` / `esmfold.cache_dir` are the **host** dir that
+`download_models.py` populated — the rule binds it in itself with
+`-B {cache_dir}:/models/hf:ro`. Do **not** set them to `/models/hf`: that is the
+in-container mount target, not a config value, and the workflow now refuses to
+start when a configured cache does not exist on the host.
 
 ### Stage inputs and dry-run
 
