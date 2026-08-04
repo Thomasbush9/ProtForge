@@ -69,19 +69,29 @@ app without an activated environment fails on the first rule with
 
 ## Run it
 
-Always run inside `tmux` so the app — and the Snakemake controller it owns —
-survive an SSH disconnect:
-
 ```bash
 ssh <user>@<login-node>          # e.g. holylogin06.rc.fas.harvard.edu
-tmux new -s protforge            # or: tmux attach -t protforge
 cd "$PROTFORGE_ROOT/ProtForge"
 module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
-streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+bash webapp/serve.sh
 ```
 
-Detach with `Ctrl-b d` (the app keeps running). Pick a port unlikely to clash
-with other users (8501 is the default; bump it if it's taken).
+`serve.sh` picks a free port in 15000–20000 rather than a fixed 8501, so
+labmates on the same login node never collide, and prints the `ssh -L` line to
+paste on your laptop. It records the port and PID in
+`~/.protforge/webapp.<node>.state`, so running it again **reattaches** to your
+app instead of starting a second one. The app is `nohup`ed: it (and the
+Snakemake controller it owns) survive your logging out, no `tmux` needed. Use
+`tmux` anyway if you want to watch the Streamlit output live; otherwise it goes
+to `~/.protforge/webapp.<node>.log`.
+
+Other modes: `--status` (is mine up, and where), `--stop` (kill it — submitted
+SLURM jobs keep running), `--print-port` (port alone, for scripts).
+
+Overrides, all optional: `PROTFORGE_PORT` forces a specific port (this is the
+hook for Open OnDemand, which hands you a `$port`), `PROTFORGE_PORT_RANGE`
+changes the candidate range, `PROTFORGE_STREAMLIT` points at a specific
+executable if the host env isn't active.
 
 > **Login-node etiquette:** the app itself is light, but the Snakemake
 > controller runs for the length of the pipeline. That's normal launcher usage,
@@ -96,13 +106,20 @@ least to most setup:
 ### 1. SSH port-forward (works everywhere, fully manual)
 
 ```bash
-ssh -L 8501:localhost:8501 <user>@<login-node>
-# then open http://localhost:8501
+ssh -L <port>:localhost:<port> <user>@<login-node>
+# then open http://localhost:<port>
 ```
 
-`webapp/connect.sh` wraps this: it prompts for your login details, opens the
-tunnel, and starts Streamlit if it isn't already running. Fine for occasional
-use; the annoyance is you must keep the tunnel shell open and rerun it each time.
+`<port>` is whatever `serve.sh` printed on the cluster.
+
+Run `bash webapp/connect.sh` **from your laptop** to skip that bookkeeping: it
+prompts for your login details, starts (or reattaches to) the app over SSH,
+learns the port it landed on, and forwards it. It multiplexes both steps over
+one SSH connection, which matters because login-node names round-robin — a
+second `ssh` can land on a different node than the one running your app.
+
+Fine for occasional use; the annoyance is you must keep the tunnel shell open
+and rerun it each time.
 
 ### 2. VS Code Remote-SSH (recommended — near-automatic, no admin)
 
@@ -163,10 +180,15 @@ want to share it.
 
 ## Troubleshooting
 
-- **`Address already in use`:** another Streamlit (yours or a labmate's) holds
-  the port. Pick a different `--server.port` and forward that one.
-- **App vanished after logout:** you didn't run it in `tmux`. Restart it inside
-  `tmux` (or via an OOD session).
+- **`Address already in use`:** you launched `streamlit run` by hand on a port a
+  labmate holds. Use `bash webapp/serve.sh`, which picks a free one.
+- **Browser shows nothing / connection refused:** your tunnel points at a port
+  or node the app isn't on — most often after a reconnect landed you on a
+  different login node. `bash webapp/serve.sh --status` on each login node says
+  where yours actually is; `connect.sh` handles this for you.
+- **App vanished after logout:** `serve.sh` `nohup`s it, so this means it
+  crashed — check `~/.protforge/webapp.<node>.log`. (If you started it by hand
+  without `nohup`/`tmux`, that's the cause.)
 - **Results tab: "3D viewer needs py3Dmol" / no charts:** install the optional
   deps (`pip install -r webapp/requirements.txt` or `pip install '.[viz]'`).
 - **No SLURM jobs / history shown:** the app shells out to `squeue`/`sacct`;
