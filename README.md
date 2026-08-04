@@ -258,20 +258,26 @@ shortest path from a clone to a running pipeline.
 After [Setup](#setup-kempner), on a login node:
 
 ```bash
-tmux new -s protforge          # so the app survives an SSH disconnect
 module load python && mamba activate "$PROTFORGE_ASSETS/envs/host"
 cd "$PROTFORGE_ROOT/ProtForge"
-streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+bash webapp/serve.sh
 ```
 
 The app launches Snakemake as a child process, so it inherits this shell's
 environment — activate before starting it, not after.
 
-Then from your laptop, tunnel in and open <http://localhost:8501>:
+`serve.sh` claims a free port in 15000–20000 (login nodes are shared, so a fixed
+8501 collides with labmates), keeps the app alive after you log out, and prints
+the tunnel command to run on your laptop:
 
 ```bash
-ssh -L 8501:localhost:8501 <you>@holylogin06.rc.fas.harvard.edu
+ssh -L <port>:localhost:<port> <you>@holylogin06.rc.fas.harvard.edu
+# then open http://localhost:<port>
 ```
+
+Running `bash webapp/connect.sh` on your laptop instead does both halves — start
+or reattach on the cluster, then forward the port it got. `bash webapp/serve.sh
+--status` / `--stop` manage the app afterwards.
 
 ### In the browser
 
