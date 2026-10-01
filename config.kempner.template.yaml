@@ -91,10 +91,16 @@ esmc:
   max_files_per_job: 25
   chunks_per_group: 1      # chunks served per GPU job (amortizes the weight load)
   cache_dir: ${PROTFORGE_ASSETS}/models/hf
+  # Optional raw states in hidden_states.pt; standard outputs.pt is preserved.
+  save_hidden_states: false
+  hidden_layers: all       # 300M: 0..30; 600M: 0..36; 6B: 0..80; or a comma list
+  hidden_pool: none        # none: per-residue; mean: float32 protein-level vectors
+  hidden_dtype: float16    # float16 | bfloat16 | float32; per-residue storage only
+  # SAE reads FASTA or YAML directly, independently of pipeline.esmc and MSA.
   sae:
     enabled: false
     sae_type: all-layers
-    layers: all
+    layers: all           # every trained layer must be cached; or e.g. "18,36"
     max_files_per_job: 25
     chunks_per_group: 1
 

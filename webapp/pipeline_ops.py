@@ -23,6 +23,7 @@ from validate import scan_directory
 # would reject, rather than drifting into a second set of rules.
 from snake_helpers import (  # noqa: E402
     check_stage_assets as _check_stage_assets,
+    esmc_activation_errors,
     expand_config,
     slurm_identity_errors,
 )
@@ -154,13 +155,22 @@ def check_launch_inputs(cfg: dict) -> dict:
         slurm_identity_errors(cfg)
         + check_unexpanded_paths(cfg)
         + check_stage_assets(cfg)
+        + esmc_activation_errors(cfg)
     )
     invalid_groups: list[dict] = []
-    pipeline = cfg.get("pipeline", {})
-    inp = cfg.get("input", {})
+    pipeline = cfg.get("pipeline", {}) or {}
+    inp = expand_config(cfg.get("input", {}) or {}, strict=False)
+    sae_enabled = ((cfg.get("esmc", {}) or {}).get("sae", {}) or {}).get("enabled", False)
 
-    def _collect_invalid(dir_value: str):
+    def _collect_invalid(dir_value: str, expected: str):
         scan = scan_directory(Path(dir_value))
+        label = expected.upper()
+        if scan["file_type"] == "none":
+            errors.append(f"No {label} files found in {dir_value}.")
+        elif scan["file_type"] != expected:
+            errors.append(f"Input directory must contain only {label} files: {dir_value}")
+        elif scan["valid_count"] == 0:
+            errors.append(f"No valid {label} files in {dir_value} (all failed validation).")
         invalid = [
             r for r in (scan["fasta_results"] + scan["yaml_results"]) if not r["valid"]
         ]
@@ -173,38 +183,39 @@ def check_launch_inputs(cfg: dict) -> dict:
             })
         return scan
 
+    # Sequence-only stages honor explicit YAML inputs even while MSA is on.
+    # Otherwise they run directly from FASTA, without waiting for MSA outputs.
+    needs_yaml = not pipeline.get("msa", False) and (
+        pipeline.get("boltz") or pipeline.get("openfold")
+    )
+    needs_seq = pipeline.get("esmc") or pipeline.get("esmfold") or sae_enabled
+    yaml_dir_value = inp.get("yaml_dir", "")
+    fasta_dir_value = inp.get("fasta_dir", "")
+    scanned: set[str] = set()
+    if needs_yaml:
+        if not yaml_dir_value:
+            errors.append(
+                "Boltz/OpenFold3 are enabled with MSA off, but "
+                "input.yaml_dir is not set (they need prebuilt YAMLs)."
+            )
+        elif not Path(yaml_dir_value).is_dir():
+            errors.append(f"YAML input directory does not exist: {yaml_dir_value}")
+        else:
+            _collect_invalid(yaml_dir_value, "yaml")
+            scanned.add(yaml_dir_value)
+    if needs_seq:
+        seq_src = yaml_dir_value or fasta_dir_value
+        if not seq_src:
+            errors.append(
+                "ESMC/ESMFold2/SAE are enabled, but neither "
+                "input.fasta_dir nor input.yaml_dir is set."
+            )
+        elif not Path(seq_src).is_dir():
+            errors.append(f"Input directory does not exist: {seq_src}")
+        elif seq_src not in scanned:
+            _collect_invalid(seq_src, "yaml" if yaml_dir_value else "fasta")
+            scanned.add(seq_src)
     if not pipeline.get("msa", False):
-        # MSA off. ESMC/ESMFold2 can run straight from a FASTA (or YAML) dir;
-        # Boltz/OpenFold3 can't build an MSA themselves, so they need prebuilt
-        # YAMLs. Check the right input source exists for the enabled stages.
-        needs_yaml = pipeline.get("boltz") or pipeline.get("openfold")
-        needs_seq = pipeline.get("esmc") or pipeline.get("esmfold")
-        yaml_dir_value = inp.get("yaml_dir", "")
-        fasta_dir_value = inp.get("fasta_dir", "")
-        scanned: set[str] = set()
-        if needs_yaml:
-            if not yaml_dir_value:
-                errors.append(
-                    "Boltz/OpenFold3 are enabled with MSA off, but "
-                    "input.yaml_dir is not set (they need prebuilt YAMLs)."
-                )
-            elif not Path(yaml_dir_value).is_dir():
-                errors.append(f"YAML input directory does not exist: {yaml_dir_value}")
-            else:
-                _collect_invalid(yaml_dir_value)
-                scanned.add(yaml_dir_value)
-        if needs_seq:
-            # esmc/esmfold precedence: explicit yaml_dir, else the FASTA dir.
-            seq_src = yaml_dir_value or fasta_dir_value
-            if not seq_src:
-                errors.append(
-                    "ESMC/ESMFold2 are enabled with MSA off, but neither "
-                    "input.fasta_dir nor input.yaml_dir is set."
-                )
-            elif not Path(seq_src).is_dir():
-                errors.append(f"Input directory does not exist: {seq_src}")
-            elif seq_src not in scanned:
-                _collect_invalid(seq_src)
         return {"errors": errors, "invalid_groups": invalid_groups}
 
     fasta_dir_value = inp.get("fasta_dir", "")
@@ -227,7 +238,7 @@ def check_launch_inputs(cfg: dict) -> dict:
         return {"errors": errors, "invalid_groups": invalid_groups}
 
     invalid_fastas = [r for r in scan_result["fasta_results"] if not r["valid"]]
-    if invalid_fastas:
+    if invalid_fastas and fasta_dir_value not in scanned:
         invalid_groups.append({
             "dir": fasta_dir_value,
             "scan_result": scan_result,

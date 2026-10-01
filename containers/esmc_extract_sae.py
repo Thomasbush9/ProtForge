@@ -1,3 +1,4 @@
+import json
 import os
 from argparse import ArgumentParser
 from pathlib import Path
@@ -23,6 +24,8 @@ DEFAULT_LAYERS = {
     "600M": [18, 36],
     "300M": [12, 24],
 }
+
+MODEL_DEPTHS = {"300M": 30, "600M": 36, "6B": 80}
 
 
 def _enforce_offline(cache_dir: str | None) -> str | None:
@@ -109,38 +112,65 @@ def resolve_sae_repo(size: str, sae_type: str, override: str | None) -> str:
         raise ValueError(f"Unknown --sae {sae_type!r}; choose from {list(SAE_REPOS)}") from exc
 
 
-def discover_all_layers(hub_cache: str | None, sae_repo: str) -> list[int]:
-    """Enumerate every layer_<id>.safetensors shard cached for an SAE repo.
-
-    Used for --layers all: the all-layers SAE repo ships one shard per trained
-    layer, so the layer set is whatever is present in the local snapshot.
-    """
+def resolve_sae_snapshot(hub_cache: str | None, sae_repo: str) -> Path:
+    """Choose one cached revision, matching refs/main rather than mixing shards."""
     if not hub_cache:
-        raise ValueError("--layers all requires a populated --cache to enumerate SAE shards")
-    repo_dir = Path(hub_cache) / f"models--{sae_repo.replace('/', '--')}" / "snapshots"
-    ids: set[int] = set()
-    for shard in repo_dir.glob("*/layer_*.safetensors"):
-        try:
-            ids.add(int(shard.stem[len("layer_"):]))
-        except ValueError:
-            continue
-    if not ids:
-        raise FileNotFoundError(
-            f"No layer_*.safetensors under {repo_dir}; cannot resolve --layers all"
-        )
-    return sorted(ids)
+        raise ValueError("SAE extraction requires a populated --cache")
+    repo_dir = Path(hub_cache) / f"models--{sae_repo.replace('/', '--')}"
+    ref = repo_dir / "refs" / "main"
+    if ref.is_file():
+        revision = ref.read_text().strip()
+        snapshot = repo_dir / "snapshots" / revision
+        if not revision or not snapshot.is_dir():
+            raise FileNotFoundError(f"SAE refs/main points to missing snapshot: {snapshot}")
+        return snapshot
+    snapshots = sorted(p for p in (repo_dir / "snapshots").glob("*") if p.is_dir())
+    if not snapshots:
+        raise FileNotFoundError(f"No cached SAE snapshot under {repo_dir}")
+    if len(snapshots) != 1:
+        raise ValueError(f"Multiple SAE snapshots under {repo_dir} without refs/main")
+    return snapshots[0]
+
+
+def discover_all_layers(hub_cache: str | None, sae_repo: str) -> list[int]:
+    """Read the full trained layer set from the chosen snapshot's metadata."""
+    snapshot = resolve_sae_snapshot(hub_cache, sae_repo)
+    with (snapshot / "config.json").open() as handle:
+        metadata = json.load(handle)
+    layers = metadata.get("available_layers")
+    if (not isinstance(layers, list) or not layers
+            or any(type(layer) is not int or layer < 0 for layer in layers)
+            or len(set(layers)) != len(layers)):
+        raise ValueError(f"{snapshot}/config.json: invalid or missing available_layers")
+    return sorted(layers)
 
 
 def parse_layers(layers: str | None, size: str, hub_cache: str | None, sae_repo: str) -> list[int]:
-    if layers and layers.strip().lower() == "all":
-        return discover_all_layers(hub_cache, sae_repo)
-    if layers:
-        return [int(x.strip()) for x in layers.split(",") if x.strip()]
-    if size in DEFAULT_LAYERS:
-        return DEFAULT_LAYERS[size]
-    raise ValueError(
-        f"No default SAE layers for --size {size!r}; pass --layers (comma-separated, or 'all')"
-    )
+    if size not in MODEL_DEPTHS:
+        raise ValueError(f"Unknown --size {size!r}")
+    if layers is None:
+        selected = list(DEFAULT_LAYERS[size])
+    elif layers.strip().lower() == "all":
+        selected = discover_all_layers(hub_cache, sae_repo)
+    else:
+        parts = [part.strip() for part in layers.split(",")]
+        if not parts or any(not part.isascii() or not part.isdigit() for part in parts):
+            raise ValueError("--layers must be 'all' or comma-separated non-negative integers")
+        selected = [int(part) for part in parts]
+    if len(set(selected)) != len(selected):
+        raise ValueError("--layers contains duplicate indices")
+    if any(layer < 0 or layer > MODEL_DEPTHS[size] for layer in selected):
+        raise ValueError(f"--layers must be within 0..{MODEL_DEPTHS[size]} for {size}")
+    available = discover_all_layers(hub_cache, sae_repo)
+    unavailable = sorted(set(selected) - set(available))
+    if unavailable:
+        raise ValueError(f"SAE {sae_repo} has no trained layers {unavailable}")
+    snapshot = resolve_sae_snapshot(hub_cache, sae_repo)
+    missing = [f"layer_{layer}.safetensors" for layer in selected
+               if not (snapshot / f"layer_{layer}.safetensors").is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing SAE shards in {snapshot}: {', '.join(missing)}")
+    return selected
 
 
 def sequence_from_yaml(yaml_path: str) -> str:
@@ -154,17 +184,40 @@ def sequence_from_yaml(yaml_path: str) -> str:
     return str(entry["protein"]["sequence"]).strip()
 
 
+def sequence_from_fasta(path: Path) -> str:
+    """Return the sequence of the single record, matching the embedding runner."""
+    records, cur = [], []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if cur:
+                records.append("".join(cur))
+                cur = []
+        else:
+            cur.append(line)
+    if cur:
+        records.append("".join(cur))
+    if not records:
+        raise ValueError(f"{path}: no sequence found")
+    if len(records) > 1:
+        raise ValueError(f"{path}: expected one sequence per FASTA, found {len(records)}")
+    return records[0]
+
+
 def parse_inputs(input_dir: str) -> dict[str, str]:
-    """Map YAML stem -> sequence for every *.yaml in a chunk directory."""
-    paths = sorted(Path(input_dir).glob("*.yaml"))
+    """Map file stems to sequences from YAML or single-record FASTA inputs."""
+    base = Path(input_dir)
+    paths = sorted([*base.glob("*.yaml"), *base.glob("*.fasta"), *base.glob("*.fa")])
     if not paths:
-        raise FileNotFoundError(f"No *.yaml in {input_dir}")
+        raise FileNotFoundError(f"No *.yaml/*.fasta/*.fa in {input_dir}")
     out: dict[str, str] = {}
     for p in paths:
         stem = p.stem
         if stem in out:
             raise ValueError(f"Duplicate stem {stem!r} in {input_dir}")
-        out[stem] = sequence_from_yaml(str(p))
+        out[stem] = sequence_from_yaml(str(p)) if p.suffix == ".yaml" else sequence_from_fasta(p)
     return out
 
 
@@ -182,6 +235,7 @@ def load_model_with_sae(
     layer_ids: list[int],
 ):
     """Load the ESMC model + tokenizer and attach the requested SAE layers."""
+    sae_snapshot = resolve_sae_snapshot(hub_cache, sae_repo)
     print(f"Loading {model_repo}...", flush=True)
     model = ESMCModel.from_pretrained(
         model_repo,
@@ -198,7 +252,7 @@ def load_model_with_sae(
 
     print(f"Loading {sae_repo} (layers {layer_ids})...", flush=True)
     sae = AutoModel.from_pretrained(
-        sae_repo,
+        str(sae_snapshot),
         allow_patterns=sae_allow_patterns(layer_ids),
         cache_dir=hub_cache,
         local_files_only=bool(hub_cache),
@@ -272,7 +326,7 @@ def save_sae(output_dir: str, name: str, size: str, sae_type: str,
     for key, tensor in layer_acts.items():
         safe = str(key).replace("/", "_")
         torch.save(
-            {"activations": tensor, "layer": key, "name": name,
+            {"activations": tensor.clone(), "layer": key, "name": name,
              "size": size, "sae_type": sae_type},
             out_dir / f"sae_{safe}.pt",
         )
@@ -298,7 +352,7 @@ if __name__ == "__main__":
     # --input-dirs (parallel to --output-dirs) — group persistence. Debug mode
     # (--yaml / --sequence) prints per-residue shapes for one sequence.
     parser.add_argument("--input-dirs", nargs="+", default=None,
-                        help="Chunk directories of YAMLs to encode (group)")
+                        help="Chunk directories of YAML or FASTA inputs to encode (group)")
     parser.add_argument("--output-dirs", nargs="+", default=None,
                         help="Per-chunk output roots, parallel to --input-dirs")
     parser.add_argument("--token-budget", type=int, default=None,

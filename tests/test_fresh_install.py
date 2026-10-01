@@ -22,6 +22,7 @@ Skip with `-m "not slow"`; run alone with `-m slow`.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -97,6 +98,15 @@ def fresh_install(tmp_path_factory):
     # Existence-only checks, so empty files stand in for ~30 GB of images.
     for stage in ("msa", "boltz", "esm", "openfold"):
         (assets / "sifs" / f"{stage}.sif").touch()
+    # SAE preflight checks the advertised layer shards, not just the cache dir.
+    sae_repo = assets / "models/hf/hub/models--biohub--ESMC-600M-sae-k64-codebook16384"
+    snapshot = sae_repo / "snapshots/fresh-install-test"
+    snapshot.mkdir(parents=True)
+    (sae_repo / "refs").mkdir()
+    (sae_repo / "refs/main").write_text(snapshot.name)
+    (snapshot / "config.json").write_text(json.dumps({"available_layers": list(range(37))}))
+    for layer in range(37):
+        (snapshot / f"layer_{layer}.safetensors").touch()
 
     (workspace / "data/fastas/ubiquitin.fasta").write_text(f">ubiquitin\n{UBIQUITIN}\n")
 

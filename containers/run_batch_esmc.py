@@ -180,12 +180,16 @@ def load_embed_model(model_name, hub_cache):
 
 
 def embed_batch(model, tokenizer, seqs, label):
-    """Forward one length-bucketed micro-batch. Returns last_hidden_state on the
-    device; the caller slices each row to its real length. Padded positions are
-    masked inside ESMCModel (FA2 unpad / sdpa sequence_id), so per-row hidden
-    states are uncontaminated by neighbours in the batch."""
-    inputs = tokenizer(seqs, return_tensors="pt", padding=True)
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    """Forward one length-bucketed micro-batch. Returns (last_hidden_state,
+    special_tokens_mask, attention_mask); the caller selects each row's real
+    residue positions. Padded positions are masked inside ESMCModel (FA2 unpad /
+    sdpa sequence_id), so per-row hidden states are uncontaminated by neighbours
+    in the batch."""
+    enc = tokenizer(
+        seqs, return_tensors="pt", padding=True, return_special_tokens_mask=True,
+    )
+    inputs = {k: v.to(model.device)
+              for k, v in enc.items() if k in ("input_ids", "attention_mask")}
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     _t0 = time.perf_counter()
@@ -197,7 +201,117 @@ def embed_batch(model, tokenizer, seqs, label):
         torch.cuda.synchronize()
     print(f"BENCH_INFER_S {label} rows={len(seqs)} "
           f"{time.perf_counter() - _t0:.4f}", flush=True)
-    return outputs.last_hidden_state
+    return (outputs.last_hidden_state,
+            enc["special_tokens_mask"], enc["attention_mask"])
+
+
+def _real_residue_index(special_mask, attn_mask, idx, seq_len, name):
+    """Boolean mask over the token axis selecting sequence `idx`'s real residues.
+
+    The ESM-C tokenizer wraps every sequence in BOS/EOS, so a positional
+    `[:seq_len]` slice would return BOS plus residues 1..L-1 and silently drop
+    the last residue. Select by mask instead, and fail loudly if the count does
+    not match the sequence length — a mismatch means the saved rows are not the
+    residues the caller thinks they are.
+    """
+    real = (special_mask[idx] == 0) & (attn_mask[idx] == 1)
+    n = int(real.sum())
+    if n != seq_len:
+        raise SystemExit(
+            f"{name}: {n} real-residue token positions != sequence length "
+            f"{seq_len}. Token/residue alignment is off — fix before trusting "
+            "any embedding derived from these hidden states."
+        )
+    return real
+
+
+def hidden_states_batch(model, tokenizer, seqs, label):
+    """Forward one micro-batch with `output_hidden_states=True`.
+
+    ESMCModel returns hidden_states as a single STACKED tensor of shape
+    (n_layers + 1, batch, tokens, d_model) — not the usual HF tuple. Index 0 is
+    the embedding output (input to block 0), index i is the input to block i,
+    and index n_layers is the post-final-LayerNorm output, identical to
+    last_hidden_state. Returns the final embeddings, stack, and masks needed to
+    pick out real residues per row.
+    """
+    enc = tokenizer(
+        seqs, return_tensors="pt", padding=True, return_special_tokens_mask=True,
+    )
+    inputs = {k: v.to(model.device)
+              for k, v in enc.items() if k in ("input_ids", "attention_mask")}
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    _t0 = time.perf_counter()
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=AUTOCAST_DTYPE, enabled=AUTOCAST_DTYPE is not None
+    ):
+        outputs = model(**inputs, output_hidden_states=True)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    print(f"BENCH_INFER_S {label} rows={len(seqs)} "
+          f"{time.perf_counter() - _t0:.4f}", flush=True)
+    return (outputs.last_hidden_state, outputs.hidden_states,
+            enc["special_tokens_mask"], enc["attention_mask"])
+
+
+def parse_layer_spec(spec: str, n_states: int) -> list[int]:
+    """Resolve --hidden-layers into concrete indices over an (n_states, ...) stack.
+
+    `n_states` is n_layers + 1: index 0 is the embedding output and index
+    n_layers is the post-final-LayerNorm output. "all" keeps every state; a
+    comma list selects a panel (e.g. "0,9,18,27,36" for 600M). Out-of-range
+    indices are a hard error rather than a silent clamp — asking for layer 36 of
+    a 30-block checkpoint means the panel was written for a different model, and
+    quietly returning layer 30 would mislabel the saved features.
+    """
+    if spec.strip().lower() == "all":
+        return list(range(n_states))
+    try:
+        idx = [int(tok) for tok in spec.split(",") if tok.strip()]
+    except ValueError:
+        raise SystemExit(f"--hidden-layers: not a comma list of ints: {spec!r}")
+    if not idx:
+        raise SystemExit("--hidden-layers: empty selection")
+    bad = [i for i in idx if i < 0 or i >= n_states]
+    if bad:
+        raise SystemExit(
+            f"--hidden-layers: index/indices {bad} out of range for a "
+            f"checkpoint with {n_states} hidden states (0..{n_states - 1})."
+        )
+    if len(set(idx)) != len(idx):
+        raise SystemExit(f"--hidden-layers: duplicate indices in {spec!r}")
+    return idx
+
+
+def save_hidden_states(output_dir: str, name: str, size: str,
+                       hidden: "torch.Tensor", layers: list[int],
+                       n_states: int, pool: str, n_residues: int) -> None:
+    """Persist one sequence's selected per-layer hidden states.
+
+    `hidden` is (len(layers), L_real, d_model) unpooled, or (len(layers),
+    d_model) when `pool` is "mean" — already sliced to real residues and moved
+    to CPU by the batched caller. `layers` records which ESM-C state each row
+    is, so a pooled file is self-describing: row j is layer `layers[j]`, where
+    0 = embedding output and n_layers = final post-norm output.
+    """
+    out_dir = Path(output_dir) / name / size
+    out_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "hidden_states": hidden,
+            "name": name,
+            "size": size,
+            "layers": list(layers),
+            "n_layers": n_states - 1,
+            "pool": pool,
+            "n_residues": int(n_residues),
+            "layer_index": "row j of hidden_states is layer layers[j]; "
+                           "0 = embedding output; n_layers = final post-norm "
+                           "(== last_hidden_state)",
+        },
+        out_dir / "hidden_states.pt",
+    )
 
 
 def build_aa_token_ids(tokenizer):
@@ -295,15 +409,8 @@ def _real_residue_logits(logits, special_mask, attn_mask, idx, seq_len, name):
     equal the sequence length — that mismatch means logit rows are misaligned
     with residues and any LLR derived from them would be silently wrong.
     """
-    real = (special_mask[idx] == 0) & (attn_mask[idx] == 1)
-    rows = logits[idx][real]
-    if rows.shape[0] != seq_len:
-        raise SystemExit(
-            f"{name}: {rows.shape[0]} real-residue logit rows != sequence length "
-            f"{seq_len}. Token/residue alignment is off — fix before trusting "
-            "any mutation scan derived from these logits."
-        )
-    return rows
+    return logits[idx][_real_residue_index(special_mask, attn_mask, idx,
+                                           seq_len, name)]
 
 
 def _gather_group(input_dirs, output_dirs):
@@ -341,7 +448,39 @@ if __name__ == "__main__":
              "aa_token_ids.json) for zero-shot mutation scanning instead of "
              "embeddings. Loads the LM-head model (AutoModelForMaskedLM).",
     )
+    parser.add_argument(
+        "--save-hidden-states", action="store_true",
+        help="Save selected raw layer states to hidden_states.pt in addition "
+             "to the usual final embeddings in outputs.pt. Keeping every "
+             "layer can use ~(n_layers+1)x the default embedding storage.",
+    )
+    parser.add_argument(
+        "--hidden-dtype", default="float16",
+        choices=["float16", "bfloat16", "float32"],
+        help="Storage dtype for --save-hidden-states. The forward pass runs "
+             "under bf16 autocast regardless, so float32 stores upcast bf16 "
+             "values and doubles the file size for no added precision. "
+             "Ignored when --hidden-pool is mean (pooled means are float32).",
+    )
+    parser.add_argument(
+        "--hidden-layers", default="all",
+        help="Which hidden states --save-hidden-states keeps: 'all' or a comma "
+             "list of indices, e.g. '0,9,18,27,36'. Index 0 is the embedding "
+             "output and index n_layers the post-final-LayerNorm output, so a "
+             "600M checkpoint (36 blocks) offers 0..36. Selecting a panel is "
+             "what makes a whole-proteome depth sweep affordable on disk.",
+    )
+    parser.add_argument(
+        "--hidden-pool", default="none", choices=["none", "mean"],
+        help="Pooling applied across real residues before saving. 'mean' "
+             "reduces each kept layer to one d_model vector (accumulated in "
+             "float32, saved float32), turning a per-residue tensor into the "
+             "protein-level feature row a probe consumes. 'none' keeps the "
+             "full (layers, L, d_model) tensor.",
+    )
     args = parser.parse_args()
+    if args.save_logits and args.save_hidden_states:
+        parser.error("--save-logits and --save-hidden-states are mutually exclusive")
     if len(args.input_dirs) != len(args.output_dirs):
         parser.error("--input-dirs and --output-dirs must be equal length")
     hub_cache = _enforce_offline(args.cache)
@@ -369,12 +508,61 @@ if __name__ == "__main__":
                         len_by_tag[tag], name_by_tag[tag])
                     save_logits_outputs(out_by_tag[tag], name_by_tag[tag],
                                         size, rows, aa_token_ids)
+        elif args.save_hidden_states:
+            model, tokenizer = load_embed_model(model_name, hub_cache)
+            store_dtype = getattr(torch, args.hidden_dtype)
+            # Every collected layer is re-padded to the batch's max length
+            # before stacking, so the (n_layers+1, rows, max_len, d) stack costs
+            # rows*max_len regardless of FlashAttention's unpadding — size the
+            # micro-batch with the padded cost model, and shrink the budget by
+            # the layer count so peak memory matches the last-layer-only path.
+            hs_budget = args.token_budget or max(
+                1, DEFAULT_TOKEN_BUDGET.get(size, 16000) // 8)
+            layer_sel = None
+            for batch_tags in token_budget_batches(
+                    tags, sequences, hs_budget, pad_free=False):
+                seqs = [seq_by_tag[t] for t in batch_tags]
+                hidden, stack, special_mask, attn_mask = hidden_states_batch(
+                    model, tokenizer, seqs, f"{model_name}:{size}")
+                if layer_sel is None:
+                    n_states = int(stack.shape[0])
+                    layer_sel = parse_layer_spec(args.hidden_layers, n_states)
+                    print(f"HIDDEN_LAYERS size={size} n_states={n_states} "
+                          f"selected={layer_sel} pool={args.hidden_pool}",
+                          flush=True)
+                idx = torch.as_tensor(layer_sel, device=stack.device)
+                for row, tag in enumerate(batch_tags):
+                    real = _real_residue_index(
+                        special_mask, attn_mask, row,
+                        len_by_tag[tag], name_by_tag[tag])
+                    final = hidden[row][real.to(hidden.device)].cpu()
+                    save_outputs(out_by_tag[tag], name_by_tag[tag], size, final)
+                    # index_select on the layer axis and boolean-mask on the
+                    # token axis both allocate fresh storage, so the saved
+                    # tensor never aliases the whole batch stack. torch.save
+                    # serializes a view's ENTIRE backing storage, which here
+                    # would be every layer of every sequence in the batch.
+                    sel = stack[:, row].index_select(0, idx)[:, real.to(stack.device)]
+                    if args.hidden_pool == "mean":
+                        # float32 accumulation: a bf16 sum over thousands of
+                        # residues loses low-order bits well before the mean.
+                        h = sel.float().mean(dim=1).cpu().clone()
+                    else:
+                        h = sel.to(store_dtype).cpu().clone()
+                    save_hidden_states(
+                        out_by_tag[tag], name_by_tag[tag], size, h,
+                        layer_sel, n_states, args.hidden_pool, len_by_tag[tag])
+                del hidden, stack
         else:
             model, tokenizer = load_embed_model(model_name, hub_cache)
             pad_free = getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
             for batch_tags in token_budget_batches(tags, sequences, budget, pad_free):
                 seqs = [seq_by_tag[t] for t in batch_tags]
-                hidden = embed_batch(model, tokenizer, seqs, f"{model_name}:{size}")
+                hidden, special_mask, attn_mask = embed_batch(
+                    model, tokenizer, seqs, f"{model_name}:{size}")
                 for row, tag in enumerate(batch_tags):
-                    h = hidden[row, :len_by_tag[tag]].cpu()
+                    real = _real_residue_index(
+                        special_mask, attn_mask, row,
+                        len_by_tag[tag], name_by_tag[tag])
+                    h = hidden[row][real.to(hidden.device)].cpu()
                     save_outputs(out_by_tag[tag], name_by_tag[tag], size, h)

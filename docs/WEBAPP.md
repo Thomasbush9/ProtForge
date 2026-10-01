@@ -141,8 +141,10 @@ want to share it.
 
 1. **Sessions** (sidebar): a `Default` session is created automatically. Create
    one per experiment; "Clone config from" copies an existing session's settings.
-2. **Configuration → Input / Output:** set the FASTA dir (MSA on) or YAML dir
-   (MSA off) and the output dir. The page auto-scans and shows sequence stats.
+2. **Configuration → Input / Output:** set the FASTA dir and output dir.
+   ESMC, SAE and ESMFold2 can use FASTA directly with MSA off. A YAML dir
+   overrides FASTA for those stages; Boltz/OpenFold require YAML when MSA is off.
+   The page auto-scans and shows sequence stats.
    Use **Import** to copy/validate files from elsewhere on the cluster, or to
    generate inputs from a CSV/TSV or random mutations.
 3. **Configuration:** toggle stages, set per-stage resources/partitions, then
@@ -150,6 +152,42 @@ want to share it.
 4. **Run Pipeline:** check the dry run, tick the confirm box, and **Launch**.
 5. **Job Monitor:** watch progress bars and SLURM jobs (auto-refreshes).
 6. **Results:** once structures land, view them in 3D and check the run analytics.
+
+## ESM-C embeddings, raw layers and SAE features
+
+These are separate outputs under **Configuration → ESMC Settings**:
+
+- Enable the **ESMC** pipeline stage for standard final-layer embeddings in
+  `sequences/{protein}/esmc/{size}/outputs.pt` (`last_hidden_state`).
+- Optionally enable **Save raw layer activations**. Set **Raw hidden-state
+  layers** to a comma-separated list, such as `30,60` for 6B, or `all`.
+  `hidden_states.pt` stores the selected states and their layer IDs alongside
+  the standard embeddings; it does not replace `outputs.pt`.
+- Independently enable **Extract SAE activations**, select an **SAE type** and
+  **SAE layers**. SAE features go to
+  `sequences/{protein}/sae/{size}/{sae_type}/sae_*.pt`. No MSA or prior
+  embedding run is required. Subsequent SAE extractions preserve other layers
+  and types, replacing only files produced at the same paths.
+
+Raw state indices are `0..30` for 300M, `0..36` for 600M and `0..80` for 6B.
+Index 0 is the initial embedding state; the highest index is the final
+normalized representation. A selection must be valid for every selected size.
+**Per residue** keeps one vector per amino acid per layer; **Mean over
+residues** keeps one float32 vector per protein per layer. The precision
+selector applies only to per-residue storage.
+
+Raw hidden states and SAE features are not interchangeable. SAE selections
+must exist in the chosen SAE repository and be fully downloaded into the
+configured HF cache. `all` means all layers advertised by that repository, not
+just the shards already downloaded. The configuration page and launch
+preflight report invalid layers and missing shards; jobs run offline.
+
+Saving all raw states can consume substantially more GPU memory and disk.
+Selecting fewer layers reduces saved data, but the current extractor still
+collects the full hidden-state stack during inference. Mean pooling reduces
+saved data further. To split a raw-state file into correctly numbered
+`layer_30.pt`, `layer_60.pt`, etc., use `containers/extract_esmc_layer.py` on the
+output tree; it reads `hidden_states.pt` and supports pooled vectors too.
 
 ## Stopping & lifecycle
 

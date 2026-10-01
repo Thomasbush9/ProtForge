@@ -23,6 +23,7 @@ from snake_helpers import expand_config as _expand_config
 from snake_helpers import slurm_identity_errors as _slurm_identity_errors
 from snake_helpers import stage_resource as _stage_resource_impl
 from snake_helpers import stage_uses_gpu as _stage_uses_gpu_impl
+from snake_helpers import esmc_activation_errors as _esmc_activation_errors
 from binning import chunk_resource as _chunk_resource_impl
 
 configfile: "config.yaml"
@@ -52,6 +53,13 @@ if not _os.environ.get("PROTFORGE_SKIP_ASSET_CHECK"):
             "Install is incomplete — these are needed by the stages you enabled:"
             "\n  - " + "\n  - ".join(_asset_errors)
         )
+_activation_errors = _esmc_activation_errors(
+    config, check_cache=not bool(_os.environ.get("PROTFORGE_SKIP_ASSET_CHECK"))
+)
+if _activation_errors:
+    raise WorkflowError(
+        "Invalid ESMC activation configuration:\n  - " + "\n  - ".join(_activation_errors)
+    )
 
 # Pipeline start time (wall-clock)
 _PIPELINE_START = _time.time()
@@ -59,11 +67,11 @@ _PIPELINE_START = _time.time()
 RUN_MSA     = config["pipeline"].get("msa", True)
 RUN_BOLTZ   = config["pipeline"].get("boltz", True)
 # ESM-C embeddings + ESMFold2 structure prediction. Default OFF so a minimal
-# MSA->Boltz config does not pull them in. Both run off the MSA-stage YAMLs.
+# MSA->Boltz config does not pull them in. Both can read sequences directly.
 RUN_ESMC    = config["pipeline"].get("esmc", False)
 RUN_ESMFOLD = config["pipeline"].get("esmfold", False)
 # ESMC SAE extraction. Gated by esmc.sae.enabled (independent of RUN_ESMC) so it
-# can run standalone against YAMLs from a previous embedding run.
+# can run standalone directly from FASTA or YAML inputs without embeddings.
 RUN_ESMC_SAE = config.get("esmc", {}).get("sae", {}).get("enabled", False)
 # OpenFold3 structure prediction. Runs off the MSA-stage YAMLs in parallel with
 # Boltz; default OFF. Outputs -> sequences/{seq}/openfold/.

@@ -9,6 +9,7 @@ The Snakefile thin-wraps these to keep the rule-side call signatures terse
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -145,6 +146,7 @@ def check_stage_assets(cfg: dict, placeholder_hint: str = "") -> list[str]:
     pipeline = cfg.get("pipeline", {}) or {}
     containers = cfg.get("containers", {}) or {}
     shared_gpu = containers.get("gpu", "")
+    sae_enabled = ((cfg.get("esmc", {}) or {}).get("sae", {}) or {}).get("enabled", False)
 
     def _placeholder_error(key: str, raw: str, var: str) -> str:
         # An unresolved ${VAR} is not a missing asset. Saying "build it" here
@@ -156,7 +158,7 @@ def check_stage_assets(cfg: dict, placeholder_hint: str = "") -> list[str]:
         return f"{msg} {placeholder_hint}".rstrip() if placeholder_hint else msg
 
     for stage, (container_key, cache_key) in _STAGE_ASSETS.items():
-        if not pipeline.get(stage):
+        if not pipeline.get(stage) and not (stage == "esmc" and sae_enabled):
             continue
 
         sif = containers.get(container_key, "") or shared_gpu
@@ -169,7 +171,7 @@ def check_stage_assets(cfg: dict, placeholder_hint: str = "") -> list[str]:
             errors.append(
                 _placeholder_error(f"containers.{container_key}", sif, var)
             )
-        elif not Path(os.path.expandvars(sif)).exists():
+        elif not Path(os.path.expanduser(os.path.expandvars(sif))).is_file():
             # Report where we actually looked, not the raw ${VAR} form.
             errors.append(
                 f"{stage} container image not found: {os.path.expandvars(sif)} — "
@@ -178,15 +180,15 @@ def check_stage_assets(cfg: dict, placeholder_hint: str = "") -> list[str]:
             )
 
         if cache_key:
-            cache = cfg.get(cache_key[0], {}).get(cache_key[1], "")
+            cache = (cfg.get(cache_key[0], {}) or {}).get(cache_key[1], "")
             cache_var = unexpanded_var(cache)
             key_name = f"{cache_key[0]}.{cache_key[1]}"
             if not cache:
                 errors.append(f"{stage} is enabled but {key_name} is not set.")
             elif cache_var:
                 errors.append(_placeholder_error(key_name, cache, cache_var))
-            elif not Path(os.path.expandvars(cache)).is_dir():
-                resolved = os.path.expandvars(cache)
+            elif not Path(os.path.expanduser(os.path.expandvars(cache))).is_dir():
+                resolved = os.path.expanduser(os.path.expandvars(cache))
                 errors.append(
                     f"{stage} model cache not found: {resolved} — download "
                     f"weights with `python scripts/download_models.py "
@@ -219,3 +221,149 @@ def stage_uses_gpu(slurm_cfg: dict, stage: str, default: bool) -> bool:
     if gpus is None:
         return default
     return int(gpus) > 0
+
+
+_ESMC_DEPTHS = {"300M": 30, "600M": 36, "6B": 80}
+_SAE_REPOS = {
+    "all-layers": "biohub/ESMC-{size}-sae-k64-codebook16384",
+    "mlp": "biohub/ESMC-{size}-sae-mlp-k64-codebook131072",
+}
+
+
+def parse_esmc_layer_selection(value, size) -> list[int] | None:
+    """Parse a layer selection against the model's inclusive hidden-state range."""
+    if not isinstance(size, str) or size not in _ESMC_DEPTHS:
+        raise ValueError(f"Unknown ESM-C size {size!r}; choose 300M, 600M, or 6B.")
+    text = str(value).strip()
+    if text.lower() == "all":
+        return None
+    parts = [part.strip() for part in text.split(",")]
+    if not parts or any(re.fullmatch(r"[0-9]+", part) is None for part in parts):
+        raise ValueError(
+            f"Layers must be 'all' or comma-separated non-negative integers, got {value!r}."
+        )
+    layers = [int(part) for part in parts]
+    if len(set(layers)) != len(layers):
+        raise ValueError(f"Layers must be distinct, got {value!r}.")
+    depth = _ESMC_DEPTHS[size]
+    if any(layer > depth for layer in layers):
+        raise ValueError(f"Layers for {size} must be in 0..{depth}, got {value!r}.")
+    return layers
+
+
+def _sae_snapshot(cache: Path, repo: str) -> Path:
+    """Resolve one local revision, never combining files from different snapshots."""
+    root = cache / "hub" / f"models--{repo.replace('/', '--')}"
+    ref = root / "refs" / "main"
+    if ref.exists() or ref.is_symlink():
+        revision = ref.read_text().strip()
+        if not revision or Path(revision).name != revision:
+            raise ValueError(f"Invalid cached main revision in {ref}.")
+        snapshot = root / "snapshots" / revision
+        if not snapshot.is_dir():
+            raise ValueError(f"Cached main snapshot not found: {snapshot}.")
+        return snapshot
+    snapshots = sorted(p for p in (root / "snapshots").glob("*") if p.is_dir())
+    if len(snapshots) != 1:
+        raise ValueError(
+            f"Cannot select cached SAE snapshot for {repo}: expected refs/main "
+            f"or one snapshot in {root / 'snapshots'}. Download the selected SAE repo."
+        )
+    return snapshots[0]
+
+
+def esmc_activation_errors(cfg, *, check_cache: bool = True) -> list[str]:
+    """Validate active outputs; off-cluster DAG planning may skip cache checks."""
+    errors: list[str] = []
+    esmc = cfg.get("esmc", {}) or {}
+    sae = esmc.get("sae", {}) or {}
+    embeddings_enabled = (cfg.get("pipeline", {}) or {}).get("esmc", False)
+    sae_enabled = sae.get("enabled", False)
+    if not embeddings_enabled and not sae_enabled:
+        return errors
+
+    def sizes_for(value, key):
+        if not isinstance(value, (list, tuple)) or not value:
+            errors.append(f"{key} must select at least one ESM-C size: 300M, 600M, or 6B.")
+            return []
+        sizes = []
+        for size in value:
+            if not isinstance(size, str) or size not in _ESMC_DEPTHS:
+                errors.append(f"{key} has unsupported size {size!r}; choose 300M, 600M, or 6B.")
+            elif size not in sizes:
+                sizes.append(size)
+        return sizes
+
+    models = esmc.get("models", ["6B"])
+    if embeddings_enabled:
+        model_sizes = sizes_for(models, "esmc.models")
+        if esmc.get("save_hidden_states", False):
+            for key, allowed, default in (
+                ("hidden_pool", ("none", "mean"), "none"),
+                ("hidden_dtype", ("float16", "bfloat16", "float32"), "float16"),
+            ):
+                if esmc.get(key, default) not in allowed:
+                    errors.append(f"esmc.{key} must be {'|'.join(allowed)}.")
+            for size in model_sizes:
+                try:
+                    parse_esmc_layer_selection(esmc.get("hidden_layers", "all"), size)
+                except ValueError as exc:
+                    errors.append(f"esmc.hidden_layers: {exc}")
+
+    if not sae_enabled:
+        return errors
+    # An omitted/empty SAE subset inherits embedding sizes, matching the rule.
+    sae_sizes = sizes_for(sae.get("sizes") or models, "esmc.sae.sizes / esmc.models")
+    sae_type = sae.get("sae_type", "all-layers")
+    if not isinstance(sae_type, str) or sae_type not in _SAE_REPOS:
+        errors.append("esmc.sae.sae_type must be all-layers|mlp.")
+        return errors
+    selections = {}
+    for size in sae_sizes:
+        try:
+            selections[size] = parse_esmc_layer_selection(sae.get("layers", "all"), size)
+        except ValueError as exc:
+            errors.append(f"esmc.sae.layers: {exc}")
+    if not check_cache:
+        return errors
+
+    cache_value = esmc.get("cache_dir", "")
+    if not cache_value:
+        errors.append("esmc.cache_dir must be set to the HF cache containing the selected SAE repo.")
+        return errors
+    var = unexpanded_var(cache_value)
+    if var:
+        errors.append(f"esmc.cache_dir contains unresolved ${{{var}}}; export it before launching.")
+        return errors
+    cache = Path(os.path.expanduser(os.path.expandvars(cache_value)))
+    for size, selected in selections.items():
+        repo = _SAE_REPOS[sae_type].format(size=size)
+        try:
+            snapshot = _sae_snapshot(cache, repo)
+            config_path = snapshot / "config.json"
+            if not config_path.is_file():
+                raise ValueError(f"SAE config missing: {config_path}.")
+            metadata = json.loads(config_path.read_text())
+            available = metadata.get("available_layers") if isinstance(metadata, dict) else None
+            if (
+                not isinstance(available, list) or not available
+                or any(type(layer) is not int for layer in available)
+            ):
+                raise ValueError(f"{config_path} must advertise a nonempty available_layers integer list.")
+            parse_esmc_layer_selection(",".join(map(str, available)), size)
+            layers = available if selected is None else selected
+            unavailable = sorted(set(layers) - set(available))
+            if unavailable:
+                raise ValueError(f"{repo} does not advertise SAE layers {unavailable} in {config_path}.")
+            missing = [
+                f"layer_{layer}.safetensors" for layer in layers
+                if not (snapshot / f"layer_{layer}.safetensors").is_file()
+            ]
+            if missing:
+                raise ValueError(
+                    f"SAE shards missing in {snapshot}: {', '.join(missing)}. "
+                    f"Download these files from {repo} before launching."
+                )
+        except (OSError, ValueError) as exc:
+            errors.append(f"esmc.sae ({size}, {sae_type}): {exc}")
+    return errors

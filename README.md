@@ -345,11 +345,12 @@ esmc:
 │       ├── boltz/                   # Boltz structures (.cif) + confidence JSONs
 │       ├── openfold/                # OpenFold3 structures (.cif) + confidence JSONs
 │       ├── esmfold/fast/            # ESMFold2 structure.cif, plddt.npy, metrics.pt
-│       └── esmc/{size}/             # ESM-C embeddings/logits (+ sae/{size}/ if enabled)
+│       ├── esmc/{size}/             # outputs.pt embeddings; optional hidden_states.pt
+│       └── sae/{size}/{sae_type}/   # Optional SAE features, one file per selected layer
 ├── benchmarks/                      # Per-rule timing data (TSV)
 ├── benchmark_summary.txt            # Pipeline timing report
 ├── logs/                            # Per-stage logs
-├── msa_chunks/  boltz_chunks/  esmc_chunks/  esmfold_chunks/  openfold_chunks/
+├── msa_chunks/  boltz_chunks/  esmc_chunks/  esmc_sae_chunks/  esmfold_chunks/  openfold_chunks/
 └── ...                              # Intermediate chunk manifests
 ```
 

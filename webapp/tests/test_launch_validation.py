@@ -6,6 +6,10 @@ another user's identity, or the shipped template's placeholders, launched
 without complaint. These lock the checks in place.
 """
 
+import json
+
+import pytest
+
 from pipeline_ops import (
     check_launch_inputs,
     check_stage_assets,
@@ -280,3 +284,101 @@ class TestCheckLaunchInputs:
             "slurm": GOOD_SLURM,
         }
         assert check_launch_inputs(cfg)["errors"] == []
+
+
+def _sae_launch_config(tmp_path):
+    fasta = tmp_path / "fastas"
+    fasta.mkdir()
+    (fasta / "a.fasta").write_text(">a\nMKV\n")
+    cache = tmp_path / "hf"
+    repo = cache / "hub" / "models--biohub--ESMC-6B-sae-k64-codebook16384"
+    snapshot = repo / "snapshots" / "current"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(json.dumps({"available_layers": [60]}))
+    (snapshot / "layer_60.safetensors").touch()
+    (repo / "refs").mkdir()
+    (repo / "refs" / "main").write_text("current")
+    return {
+        "slurm": GOOD_SLURM,
+        "pipeline": {"msa": False, "esmc": False},
+        "input": {"fasta_dir": str(fasta)},
+        "containers": {"gpu": _sif(tmp_path)},
+        "esmc": {
+            "models": ["6B"], "cache_dir": str(cache),
+            "sae": {"enabled": True, "layers": " 60 "},
+        },
+    }
+
+
+class TestSaeLaunch:
+    def test_fasta_only_sae_run_passes_with_embeddings_disabled(self, tmp_path):
+        result = check_launch_inputs(_sae_launch_config(tmp_path))
+        assert result == {"errors": [], "invalid_groups": []}
+
+    def test_sae_only_requires_esm_container_and_cache(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        cfg["containers"] = {}
+        cfg["esmc"]["cache_dir"] = str(tmp_path / "missing-cache")
+        errors = _joined(check_stage_assets(cfg))
+        assert "containers.esmc" in errors
+        assert "missing-cache" in errors
+
+    def test_sae_only_requires_sequence_input(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        cfg["input"] = {}
+        errors = _joined(check_launch_inputs(cfg)["errors"])
+        assert "input.fasta_dir" in errors and "input.yaml_dir" in errors
+
+    def test_missing_sae_shard_blocks_webapp_launch(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        shard = next((tmp_path / "hf").rglob("layer_60.safetensors"))
+        shard.unlink()
+        assert "layer_60.safetensors" in _joined(check_launch_inputs(cfg)["errors"])
+
+    @pytest.mark.parametrize("msa", [False, True])
+    def test_explicit_yaml_takes_precedence_even_with_msa(self, tmp_path, msa):
+        cfg = _sae_launch_config(tmp_path)
+        cfg["pipeline"]["msa"] = msa
+        cfg["input"]["yaml_dir"] = str(tmp_path / "missing-yaml")
+        errors = _joined(check_launch_inputs(cfg)["errors"])
+        assert "missing-yaml" in errors
+
+    @pytest.mark.parametrize("source", ["fasta_dir", "yaml_dir"])
+    def test_empty_selected_source_blocks_launch(self, tmp_path, source):
+        cfg = _sae_launch_config(tmp_path)
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        cfg["input"][source] = str(empty)
+        assert f"No {source.split('_')[0].upper()} files" in _joined(
+            check_launch_inputs(cfg)["errors"]
+        )
+
+    def test_yaml_source_containing_only_fasta_is_rejected(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        cfg["input"]["yaml_dir"] = cfg["input"]["fasta_dir"]
+        assert "only YAML" in _joined(check_launch_inputs(cfg)["errors"])
+
+    def test_valid_yaml_override_is_used_instead_of_invalid_fasta(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        yaml_dir = tmp_path / "yaml"
+        yaml_dir.mkdir()
+        (yaml_dir / "a.yaml").write_text(
+            "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: MKV\n"
+        )
+        cfg["input"]["yaml_dir"] = str(yaml_dir)
+        cfg["input"]["fasta_dir"] = str(tmp_path / "absent-fasta")
+        assert check_launch_inputs(cfg) == {"errors": [], "invalid_groups": []}
+
+    def test_all_invalid_fasta_blocks_sequence_only_run(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        (tmp_path / "fastas" / "a.fasta").write_text(">a\nXXX\n")
+        result = check_launch_inputs(cfg)
+        assert result["errors"]
+        assert result["invalid_groups"][0]["valid_count"] == 0
+
+    def test_raw_layer_bounds_reach_webapp_preflight(self, tmp_path):
+        cfg = _sae_launch_config(tmp_path)
+        cfg["pipeline"]["esmc"] = True
+        cfg["esmc"]["save_hidden_states"] = True
+        cfg["esmc"]["hidden_layers"] = "81"
+        assert "esmc.hidden_layers" in _joined(check_launch_inputs(cfg)["errors"])

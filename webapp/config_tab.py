@@ -21,7 +21,7 @@ from session import (
 from validate import scan_directory, copy_valid_files
 from estimator import compute_input_stats
 from pipeline_ops import load_config, save_config
-from snake_helpers import unexpanded_var
+from snake_helpers import esmc_activation_errors, unexpanded_var
 from ui_helpers import (
     autoscan_directory,
     _cached_scan,
@@ -679,8 +679,9 @@ def render_config_tab(session: Session):
 
         yaml_dir = inp.get("yaml_dir", "")
         inp["yaml_dir"] = st.text_input(
-            "YAML directory (when MSA is off)", value=yaml_dir,
-            help="Set this when pipeline.msa is false",
+            "YAML directory (optional for sequence-only stages)", value=yaml_dir,
+            help="Overrides FASTA inputs for ESMC, SAE and ESMFold2. "
+                 "Required for Boltz/OpenFold3 when MSA is off.",
         )
         if not inp["yaml_dir"]:
             inp.pop("yaml_dir", None)
@@ -853,6 +854,53 @@ def render_config_tab(session: Session):
             key="esmc_cache_dir",
         )
 
+        st.markdown("**Raw layer activations (optional)**")
+        esmc["save_hidden_states"] = st.toggle(
+            "Save raw layer activations",
+            value=bool(esmc.get("save_hidden_states", False)),
+            help="Save selected ESM-C hidden states in hidden_states.pt, alongside "
+                 "the standard final-layer embeddings in outputs.pt. "
+                 "These are backbone representations, not SAE features.",
+            key="esmc_save_hidden_states",
+        )
+        if esmc["save_hidden_states"]:
+            if not pipeline.get("esmc"):
+                st.info("Enable the ESMC pipeline stage above to save embeddings "
+                        "and raw layer activations. SAE is enabled separately.")
+            esmc["hidden_layers"] = st.text_input(
+                "Raw hidden-state layers",
+                value=str(esmc.get("hidden_layers", "all")),
+                help="'all' or a comma-separated list, e.g. 30,60 for 6B. "
+                     "The selection must be valid for every selected model size.",
+                key="esmc_hidden_layers",
+            )
+            st.caption("State indices: 300M = 0–30; 600M = 0–36; 6B = 0–80. "
+                       "0 is the initial embedding state; the highest index "
+                       "is the final normalized representation.")
+            _pools = ["none", "mean"]
+            _pool = esmc.get("hidden_pool", "none")
+            esmc["hidden_pool"] = st.selectbox(
+                "Raw activation pooling", options=_pools,
+                index=_pools.index(_pool) if _pool in _pools else 0,
+                format_func=lambda p: "Per residue" if p == "none" else "Mean over residues",
+                help="Per residue keeps a vector for each amino acid. Mean pooling "
+                     "keeps one vector per protein per selected layer (float32).",
+                key="esmc_hidden_pool",
+            )
+            _dtypes = ["float16", "bfloat16", "float32"]
+            _dtype = esmc.get("hidden_dtype", "float16")
+            esmc["hidden_dtype"] = st.selectbox(
+                "Raw activation storage precision", options=_dtypes,
+                index=_dtypes.index(_dtype) if _dtype in _dtypes else 0,
+                disabled=esmc["hidden_pool"] == "mean",
+                help="Applies to per-residue storage only; pooled vectors use "
+                     "float32. Higher storage precision does not improve inference precision.",
+                key="esmc_hidden_dtype",
+            )
+            st.caption("Saving all layers can use substantially more GPU memory "
+                       "and disk. A selected layer subset reduces disk usage; "
+                       "the current extractor still collects all states during inference.")
+
         st.markdown("**Per-size SLURM resources**")
         st.caption("`esmc` below is the shared fallback / estimator target; each "
                    "size can override it (writes slurm.resources.esmc_<size>).")
@@ -869,8 +917,8 @@ def render_config_tab(session: Session):
         sae["enabled"] = st.toggle(
             "Extract SAE activations",
             value=bool(sae.get("enabled", False)),
-            help="Recomputed from the sequence (independent of the embeddings above), "
-                 "so it can run on a prior run's YAMLs. "
+            help="Recomputed directly from FASTA or YAML sequences, independently "
+                 "of the embedding stage; no MSA is required. "
                  "Outputs -> sequences/{seq}/sae/{size}/{sae_type}/.",
             key="esmc_sae_enabled",
         )
@@ -884,8 +932,9 @@ def render_config_tab(session: Session):
                 key="esmc_sae_type",
             )
             sae["layers"] = c2.text_input(
-                "Layers", value=str(sae.get("layers", "all")),
-                help="'all' = every trained layer, or a comma list e.g. 18,36.",
+                "SAE layers", value=str(sae.get("layers", "all")),
+                help="'all' = every trained layer (all must be cached), or a "
+                     "comma list e.g. 30,60 for 6B. Not raw backbone activations.",
                 key="esmc_sae_layers",
             )
             _sae_default = [s for s in (sae.get("sizes") or esmc["models"]) if s in esmc["models"]]
@@ -903,6 +952,8 @@ def render_config_tab(session: Session):
             render_slurm_resources(cfg, "esmc_sae")
         esmc["sae"] = sae
         cfg["esmc"] = esmc
+        for error in esmc_activation_errors(cfg):
+            st.error(error)
 
     with st.expander("ESMFold2 Settings"):
         esmfold = cfg.get("esmfold", {})

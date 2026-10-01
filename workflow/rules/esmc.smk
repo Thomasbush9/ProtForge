@@ -42,6 +42,60 @@ else:
     ESMC_INPUT_SOURCE, ESMC_FROM_FASTA = "", True
 ESMC_FASTA_FLAG = "--include_fasta" if ESMC_FROM_FASTA else ""
 
+# Save every layer's hidden states instead of only the last. Outputs grow by
+# ~(n_layers+1)x (37x for 600M, 81x for 6B), so this is opt-in per run.
+_ESMC_ALL_LAYERS = ESMC_CFG.get("save_hidden_states", False)
+_ESMC_HIDDEN_DTYPE = ESMC_CFG.get("hidden_dtype", "float16")
+if _ESMC_ALL_LAYERS and _ESMC_HIDDEN_DTYPE not in ("float16", "bfloat16", "float32"):
+    raise ValueError(
+        f"esmc.hidden_dtype must be float16|bfloat16|float32, "
+        f"got {_ESMC_HIDDEN_DTYPE!r}. This value is interpolated into a shell "
+        f"command — it is not free-form."
+    )
+# Which hidden states to keep, and whether to mean-pool them over residues.
+# A depth panel plus mean pooling is what makes an all-layer sweep affordable
+# across a whole proteome: per-residue 600M fp16 costs ~85 KB/residue for the
+# full stack, while five mean-pooled layers cost ~23 KB per PROTEIN.
+_ESMC_HIDDEN_LAYERS = str(ESMC_CFG.get("hidden_layers", "all")).strip()
+_ESMC_HIDDEN_POOL = str(ESMC_CFG.get("hidden_pool", "none")).strip()
+if _ESMC_ALL_LAYERS:
+    if _ESMC_HIDDEN_POOL not in ("none", "mean"):
+        raise ValueError(
+            f"esmc.hidden_pool must be none|mean, got {_ESMC_HIDDEN_POOL!r}."
+        )
+    if _ESMC_HIDDEN_LAYERS.lower() != "all":
+        # Interpolated into a shell command, so it is not free-form: accept only
+        # a comma list of non-negative integers.
+        parts = [t.strip() for t in _ESMC_HIDDEN_LAYERS.split(",") if t.strip()]
+        if not parts or not all(t.isdigit() for t in parts):
+            raise ValueError(
+                f"esmc.hidden_layers must be 'all' or a comma list of "
+                f"non-negative integers, got {_ESMC_HIDDEN_LAYERS!r}."
+            )
+        _ESMC_HIDDEN_LAYERS = ",".join(parts)
+ESMC_HIDDEN_FLAGS = (
+    f"--save-hidden-states --hidden-dtype {_ESMC_HIDDEN_DTYPE}"
+    f" --hidden-layers {_ESMC_HIDDEN_LAYERS}"
+    f" --hidden-pool {_ESMC_HIDDEN_POOL}"
+    if _ESMC_ALL_LAYERS else ""
+)
+
+# Padded-token cap per micro-batch. config.template.yaml has documented this
+# key since the batching rewrite, but nothing passed it to the runner, so it
+# silently did nothing — the runner fell back to its per-size default. It
+# matters most in all-layer mode, where the runner defaults to an 8x smaller
+# budget to bound the (n_layers+1) stack; on a GPU with headroom, raising it
+# back cuts the micro-batch count by the same factor.
+_ESMC_TOKEN_BUDGET = ESMC_CFG.get("token_budget", None)
+if _ESMC_TOKEN_BUDGET is not None and int(_ESMC_TOKEN_BUDGET) <= 0:
+    raise ValueError(
+        f"esmc.token_budget must be a positive integer, got {_ESMC_TOKEN_BUDGET!r}."
+    )
+ESMC_BUDGET_FLAG = (
+    f"--token-budget {int(_ESMC_TOKEN_BUDGET)}"
+    if _ESMC_TOKEN_BUDGET is not None else ""
+)
+
 ESMC_PARTITION = SLURM_CFG.get("esmc", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESMC_ACCOUNT   = SLURM_CFG.get("account", "")
 
@@ -165,6 +219,8 @@ rule run_esmc:
         runner = ESMC_RUNNER,
         runtime = CONTAINER_RUNTIME,
         sif = container_sif("esmc"),
+        hidden_flags = ESMC_HIDDEN_FLAGS,
+        budget_flag = ESMC_BUDGET_FLAG,
     resources:
         cpus_per_task   = lambda wc: _esmc_resource(wc.size, "cpus_per_task", 8),
         mem_mb          = lambda wc: _esmc_resource(wc.size, "mem_mb", 32000),
@@ -217,7 +273,8 @@ rule run_esmc:
                 --cache /models/hf \
                 --input-dirs $in_dirs \
                 --output-dirs $out_dirs \
-                --size {wildcards.size}
+                --size {wildcards.size} {params.hidden_flags} \
+                {params.budget_flag}
 
         mkdir -p "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
         touch {output.done}

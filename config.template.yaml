@@ -66,15 +66,22 @@ esmc:
   # /models/hf (ro) in-container. Populate it with:
   #   bash containers/download_scripts/esm_models.sh <cache_dir>
   cache_dir: /n/home06/<YOUR_USER>/protforge/models/hf
+  # Optional raw backbone activations, in addition to final embeddings.
+  # outputs.pt keeps last_hidden_state; hidden_states.pt records selected layers.
+  save_hidden_states: false
+  hidden_layers: all       # "all" or comma list; 300M: 0..30, 600M: 0..36, 6B: 0..80
+  hidden_pool: none        # none: per-residue; mean: one float32 vector per layer
+  hidden_dtype: float16    # float16 | bfloat16 | float32; ignored with mean pooling
+  # All layers can be large; a subset reduces disk, not the forward-pass stack.
   # SAE sparse-activation extraction. Recomputed from the sequence (not from the
-  # embeddings above), so it can run standalone on a prior run's YAMLs. One job
-  # per size; outputs -> sequences/{seq}/sae/{size}/{sae_type}/. The same ESM
-  # container/cache as the embeddings is reused (cache must also hold the SAE
+  # embeddings above), so it can run standalone from FASTA or YAML without MSA.
+  # One job per size/group; outputs -> sequences/{seq}/sae/{size}/{sae_type}/.
+  # The same ESM container/cache is reused (cache must also hold the SAE
   # repos, e.g. hub/models--biohub--ESMC-<size>-sae-*).
   sae:
     enabled: false
     sae_type: all-layers  # all-layers | mlp
-    layers: all           # "all" (every trained layer) or a comma list, e.g. "18,36"
+    layers: all           # every trained layer (all must be cached), or e.g. "18,36"
     # sizes: [600M]       # subset of `models` above (default: all of them)
     max_files_per_job: 25
     chunks_per_group: 1   # see esmc.chunks_per_group (one SAE load per group)

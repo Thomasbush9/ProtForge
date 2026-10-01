@@ -14,8 +14,9 @@ where {name} is the input YAML stem and {sub} is the ESMC model size
     {sequences_dir}/{name}/{stage}/{sub}/...
 
 so encoder outputs sit beside msa/ and boltz/ under each sequence. It is
-stage-agnostic: pass --stage esmc or --stage esmfold. Reruns overwrite any
-previously organized {sub} for the same sequence.
+stage-agnostic: pass --stage esmc, esmfold, or sae. Encoder reruns overwrite a
+previously organized {sub}; SAE reruns merge layers/types, replacing only files
+produced by the current extraction.
 """
 
 import argparse
@@ -24,6 +25,20 @@ import sys
 from pathlib import Path
 
 import output_schema
+
+
+def _merge_sae_outputs(source: Path, target: Path) -> None:
+    """Move a size/type subtree without discarding previously extracted layers."""
+    if source.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        for child in sorted(source.iterdir()):
+            _merge_sae_outputs(child, target / child.name)
+        source.rmdir()
+    else:
+        # A pre-existing file at this exact layer path is the only replacement.
+        if target.exists():
+            target.unlink()
+        shutil.move(str(source), target)
 
 
 def organize(scratch_dir: str, sequences_dir: str, stage: str) -> int:
@@ -37,11 +52,14 @@ def organize(scratch_dir: str, sequences_dir: str, stage: str) -> int:
         dest.mkdir(parents=True, exist_ok=True)
         for sub in sorted(name_dir.iterdir()):
             target = dest / sub.name
-            if target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
-                target.unlink()
-            shutil.move(str(sub), target)
+            if stage == "sae":
+                _merge_sae_outputs(sub, target)
+            else:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+                shutil.move(str(sub), target)
             moved += 1
             print(f"Organized: {name_dir.name}/{sub.name} -> {target}")
 

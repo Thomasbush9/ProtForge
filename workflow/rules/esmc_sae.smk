@@ -10,28 +10,43 @@ wildcard — one job per size, each extracting all requested layers in a single
 forward pass (`esmc.sae.layers`, "all" = every trained layer).
 
 SAE recomputes from the sequence (loads the ESMC model + SAE, forward pass), so
-it depends on the MSA-stage YAMLs, NOT on the embedding outputs — it runs
-standalone even when embeddings were produced in an earlier run. Gated by
-`esmc.sae.enabled`, independent of `pipeline.esmc`. Encoding runs inside the ESM
-container via containers/esmc_extract_sae.py (bound to /opt at run time).
+it reads explicit YAMLs or raw FASTAs independently of MSA/embedding outputs.
+MSA-generated YAMLs are only a fallback when no explicit input directory is set.
+Gated by `esmc.sae.enabled`, independent of `pipeline.esmc`. Encoding runs inside
+the ESM container via containers/esmc_extract_sae.py (bound to /opt at run time).
 Outputs land in sequences/{seq}/sae/{size}/{sae_type}/.
 """
 
 import os as _os
+from snake_helpers import parse_esmc_layer_selection
 
 ESMC_SAE_CFG    = config.get("esmc", {}).get("sae", {})
 ESMC_SAE_CHUNKS = f"{OUTPUT}/esmc_sae_chunks"
 # Sizes to extract SAE for: explicit list, else fall back to esmc.models.
 ESMC_SAE_SIZES  = ESMC_SAE_CFG.get("sizes") or config.get("esmc", {}).get("models", ["6B"])
 ESMC_SAE_TYPE   = ESMC_SAE_CFG.get("sae_type", "all-layers")
-ESMC_SAE_LAYERS = str(ESMC_SAE_CFG.get("layers", "all"))
+ESMC_SAE_LAYERS = {}
+for _sae_size in ESMC_SAE_SIZES:
+    _sae_layers = parse_esmc_layer_selection(ESMC_SAE_CFG.get("layers", "all"), _sae_size)
+    ESMC_SAE_LAYERS[_sae_size] = (
+        "all" if _sae_layers is None else ",".join(map(str, _sae_layers))
+    )
 # Group persistence: chunks served per GPU job (one model load per group).
 ESMC_SAE_CHUNKS_PER_GROUP = max(1, int(ESMC_SAE_CFG.get("chunks_per_group", 1)))
 ESMC_SAE_GROUPS = f"{ESMC_SAE_CHUNKS}/groups.tsv"
 
-# YAML source: user-provided yaml_dir, or the per-sequence YAMLs from MSA.
+# Input source precedence matches embeddings: YAML > FASTA > MSA-stage YAML.
 _sae_yaml_override = config["input"].get("yaml_dir", "")
-ESMC_SAE_YAML_SOURCE = _sae_yaml_override if _sae_yaml_override else SEQUENCES_DIR
+_sae_fasta_dir = config["input"].get("fasta_dir", "")
+if _sae_yaml_override:
+    ESMC_SAE_INPUT_SOURCE, ESMC_SAE_FROM_FASTA = _sae_yaml_override, False
+elif _sae_fasta_dir:
+    ESMC_SAE_INPUT_SOURCE, ESMC_SAE_FROM_FASTA = _sae_fasta_dir, True
+elif RUN_MSA:
+    ESMC_SAE_INPUT_SOURCE, ESMC_SAE_FROM_FASTA = SEQUENCES_DIR, False
+else:
+    ESMC_SAE_INPUT_SOURCE, ESMC_SAE_FROM_FASTA = "", True
+ESMC_SAE_FASTA_FLAG = "--include_fasta" if ESMC_SAE_FROM_FASTA else ""
 
 ESMC_SAE_PARTITION = SLURM_CFG.get("esmc_sae", {}).get("partition", SLURM_CFG.get("partition", ""))
 ESMC_SAE_ACCOUNT   = SLURM_CFG.get("account", "")
@@ -54,34 +69,37 @@ def _esmc_sae_resource(size, key, default):
 
 
 def esmc_sae_chunk_input(wildcards):
-    """Depend on MSA completion (runs right after MSA, in parallel with Boltz /
-    ESMC embeddings). With a user-provided yaml_dir there's no dependency."""
+    """Explicit YAML/FASTA inputs need no MSA; only the fallback waits on MSA."""
     inputs = {}
     if _sae_yaml_override:
         inputs["yaml_dir"] = _sae_yaml_override
+    elif _sae_fasta_dir:
+        inputs["fasta_dir"] = _sae_fasta_dir
     elif RUN_MSA:
         inputs["upstream_done"] = f"{OUTPUT}/.msa_complete"
     return inputs
 
 
 checkpoint chunk_yamls_for_sae:
-    """Symlink the per-sequence YAMLs into chunk directories for parallel extract."""
+    """Symlink per-sequence YAML or FASTA inputs into chunk directories."""
     input:
         unpack(esmc_sae_chunk_input),
     output:
         manifest = f"{ESMC_SAE_CHUNKS}/manifest.txt",
     params:
-        yaml_dir = ESMC_SAE_YAML_SOURCE,
+        yaml_dir = ESMC_SAE_INPUT_SOURCE,
         max_files = ESMC_SAE_CFG.get("max_files_per_job", 25),
         chunks_per_group = ESMC_SAE_CHUNKS_PER_GROUP,
+        fasta_flag = ESMC_SAE_FASTA_FLAG,
     localrule: True
     shell:
         """
         python workflow/scripts/prepare_boltz_chunks.py \
-            --yaml_dir {params.yaml_dir} \
-            --output_dir {ESMC_SAE_CHUNKS} \
+            --yaml_dir {params.yaml_dir:q} \
+            --output_dir {ESMC_SAE_CHUNKS:q} \
             --max_files_per_job {params.max_files} \
-            --chunks_per_group {params.chunks_per_group}
+            --chunks_per_group {params.chunks_per_group} \
+            {params.fasta_flag}
         """
 
 
@@ -145,10 +163,10 @@ rule run_esmc_sae:
         chunks_root = ESMC_SAE_CHUNKS,
         chunk_ids = lambda wc: " ".join(esmc_sae_group_chunk_ids(wc.group_id)),
         cache_dir = config.get("esmc", {}).get("cache_dir", ""),
-        yaml_src = ESMC_SAE_YAML_SOURCE,
+        input_src = ESMC_SAE_INPUT_SOURCE,
         runner = ESMC_SAE_RUNNER,
         sae_type = ESMC_SAE_TYPE,
-        layers = ESMC_SAE_LAYERS,
+        layers = lambda wc: ESMC_SAE_LAYERS[wc.size],
         runtime = CONTAINER_RUNTIME,
         sif = container_sif("esmc"),
     resources:
@@ -161,53 +179,54 @@ rule run_esmc_sae:
     shell:
         """
         set -euo pipefail
-        exec > {log} 2>&1
+        exec > {log:q} 2>&1
         set -x
 
         export CUDA_VISIBLE_DEVICES=0
 
-        if [ -z "{params.sif}" ]; then
+        if [ -z {params.sif:q} ]; then
             echo "ERROR: no ESM container configured. Set containers.esmc" \
                  "(or containers.gpu) to the ESM .sif path." >&2
             exit 1
         fi
-        if [ -z "{params.cache_dir}" ]; then
+        if [ -z {params.cache_dir:q} ]; then
             echo "ERROR: esmc.cache_dir must point to the host HF cache" \
                  "(contains the ESMC model + SAE repos)." >&2
             exit 1
         fi
 
         # Build the parallel --input-dirs / --output-dirs lists for this group.
-        in_dirs=""; out_dirs=""
+        chunks_root={params.chunks_root:q}
+        in_dirs=(); out_dirs=()
         for cid in {params.chunk_ids}; do
-            in_dirs="$in_dirs {params.chunks_root}/chunk_${{cid}}"
-            od="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
-            out_dirs="$out_dirs $od"
+            in_dirs+=("$chunks_root/chunk_${{cid}}")
+            od="$chunks_root/chunk_${{cid}}_{wildcards.size}_output"
+            out_dirs+=("$od")
             mkdir -p "$od"
         done
 
         # Bind the whole chunks_root once (covers every chunk dir + output dir);
-        # sequences/ bound same-path so symlinked YAMLs resolve; runner -> /opt.
-        {params.runtime} exec --nv --cleanenv \
+        # input source bound same-path so symlinked YAML/FASTA inputs resolve.
+        {params.runtime:q} exec --nv --cleanenv \
             --env HF_HOME=/models/hf \
             --env HF_HUB_OFFLINE=1 \
             --env TRANSFORMERS_OFFLINE=1 \
             --env SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-            -B {params.cache_dir}:/models/hf:ro \
-            -B {params.chunks_root}:{params.chunks_root} \
-            -B {params.yaml_src}:{params.yaml_src}:ro \
-            -B {params.runner}:/opt/esmc_extract_sae.py:ro \
-            {params.sif} \
+            -B {params.cache_dir:q}:/models/hf:ro \
+            -B {params.chunks_root:q}:{params.chunks_root:q} \
+            -B {params.input_src:q}:{params.input_src:q}:ro \
+            -B {params.runner:q}:/opt/esmc_extract_sae.py:ro \
+            {params.sif:q} \
             python /opt/esmc_extract_sae.py \
                 --cache /models/hf \
-                --input-dirs $in_dirs \
-                --output-dirs $out_dirs \
+                --input-dirs "${{in_dirs[@]}}" \
+                --output-dirs "${{out_dirs[@]}}" \
                 --size {wildcards.size} \
-                --sae {params.sae_type} \
-                --layers {params.layers}
+                --sae {params.sae_type:q} \
+                --layers {params.layers:q}
 
-        mkdir -p "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
-        touch {output.done}
+        mkdir -p "$chunks_root/group_{wildcards.group_id}_{wildcards.size}"
+        touch {output.done:q}
         """
 
 
@@ -230,16 +249,17 @@ rule organize_esmc_sae:
     shell:
         """
         set -euo pipefail
+        chunks_root={params.chunks_root:q}
         for cid in {params.chunk_ids}; do
-            scratch="{params.chunks_root}/chunk_${{cid}}_{wildcards.size}_output"
+            scratch="$chunks_root/chunk_${{cid}}_{wildcards.size}_output"
             python workflow/scripts/organize_encoder_outputs.py \
                 --scratch_dir "$scratch" \
-                --sequences_dir {params.sequences_dir} \
+                --sequences_dir {params.sequences_dir:q} \
                 --stage sae
             rm -rf "$scratch"
         done
-        rm -rf "{params.chunks_root}/group_{wildcards.group_id}_{wildcards.size}"
-        touch {output.organized}
+        rm -rf "$chunks_root/group_{wildcards.group_id}_{wildcards.size}"
+        touch {output.organized:q}
         """
 
 
@@ -262,4 +282,4 @@ rule esmc_sae_complete:
         done = f"{OUTPUT}/.esmc_sae_{{size}}_complete",
     localrule: True
     shell:
-        "touch {output.done}"
+        "touch {output.done:q}"
